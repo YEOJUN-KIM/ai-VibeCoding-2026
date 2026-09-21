@@ -1,6 +1,9 @@
 # ai-VibeCoding-2026
 바이브코딩 리포지토리
 
+## 프로젝트 문서
+- [토스증권 기반 주식 자동매매 시스템 PRD](docs/PRD.md)
+
 ## Chapter 1
 AI에게 코딩을 시키자, 제대로!
 
@@ -43,6 +46,11 @@ AI에게 코딩을 시키자, 제대로!
 ### CLI Codex
 - PowerShell, CMD 창에서 명령어로 수행하는 Codex
 
+### 바이브 코딩
+
+- 제로샷 프롬프트 : 아무런 기초지식없이 대화로 바이브코딩
+- 원샷 프롬프트 : 적어도 한줄의 요구사항을 작성해서 바이브코딩
+- 퓨샷 프롬프트 : PRD를 작성해서 바이브코딩
 
 ### 자동매매 개발환경 준비
 
@@ -53,3 +61,8 @@ AI에게 코딩을 시키자, 제대로!
 - 토스증권 PC 웹사이트 동작
 - 사용중인 IP를 토스증권 PC 등록
 - OpenAPI 키 발급 후 Client ID, Client Secret 보관
+
+### 토스증권 api 신청
+- https://corp.tossinvest.com/ko/open-api 접속
+- PC에서 투자하기 클릭 후(https://www.tossinvest.com/) 로그인
+- 우측하단의 `설정` - `Open API` - `Open API Key 설정`
