@@ -3,6 +3,7 @@
 
 ## 프로젝트 문서
 
+- [Windows 설치 및 실행 가이드](docs/INSTALL_WINDOWS.md)
 - [개발 현황과 계획](docs/ROADMAP.md)
 - [제품 요구사항](docs/PRD.md)
 - [프로젝트 파일 설명](docs/PROJECT_STRUCTURE.md)

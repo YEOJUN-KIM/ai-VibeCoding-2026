@@ -77,6 +77,19 @@ ALTER TABLE auth_sessions ADD COLUMN IF NOT EXISTS live_authorized_until TIMESTA
 CREATE INDEX IF NOT EXISTS auth_sessions_token ON auth_sessions(token_hash);
 CREATE INDEX IF NOT EXISTS auth_sessions_expiry ON auth_sessions(expires_at);
 
+CREATE TABLE IF NOT EXISTS favorite_stocks (
+    user_id BIGINT NOT NULL REFERENCES admin_users(id) ON DELETE CASCADE,
+    symbol TEXT NOT NULL,
+    name TEXT NOT NULL,
+    market TEXT NOT NULL,
+    security_type TEXT NOT NULL,
+    is_common_share BOOLEAN NOT NULL DEFAULT false,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, symbol)
+);
+CREATE INDEX IF NOT EXISTS favorite_stocks_user_time
+    ON favorite_stocks(user_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS risk_settings (
     account_id BIGINT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
     preset TEXT NOT NULL CHECK (preset IN ('CONSERVATIVE','DEFAULT','CUSTOM')),

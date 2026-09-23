@@ -4,7 +4,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -21,7 +21,9 @@ from .auth import (
     session_from_request,
     verify_live_pin,
 )
-from .models import (Account, LivePinRequest, LivePinStatus, LivePortfolio, LoginRequest, Order, OrderRequest,
+from .models import (Account, FavoriteStockCreate, LiveBuyingPower, LiveCandidateList,
+                     LiveFavoriteStock, LivePinRequest, LivePinStatus, LivePortfolio,
+                     LiveStockSearchPage, LoginRequest, Order, OrderRequest,
                      Quote, RiskSettings, RiskSettingsUpdate, RiskStatus, SessionInfo, Stock,
                      StrategySettingsUpdate, StrategyStatus, TossConnectionStatus)
 from .paper import PaperBroker
@@ -31,6 +33,7 @@ from .strategy import MovingAverageEngine
 from .risk import RiskManager
 from .toss import TossApiError, TossClient
 from .database import connect, initialize
+from .favorites import add_favorite, favorite_symbols, list_favorites, remove_favorite
 
 
 market = MarketSimulator(symbols=settings.watch_symbols)
@@ -229,6 +232,74 @@ def live_portfolio(_: AuthenticatedUser = Depends(require_user)) -> LivePortfoli
         return toss_client.portfolio()
     except TossApiError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.get("/live/buying-power", response_model=LiveBuyingPower)
+def live_buying_power(_: AuthenticatedUser = Depends(require_user)) -> LiveBuyingPower:
+    try:
+        return toss_client.buying_power()
+    except TossApiError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.get("/live/candidates", response_model=LiveCandidateList)
+def live_candidates(_: AuthenticatedUser = Depends(require_user)) -> LiveCandidateList:
+    try:
+        return toss_client.affordable_domestic_candidates()
+    except TossApiError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.get("/live/stocks/search", response_model=LiveStockSearchPage)
+def live_stock_search(
+    q: str = Query(min_length=1, max_length=50),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=8, ge=5, le=10),
+    user: AuthenticatedUser = Depends(require_user),
+) -> LiveStockSearchPage:
+    try:
+        result = toss_client.search_domestic_stocks(q, page, page_size)
+        saved = favorite_symbols(user.id)
+        return result.model_copy(update={
+            "results": [item.model_copy(update={"is_favorite": item.symbol in saved})
+                        for item in result.results]
+        })
+    except TossApiError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.get("/live/favorites", response_model=list[LiveFavoriteStock])
+def live_favorites(user: AuthenticatedUser = Depends(require_user)) -> list[LiveFavoriteStock]:
+    try:
+        return toss_client.favorite_stock_snapshots(list_favorites(user.id))
+    except TossApiError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post("/live/favorites", response_model=LiveFavoriteStock, status_code=201)
+def create_live_favorite(
+    payload: FavoriteStockCreate,
+    user: AuthenticatedUser = Depends(require_csrf),
+) -> LiveFavoriteStock:
+    try:
+        stock = toss_client.domestic_stock(payload.symbol)
+        if not stock:
+            raise HTTPException(status_code=404, detail="국내 상장 종목을 찾지 못했습니다.")
+        saved = add_favorite(user.id, stock)
+        return toss_client.favorite_stock_snapshots([saved])[0]
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except TossApiError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.delete("/live/favorites/{symbol}", status_code=204)
+def delete_live_favorite(
+    symbol: str,
+    user: AuthenticatedUser = Depends(require_csrf),
+) -> Response:
+    remove_favorite(user.id, symbol)
+    return Response(status_code=204)
 
 
 @app.get("/stocks", response_model=list[Stock])

@@ -10,8 +10,8 @@
 <body class="live-page">
   <div class="shell">
     <header class="topbar">
-      <div><p class="eyebrow live-eyebrow">LIVE TRADING</p><h1>토스증권 실제계좌</h1>
-        <p class="subtitle">실제 자산을 조회하는 LIVE 전용 대시보드</p></div>
+      <div><p class="eyebrow live-eyebrow">PRIVATE TRADING DESK · LIVE</p><h1>내 자산 데스크</h1>
+        <p class="subtitle">실제 자산과 관심 종목을 한곳에서 보는 개인 투자 화면</p></div>
       <div class="header-actions">
         <div class="mode-box live-mode-box"><span class="status-dot" id="server-dot"></span><div><span class="mode-label">현재 모드</span><strong>LIVE</strong></div></div>
         <button class="button danger" id="unlock-live-button" type="button">LIVE 주문 잠금 해제</button>
@@ -32,16 +32,61 @@
           <div class="live-connection"><span class="status-dot" id="account-dot"></span><span id="live-connection-status">연결 중...</span></div>
         </div>
         <div class="live-summary-grid">
+          <div class="asset-primary"><span>추정 총자산</span><strong id="live-total-assets">-</strong><small>평가금액 + 원화 현금 매수 가능</small></div>
           <div><span>매입금액</span><strong id="live-purchase">-</strong></div>
           <div><span>평가금액</span><strong id="live-market-value">-</strong></div>
           <div><span>총 평가손익</span><strong id="live-profit">-</strong><small id="live-profit-rate">-</small></div>
           <div><span>오늘 손익</span><strong id="live-daily-profit">-</strong><small id="live-daily-rate">-</small></div>
+          <div><span>원화 현금 매수 가능</span><strong id="live-buying-power-krw">-</strong><small>미수 미발생 기준</small></div>
+          <div><span>달러 현금 매수 가능</span><strong id="live-buying-power-usd">-</strong><small>미수 미발생 기준</small></div>
         </div>
         <div class="table-wrap"><table>
           <thead><tr><th>실제 보유 종목</th><th>수량</th><th>평균 매입가</th><th>현재가</th><th>평가금액</th><th>평가손익</th></tr></thead>
           <tbody id="live-holdings-body"><tr><td class="empty" colspan="6">새로고침 버튼을 눌러 조회하세요.</td></tr></tbody>
         </table></div>
         <p class="form-message" id="live-portfolio-message">실제 계좌를 자동으로 불러오는 중입니다.</p>
+      </section>
+
+      <section class="panel favorite-panel">
+        <div class="panel-heading">
+          <div><p class="section-kicker">MY WATCHLIST</p><h2>내 관심 주식</h2><p class="subtitle">검색에서 하트를 누른 종목의 현재 흐름을 모아봅니다.</p></div>
+          <span class="favorite-count" id="favorite-count">0 / 20</span>
+        </div>
+        <div class="favorite-grid" id="favorite-grid">
+          <div class="favorite-empty"><span>♡</span><strong>아직 관심 종목이 없습니다</strong><small>아래 종목 검색에서 하트를 눌러 추가하세요.</small></div>
+        </div>
+        <p class="form-message" id="favorite-message">관심 종목은 이 컴퓨터의 PostgreSQL에 저장됩니다.</p>
+      </section>
+
+      <section class="panel live-discovery-panel">
+        <div class="panel-heading">
+          <div><p class="section-kicker">MARKET CANDIDATES · READ ONLY</p><h2>현재 현금으로 살 수 있는 국내 종목 후보</h2><p class="subtitle" id="candidate-basis">거래대금 순위와 현재 원화 한도를 기준으로 불러오는 중입니다.</p></div>
+        </div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>거래대금 순위</th><th>종목</th><th>현재가</th><th>전일 대비</th><th>최대 가능 수량</th><th>선정 근거</th></tr></thead>
+          <tbody id="candidate-body"><tr><td class="empty" colspan="6">종목 후보를 불러오는 중입니다.</td></tr></tbody>
+        </table></div>
+        <p class="form-message" id="candidate-message">투자 권유가 아닌 탐색 후보입니다.</p>
+      </section>
+
+      <section class="panel live-search-panel">
+        <div class="panel-heading">
+          <div><p class="section-kicker">DOMESTIC STOCK SEARCH</p><h2>국내 종목 검색</h2><p class="subtitle">종목명 일부 또는 6자리 종목코드로 찾고, 당일 거래대금 인기순으로 보여줍니다.</p></div>
+        </div>
+        <label class="live-search-form">종목 검색
+          <input id="live-stock-search" type="search" maxlength="50" autocomplete="off" placeholder="예: 삼성, 삼성전자, 005930">
+        </label>
+        <div class="table-wrap"><table class="stock-search-table">
+          <colgroup><col class="rank-col"><col class="stock-col"><col class="type-col"><col class="price-col"><col class="change-col"><col class="favorite-col"></colgroup>
+          <thead><tr><th class="rank-cell">순위</th><th class="stock-cell">종목</th><th class="type-cell">유형</th><th class="price-cell">현재가</th><th class="change-cell">오늘</th><th class="favorite-cell">관심</th></tr></thead>
+          <tbody id="stock-search-body"><tr><td class="empty" colspan="6">검색어를 입력하세요.</td></tr></tbody>
+        </table></div>
+        <div class="search-pagination hidden" id="stock-search-pagination">
+          <button class="button secondary" id="stock-search-prev" type="button">이전</button>
+          <span id="stock-search-page">1 / 1</span>
+          <button class="button secondary" id="stock-search-next" type="button">다음</button>
+        </div>
+        <p class="form-message" id="stock-search-message">당일 시장 거래대금 상위 100위가 먼저 표시됩니다.</p>
       </section>
     </main>
     <footer><span>LIVE 주문 기능은 아직 잠겨 있습니다.</span><a href="/docs">API 문서 열기</a></footer>

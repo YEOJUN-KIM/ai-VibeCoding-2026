@@ -1,6 +1,6 @@
 # 자동매매 프로젝트 파일 설명
 
-이 문서는 `auto_trader` 폴더에 있는 파일들이 어떤 역할을 하는지 쉽게 확인하기 위한 안내서다.
+이 문서는 현재 프로젝트의 주요 파일과 역할을 정리한다. 자동 생성되는 `__pycache__`, `.pyc`, 테스트 캐시 등은 생략한다.
 
 ## 전체 구조
 
@@ -10,210 +10,157 @@ auto_trader/
 ├── __main__.py
 ├── main.py
 ├── models.py
+├── settings.py
+├── database.py
+├── schema.sql
+├── auth.py
+├── create_admin.py
+├── set_live_pin.py
+├── toss.py
+├── favorites.py
 ├── simulator.py
 ├── paper.py
 ├── risk.py
 ├── strategy.py
-├── settings.py
-├── auth.py
-├── create_admin.py
 ├── static/
-│   ├── index.html
 │   ├── login.html
-│   ├── styles.css
+│   ├── login.js
+│   ├── index.html
 │   ├── app.js
-│   └── login.js
-├── README.md
-└── __pycache__/
+│   ├── live.html
+│   ├── live.js
+│   └── styles.css
+└── README.md
+
+docs/
+├── INSTALL_WINDOWS.md
+├── DATABASE.md
+├── PRD.md
+├── PROJECT_STRUCTURE.md
+└── ROADMAP.md
+
+tests/
+├── test_auth.py
+├── test_favorites.py
+├── test_paper.py
+└── test_toss.py
 ```
 
-## 직접 작성하고 관리하는 파일
-
-### `__init__.py`
-
-`auto_trader` 폴더를 Python 패키지로 인식하게 한다.
-
-현재는 패키지 설명과 버전 정보가 들어 있다. 다른 파일에서 `auto_trader`의 기능을 불러올 수 있게 만드는 시작점이다.
+## 서버와 공통 설정
 
 ### `__main__.py`
 
-다음 명령을 실행했을 때 가장 먼저 실행되는 파일이다.
-
-```powershell
-python -m auto_trader
-```
-
-Uvicorn을 이용해 FastAPI 서버를 `http://127.0.0.1:8000`에서 실행한다.
+`python -m auto_trader` 명령의 진입점이다. Uvicorn으로 FastAPI 서버를 실행한다.
 
 ### `main.py`
 
-FastAPI 애플리케이션과 API 주소를 관리한다.
-
-주요 기능은 다음과 같다.
-
-- 서버 상태 확인
-- 감시 종목과 가상 시세 조회
-- 가상 계좌와 주문 내역 조회
-- 수동 모의 주문
-- 자동매매 시작·중지·긴급 정지
-- 이동평균 전략 상태 조회
-
-브라우저의 Swagger UI에 나타나는 API 목록은 이 파일에 작성된 내용이다.
+FastAPI 앱, 웹 페이지와 API 라우트를 연결한다. 인증, PAPER 계좌, 위험 설정, 토스 LIVE 계좌, 국내 종목 검색, 관심종목 API를 한곳에서 조합한다.
 
 ### `models.py`
 
-프로그램에서 사용하는 데이터의 모양과 규칙을 정의한다.
-
-예를 들면 다음 데이터가 정의되어 있다.
-
-- 종목과 가상 시세
-- 매수·매도 주문
-- 보유 종목과 가상 계좌
-- 이동평균 계산 상태
-- 매매 신호와 자동매매 상태
-
-Pydantic이 잘못된 수량이나 형식의 요청을 검사한다.
-
-### `simulator.py`
-
-토스증권 API를 대신하는 가상 주식시장이다.
-
-- 테스트용 국내 대표 종목 5개를 관리한다.
-- 각 종목의 시작 가격을 보관한다.
-- 가격을 한 번에 약 ±0.5% 범위에서 움직인다.
-- 같은 시드 값을 사용해 다시 실행했을 때 비슷한 테스트가 가능하게 한다.
-
-이 파일의 가격은 실제 주가가 아니며 투자 판단에 사용하면 안 된다.
-
-### `paper.py`
-
-실제 돈을 사용하지 않는 메모리 기반 가상 증권사 역할을 한다. 서버 재시작 시 모든 PAPER 거래 상태가 초기화된다.
-
-- 초기 가상 현금 1,000만 원을 관리한다.
-- 매수하면 가상 현금을 차감하고 보유 수량을 늘린다.
-- 매도하면 가상 현금을 늘리고 보유 수량을 줄인다.
-- 잔액이나 보유 수량이 부족한 주문을 거절한다.
-- 주문 내역과 평가 손익을 계산한다.
-- 연습 기록 초기화 시 관리자 계정과 위험 설정은 유지하고 모의 잔고·보유종목·거래 기록을 초기화한다.
-
-### `strategy.py`
-
-이동평균 교차 전략을 반복 실행하는 자동매매 엔진이다.
-
-- 2초마다 가상 시세를 갱신한다.
-- 최근 5개 가격의 단기 이동평균을 계산한다.
-- 최근 20개 가격의 장기 이동평균을 계산한다.
-- 단기선이 장기선을 상향 돌파하면 1주를 가상 매수한다.
-- 단기선이 장기선을 하향 돌파하면 1주를 가상 매도한다.
-- 자동매매 시작, 중지, 긴급 정지 상태를 관리한다.
-
-### `risk.py`
-
-보수적·기본·직접 설정 프리셋을 관리하고 수동 및 자동 매수 주문 전에 공통 한도를 검사한다. 프리셋은 PostgreSQL에 저장하고 PAPER 사용량과 당일 기준 자산은 메모리에서 계산한다.
+계좌·주문·전략·LIVE 자산·종목 검색·관심종목 등 요청과 응답 데이터의 형식을 Pydantic 모델로 정의한다.
 
 ### `settings.py`
 
-프로젝트 루트의 `.env` 파일을 읽어 실행 설정을 제공한다. 가상 투자금, 감시 종목, 전략값, 토스증권 API와 PostgreSQL 정보를 소스코드와 분리한다.
+프로젝트 루트의 `.env`를 읽는다. 서버, PAPER, 전략, PostgreSQL과 토스증권 연결 설정을 코드와 분리한다.
+
+### `database.py`, `schema.sql`
+
+PostgreSQL 연결과 트랜잭션을 관리하고, 앱 시작 시 필요한 테이블과 인덱스를 생성한다.
+
+## 보안과 인증
 
 ### `auth.py`
 
-관리자 비밀번호의 scrypt 해시, 로그인 실패 잠금, PostgreSQL 세션, HttpOnly 쿠키와 CSRF 검사를 담당한다.
+관리자 비밀번호와 LIVE PIN의 scrypt 해시, 로그인 실패 잠금, 세션 쿠키와 CSRF 검사를 담당한다.
 
 ### `create_admin.py`
 
-웹 화면과 분리된 관리자 생성 명령이다. `python -m auto_trader.create_admin`으로 실행하며 관리자 계정 하나만 만들 수 있다.
+`python -m auto_trader.create_admin` 명령으로 단일 관리자 계정을 만든다.
 
 ### `set_live_pin.py`
 
-LIVE 활성화 직전에 사용할 숫자 6자리 PIN을 설정하거나 변경한다. PIN 원문은 저장하지 않는다.
+`python -m auto_trader.set_live_pin` 명령으로 LIVE 잠금 해제용 숫자 6자리 PIN을 설정하거나 변경한다.
 
-### `README.md`
+## PAPER 모의매매
 
-자동매매 프로그램의 간단한 사용 설명서다.
+### `simulator.py`
 
-실행 명령, 감시 종목, Swagger UI 사용 순서와 현재 구현 범위를 확인할 수 있다.
+실제 주문과 분리된 가상 주식시장이다. 실제 시세는 시작값으로만 사용할 수 있으며 이후 가격 변화는 시뮬레이션이다.
 
-### `static/index.html`
+### `paper.py`
 
-PAPER 모의매매 전용 대시보드다. 실제 계좌와 LIVE 인증 기능을 포함하지 않는다.
+가상 현금, 보유종목, 주문, 체결과 손익을 메모리에서 관리한다. 서버를 재시작하면 PAPER 거래 상태가 초기화된다.
 
-### `static/live.html`, `static/live.js`
+### `risk.py`
 
-토스증권 실제 계좌 조회와 LIVE 인증을 위한 별도 화면이다. 현재는 읽기 전용이며 실제 주문 기능은 잠겨 있다.
-실제 보유자산은 화면이 보이는 동안 5초마다 자동 갱신하고, PIN 입력은 LIVE 잠금 해제 동작을 할 때만 모달로 표시한다.
+보수적·기본·직접 설정 투자 한도를 관리하고 수동·자동 매수 전에 공통 위험 규칙을 검사한다. 선택한 설정은 PostgreSQL에 저장한다.
 
-웹 대시보드의 화면 구조를 정의한다. 자산 요약, 감시 종목, 모의주문, 보유 종목과 최근 주문 영역이 들어 있다.
+### `strategy.py`
+
+이동평균 교차 전략, 자동매매 시작·중지와 긴급 정지를 담당한다. 현재 주문은 PAPER 계좌에만 반영된다.
+
+## 토스 LIVE 조회
+
+### `toss.py`
+
+토스증권 OAuth 토큰, REST 요청, 압축 응답 해제, 토큰 무효화 재시도와 짧은 조회 캐시를 담당한다. 실제 계좌 잔고, 보유종목, 매수 가능 금액, 거래대금 순위와 종목 검색 데이터를 읽는다.
+
+### `favorites.py`
+
+사용자별 관심종목을 PostgreSQL에 추가·조회·삭제한다. 한 사용자는 최대 20개를 저장할 수 있다.
+
+## 웹 화면
 
 ### `static/login.html`, `static/login.js`
 
-관리자 로그인 화면과 로그인 요청을 담당한다. 로그인 전에는 대시보드와 거래 API에 접근할 수 없다.
+`프라이빗 투자 데스크` 관리자 로그인 화면과 로그인 요청을 담당한다.
+
+### `static/index.html`, `static/app.js`
+
+PAPER 대시보드다. 가상 자산, 모의 주문, 전략 상태, 투자 한도와 자동매매 제어를 표시한다.
+
+### `static/live.html`, `static/live.js`
+
+읽기 전용 LIVE 자산 화면이다. 다음 내용을 표시한다.
+
+- 총자산(보유주식 평가금액 + 원화 매수 가능 금액)
+- 보유종목과 원화·외화 매수 가능 금액
+- 현재 원화 예산으로 살 수 있는 거래대금 상위 국내 종목
+- 인기순 국내 종목 부분 검색과 8개 단위 페이지 이동
+- 종목 현재가, 오늘 등락률, 종목 유형과 인기 순위
+- PostgreSQL에 저장되는 관심종목 추가·삭제
+
+토스 공식 Open API 응답에 산업 분류 필드가 없어 산업/테마 표시는 아직 제공하지 않는다. 실제 주문 기능도 잠겨 있다.
 
 ### `static/styles.css`
 
-대시보드의 색상, 간격, 버튼, 표와 모바일 반응형 디자인을 담당한다.
+로그인, PAPER와 LIVE 화면의 공통 바이올렛 테마, 간격, 카드, 표, 버튼과 반응형 레이아웃을 담당한다. 상승은 빨간색, 하락은 파란색, 관심종목은 금색으로 구분한다.
 
-### `static/app.js`
+## 프로젝트 루트
 
-FastAPI를 호출해 화면 데이터를 갱신한다. 자동매매 시작·중지, 모의주문, 계좌·시세·주문 표시를 담당한다.
+- `requirements.txt`: FastAPI, Pydantic, Uvicorn, psycopg 등 고정된 Python 의존성
+- `.env.example`: 비밀값이 없는 환경 변수 예시
+- `.gitignore`: `.env`, 가상환경, 캐시 등 Git 제외 규칙
+- `README.md`: 프로젝트 입구와 문서 링크
+- `docs/INSTALL_WINDOWS.md`: 새 Windows PC 설치·실행 절차
+- `docs/ROADMAP.md`: 구현 현황과 다음 작업 순서
+- `docs/PRD.md`: 제품 목표와 요구사항
+- `docs/DATABASE.md`: 영구 저장 데이터와 메모리 데이터 구분
 
-## 프로젝트 루트의 관련 파일
+## 테스트
 
-### `requirements.txt`
+- `test_auth.py`: 관리자 로그인, 세션, PIN과 인증 보호
+- `test_favorites.py`: 관심종목 저장 제한과 사용자별 분리
+- `test_paper.py`: PAPER 체결, 비용, 중복 요청, 동시성과 위험 한도
+- `test_toss.py`: 토스 응답 처리, 검색, 캐시와 토큰 재시도
 
-프로그램 실행에 필요한 Python 라이브러리와 버전을 기록한다.
+전체 테스트는 다음 명령으로 실행한다.
 
-현재 FastAPI, Pydantic, Uvicorn이 들어 있다.
+```powershell
+python -m unittest discover -s tests -v
+```
 
-### `.gitignore`
+## 직접 수정하지 않는 파일
 
-Git에 저장하지 않을 파일을 지정한다.
-
-비밀정보가 들어갈 수 있는 `.env`, 가상환경, 테스트 캐시와 `__pycache__` 등이 Git에 올라가지 않도록 한다.
-
-### `.env.example`
-
-사용자가 입력해야 할 설정값의 예시 파일이다. 이 파일을 `.env`로 복사해 사용한다. `.env.example`에는 실제 비밀번호나 API 비밀키를 넣지 않는다.
-
-### `docs/PRD.md`
-
-제품의 목적, 기능, 위험 관리, 개발 단계와 완료 조건을 정의한 기획 문서다.
-
-## `__pycache__`란?
-
-`__pycache__`는 Python이 프로그램을 더 빠르게 불러오기 위해 자동 생성하는 캐시 폴더다. 직접 만들거나 수정할 필요가 없다.
-
-예를 들어 다음처럼 원본 파일과 캐시 파일이 연결된다.
-
-| 캐시 파일 | 원본 파일 |
-|---|---|
-| `__init__.cpython-314.pyc` | `__init__.py` |
-| `__main__.cpython-314.pyc` | `__main__.py` |
-| `main.cpython-314.pyc` | `main.py` |
-| `models.cpython-314.pyc` | `models.py` |
-| `simulator.cpython-314.pyc` | `simulator.py` |
-| `paper.cpython-314.pyc` | `paper.py` |
-| `strategy.cpython-314.pyc` | `strategy.py` |
-
-파일명에서 다음 의미를 확인할 수 있다.
-
-- `cpython`: 일반적인 Python 구현체인 CPython으로 생성됨
-- `314`: Python 3.14에서 생성됨
-- `.pyc`: 컴파일된 Python 바이트코드 파일
-
-`__pycache__`를 삭제해도 원본 `.py` 파일은 사라지지 않는다. 프로그램을 다시 실행하면 필요한 캐시가 자동으로 생성된다.
-
-## 수정해야 하는 파일과 수정하지 말아야 하는 파일
-
-직접 수정하는 파일:
-
-- `.py` 소스 파일
-- `README.md`와 `docs` 문서
-- `requirements.txt`
-
-직접 수정하지 않는 파일:
-
-- `__pycache__` 폴더
-- `.pyc` 파일
-- Python과 도구가 자동 생성한 캐시 파일
-
-프로그램 동작을 변경하려면 항상 원본 `.py` 파일을 수정해야 한다.
+`__pycache__`, `.pyc`, 테스트 캐시와 가상환경 내부 파일은 도구가 자동 생성한다. 프로그램 동작을 바꿀 때는 원본 소스와 문서를 수정한다.

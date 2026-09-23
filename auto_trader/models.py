@@ -158,6 +158,70 @@ class LivePortfolio(BaseModel):
     holdings: list[LiveHolding]
 
 
+class LiveBuyingPower(BaseModel):
+    account_label: str
+    krw_cash_buying_power: Decimal
+    usd_cash_buying_power: Decimal
+
+
+class LiveStockCandidate(BaseModel):
+    rank: int
+    symbol: str
+    name: str
+    price: Decimal
+    change_rate_percent: Decimal
+    max_quantity: int
+    reason: str
+
+
+class LiveCandidateList(BaseModel):
+    available_cash_krw: Decimal
+    ranked_at: datetime | None = None
+    basis: str
+    disclaimer: str
+    candidates: list[LiveStockCandidate]
+
+
+class LiveStockSearchResult(BaseModel):
+    symbol: str
+    name: str
+    market: str
+    security_type: str
+    is_common_share: bool
+    currency: str
+    price: Decimal | None = None
+    change_rate_percent: Decimal | None = None
+    trading_amount_rank: int | None = None
+    trading_amount: Decimal | None = None
+    is_favorite: bool = False
+
+
+class LiveStockSearchPage(BaseModel):
+    query: str
+    page: int
+    page_size: int
+    total: int
+    total_pages: int
+    results: list[LiveStockSearchResult]
+
+
+class FavoriteStockCreate(BaseModel):
+    symbol: str = Field(min_length=1, max_length=20)
+
+
+class LiveFavoriteStock(BaseModel):
+    symbol: str
+    name: str
+    market: str
+    security_type: str
+    is_common_share: bool
+    created_at: datetime
+    currency: str = "KRW"
+    price: Decimal | None = None
+    change_rate_percent: Decimal | None = None
+    trading_amount_rank: int | None = None
+
+
 class SessionInfo(BaseModel):
     username: str
     csrf_token: str
