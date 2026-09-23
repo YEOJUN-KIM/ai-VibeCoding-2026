@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Paper Trade · 국내주식 모의 자동매매</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">PAPER TRADING LAB</p>
+        <h1>국내주식 모의 자동매매</h1>
+        <p class="subtitle">실제 돈을 사용하지 않는 연습용 대시보드</p>
+      </div>
+      <div class="header-actions">
+        <div class="mode-box">
+          <span class="status-dot" id="server-dot"></span>
+          <div>
+            <span class="mode-label">현재 모드</span>
+            <strong>PAPER</strong>
+          </div>
+        </div>
+        <div class="user-box">
+          <span class="mode-label">로그인 사용자</span>
+          <strong id="current-user">-</strong>
+          <button class="text-button" id="logout-button">로그아웃</button>
+        </div>
+      </div>
+    </header>
+    <nav class="mode-nav"><a class="active paper-link" href="/paper">PAPER 모의매매</a><a href="/live">LIVE 실제계좌</a></nav>
+
+    <main>
+      <section class="control-panel panel">
+        <div>
+          <p class="section-kicker">AUTO STRATEGY</p>
+          <h2 id="strategy-title">5 / 20 이동평균 전략</h2>
+          <p id="strategy-description">최근 가격을 수집하고 있습니다.</p>
+        </div>
+        <div class="control-actions">
+          <span class="pill stopped" id="strategy-pill">정지됨</span>
+          <button class="button primary" id="start-button">자동매매 시작</button>
+          <button class="button secondary" id="stop-button">정상 중지</button>
+          <button class="button danger" id="emergency-button">긴급 정지</button>
+        </div>
+      </section>
+
+      <section class="panel strategy-settings-panel">
+        <div><p class="section-kicker">STRATEGY SETTINGS</p><h2>모의 자동매매 설정</h2>
+          <p class="subtitle">단기는 장기보다 작아야 하며 자동매매를 중지한 상태에서만 변경할 수 있습니다.</p></div>
+        <form id="strategy-settings-form" class="strategy-settings-form">
+          <label>실행 간격(초)<input id="strategy-interval" type="number" min="1" max="60" required></label>
+          <label>단기 이동평균<input id="strategy-short" type="number" min="2" max="100" required></label>
+          <label>장기 이동평균<input id="strategy-long" type="number" min="3" max="300" required></label>
+          <label>1회 주문 수량<input id="strategy-quantity" type="number" min="1" max="1000" required></label>
+          <button class="button secondary" type="submit">전략 설정 저장</button>
+        </form>
+        <p class="form-message" id="strategy-settings-message"></p>
+      </section>
+
+      <section class="summary-grid">
+        <article class="summary-card">
+          <span>총자산</span>
+          <strong id="total-asset">-</strong>
+          <small>가상 평가금액</small>
+        </article>
+        <article class="summary-card">
+          <span>주문 가능 금액</span>
+          <strong id="cash">-</strong>
+          <small>가상 현금</small>
+        </article>
+        <article class="summary-card">
+          <span>보유 종목</span>
+          <strong id="position-count">-</strong>
+          <small>현재 포지션</small>
+        </article>
+        <article class="summary-card">
+          <span>전략 실행 횟수</span>
+          <strong id="tick-count">-</strong>
+          <small>2초마다 1회</small>
+        </article>
+      </section>
+
+      <section class="summary-grid" aria-label="누적 손익">
+        <article class="summary-card"><span>총손익</span><strong id="total-profit">-</strong><small id="return-percent">-</small></article>
+        <article class="summary-card"><span>실현 손익</span><strong id="realized-profit">-</strong><small>매도 완료분 · 거래 비용 반영</small></article>
+        <article class="summary-card"><span>평가 손익</span><strong id="unrealized-profit">-</strong><small>매수 수수료 포함 · 예상 매도 비용 제외</small></article>
+        <article class="summary-card"><span>누적 거래 비용</span><strong id="total-costs">-</strong><small id="cost-breakdown">수수료 + 세금</small></article>
+      </section>
+      <p class="subtitle" id="cost-policy">모의 비용 설정을 불러오는 중입니다.</p>
+      <section class="content-grid">
+        <article class="panel wide risk-panel">
+          <div class="panel-heading">
+            <div><p class="section-kicker">RISK LIMITS</p><h2>투자 한도 설정</h2>
+              <p class="subtitle">매도는 위험을 줄이는 행동이므로 아래 매수 한도와 관계없이 허용됩니다.</p></div>
+            <span class="pill running" id="risk-pill">매수 가능</span>
+          </div>
+          <form id="risk-form">
+            <div class="risk-grid">
+              <label>프리셋<select id="risk-preset"><option value="CONSERVATIVE">보수적</option><option value="DEFAULT">기본 · 연습용 권장</option><option value="CUSTOM">직접 설정</option></select></label>
+              <label title="한 번의 매수 주문에 사용할 수 있는 최대 금액">1회 최대 주문 금액<input id="max-order-amount" type="number" min="1"></label>
+              <label title="한 종목에 집중될 수 있는 최대 평가금액">종목별 최대 투자 금액<input id="max-symbol-amount" type="number" min="1"></label>
+              <label title="보유 주식 전체의 최대 평가금액">전체 최대 투자 금액<input id="max-total-investment" type="number" min="1"></label>
+              <label title="주문 후에도 남겨야 하는 현금 비율">최소 현금 보유 비율 (%)<input id="min-cash-ratio" type="number" min="0" max="100" step="0.1"></label>
+              <label title="오늘 시작 자산보다 이 금액만큼 손실이면 신규 매수를 중지">일일 손실 한도<input id="daily-loss-limit" type="number" min="1"></label>
+              <label title="오늘 체결할 수 있는 매수·매도 합계 횟수">일일 주문 횟수<input id="daily-order-limit" type="number" min="1"></label>
+              <label title="오늘 시작 자산보다 이 금액만큼 수익이면 신규 매수를 중지">일일 수익 목표<input id="profit-target" type="number" min="1"></label>
+            </div>
+            <div class="risk-footer"><p class="form-message" id="risk-message">기본 프리셋을 사용 중입니다.</p><div class="risk-actions"><button class="button danger" id="reset-practice-button" type="button">오늘 연습 기록 초기화</button><button class="button primary" type="submit">한도 저장</button></div></div>
+          </form>
+          <div class="risk-usage" id="risk-usage"></div>
+        </article>
+
+        <article class="panel wide">
+          <div class="panel-heading">
+            <div>
+              <p class="section-kicker">WATCHLIST</p>
+              <h2>감시 종목</h2>
+            </div>
+            <span class="updated" id="updated-at">업데이트 대기 중</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>종목</th><th>현재가</th><th>단기 평균</th><th>장기 평균</th><th>상태</th></tr>
+              </thead>
+              <tbody id="watchlist-body"></tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="panel order-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="section-kicker">PAPER ORDER</p>
+              <h2>수동 모의주문</h2>
+            </div>
+          </div>
+          <form id="order-form">
+            <label>종목
+              <select id="order-symbol"></select>
+            </label>
+            <label>주문 구분
+              <select id="order-side">
+                <option value="BUY">매수</option>
+                <option value="SELL">매도</option>
+              </select>
+            </label>
+            <label>수량
+              <input id="order-quantity" type="number" min="1" max="1000" value="1">
+            </label>
+            <button class="button primary full" type="submit">가상 주문 실행</button>
+          </form>
+          <p class="form-message" id="order-message"></p>
+        </article>
+
+        <article class="panel">
+          <div class="panel-heading">
+            <div><p class="section-kicker">PORTFOLIO</p><h2>보유 종목</h2></div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>종목</th><th>수량</th><th>평가금액</th><th>평가손익</th></tr></thead>
+              <tbody id="positions-body"></tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-heading">
+            <div><p class="section-kicker">ACTIVITY</p><h2>최근 주문</h2></div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>구분</th><th>종목</th><th>수량</th><th>체결가</th><th>상태</th><th>결과</th></tr></thead>
+              <tbody id="orders-body"></tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+    </main>
+
+    <footer>
+      실제 주가와 실제 계좌를 사용하지 않는 학습용 프로그램입니다.
+      <a href="/docs">API 문서 열기</a>
+    </footer>
+  </div>
+</body>
+</html>
