@@ -2,6 +2,7 @@
 
 import asyncio
 from contextlib import asynccontextmanager
+from decimal import Decimal
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
@@ -23,7 +24,7 @@ from .auth import (
 )
 from .models import (Account, FavoriteStockCreate, LiveBuyingPower, LiveCandidateList,
                      LiveFavoriteStock, LivePinRequest, LivePinStatus, LivePortfolio,
-                     LiveStockSearchPage, LoginRequest, Order, OrderRequest,
+                     LiveStockDetail, LiveStockSearchPage, LoginRequest, Order, OrderRequest,
                      Quote, RiskSettings, RiskSettingsUpdate, RiskStatus, SessionInfo, Stock,
                      StrategySettingsUpdate, StrategyStatus, TossConnectionStatus)
 from .paper import PaperBroker
@@ -64,6 +65,7 @@ async def lifespan(_: FastAPI):
             engine.configure(interval_seconds=engine.interval_seconds, short_period=engine.short_period,
                              long_period=engine.long_period, order_quantity=engine.order_quantity)
             watchlist_source = "toss_daily_trading_amount"
+            await asyncio.to_thread(toss_client.warm_domestic_stock_universe)
         except (TossApiError, KeyError, ValueError, ArithmeticError):
             watchlist_source = "fallback"
     broker.initialize()
@@ -108,7 +110,7 @@ async def security_headers(request: Request, call_next):
 def dashboard_root(request: Request) -> RedirectResponse:
     if not session_from_request(request):
         return RedirectResponse("/login", status_code=303)
-    return RedirectResponse("/paper", status_code=303)
+    return RedirectResponse("/live", status_code=303)
 
 
 @app.get("/paper", include_in_schema=False, response_model=None)
@@ -123,6 +125,20 @@ def live_dashboard(request: Request) -> FileResponse | RedirectResponse:
     if not session_from_request(request):
         return RedirectResponse("/login", status_code=303)
     return FileResponse(static_dir / "live.html")
+
+
+@app.get("/stocks", include_in_schema=False, response_model=None)
+def domestic_stocks_page(request: Request) -> FileResponse | RedirectResponse:
+    if not session_from_request(request):
+        return RedirectResponse("/login", status_code=303)
+    return FileResponse(static_dir / "stocks.html")
+
+
+@app.get("/stocks/{symbol}", include_in_schema=False, response_model=None)
+def domestic_stock_detail_page(symbol: str, request: Request) -> FileResponse | RedirectResponse:
+    if not session_from_request(request):
+        return RedirectResponse("/login", status_code=303)
+    return FileResponse(static_dir / "stock-detail.html")
 
 
 @app.get("/login", include_in_schema=False, response_model=None)
@@ -268,6 +284,60 @@ def live_stock_search(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
+@app.get("/live/stocks/list", response_model=LiveStockSearchPage)
+def live_stock_list(
+    q: str = Query(default="", max_length=50),
+    market: str = Query(default="ALL", pattern=r"^(ALL|KOSPI|KOSDAQ)$"),
+    security_type: str = Query(default="ALL", pattern=r"^(ALL|COMMON|STOCK|ETF|ETN)$"),
+    sort: str = Query(default="POPULAR", pattern=r"^(POPULAR|NAME|CODE)$"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=10, le=50),
+    user: AuthenticatedUser = Depends(require_user),
+) -> LiveStockSearchPage:
+    try:
+        result = toss_client.list_domestic_stocks(
+            query=q, market=market, security_type=security_type,
+            sort=sort, page=page, page_size=page_size,
+        )
+        saved = favorite_symbols(user.id)
+        return result.model_copy(update={
+            "results": [item.model_copy(update={"is_favorite": item.symbol in saved})
+                        for item in result.results]
+        })
+    except TossApiError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.get("/live/stocks/sparklines", response_model=dict[str, list[Decimal]])
+def live_stock_sparklines(
+    symbols: str = Query(min_length=1, max_length=419),
+    period: str = Query(default="1D", pattern="^(1D|1W|1M|3M|1Y)$"),
+    _: AuthenticatedUser = Depends(require_user),
+) -> dict[str, list[Decimal]]:
+    requested = list(dict.fromkeys(item.strip().upper() for item in symbols.split(",") if item.strip()))
+    if not requested or len(requested) > 20 or any(
+        len(item) > 12 or not item.replace("-", "").isalnum() for item in requested
+    ):
+        raise HTTPException(status_code=422, detail="종목코드는 한 번에 20개까지 조회할 수 있습니다.")
+    try:
+        return toss_client.domestic_sparklines(requested, period=period)
+    except TossApiError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.get("/live/stocks/{symbol}/detail", response_model=LiveStockDetail)
+def live_stock_detail(
+    symbol: str,
+    period: str = Query(default="1D", pattern="^(1D|1W|1M|3M|1Y)$"),
+    _: AuthenticatedUser = Depends(require_user),
+) -> LiveStockDetail:
+    try:
+        return toss_client.domestic_stock_detail(symbol, period=period)
+    except TossApiError as exc:
+        status_code = 404 if exc.status_code == 404 else 502
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+
 @app.get("/live/favorites", response_model=list[LiveFavoriteStock])
 def live_favorites(user: AuthenticatedUser = Depends(require_user)) -> list[LiveFavoriteStock]:
     try:
@@ -302,7 +372,7 @@ def delete_live_favorite(
     return Response(status_code=204)
 
 
-@app.get("/stocks", response_model=list[Stock])
+@app.get("/paper/stocks", response_model=list[Stock])
 def stocks(_: AuthenticatedUser = Depends(require_user)) -> list[Stock]:
     return market.stocks()
 

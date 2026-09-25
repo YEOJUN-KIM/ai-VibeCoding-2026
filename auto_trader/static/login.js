@@ -17,7 +17,7 @@ form.addEventListener("submit", async (event) => {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.detail || "로그인에 실패했습니다.");
-    window.location.replace("/");
+    window.location.replace("/live");
   } catch (error) {
     message.textContent = error.message;
     document.querySelector("#password").value = "";

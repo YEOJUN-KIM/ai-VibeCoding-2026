@@ -13,7 +13,7 @@ from decimal import Decimal
 
 from .settings import settings
 from .models import (LiveBuyingPower, LiveCandidateList, LiveFavoriteStock, LiveHolding,
-                     LivePortfolio, LiveStockCandidate, LiveStockSearchPage,
+                     LivePortfolio, LiveStockCandle, LiveStockCandidate, LiveStockDetail, LiveStockSearchPage,
                      LiveStockSearchResult, Stock)
 
 
@@ -47,6 +47,9 @@ class TossClient:
         self._portfolio_cache: LivePortfolio | None = None
         self._portfolio_expires_at = 0.0
         self._portfolio_lock = Lock()
+        self._kr_market_day_cache: tuple[str, bool] | None = None
+        self._kr_market_day_expires_at = 0.0
+        self._kr_market_day_lock = Lock()
         self._buying_power_cache: LiveBuyingPower | None = None
         self._buying_power_expires_at = 0.0
         self._buying_power_lock = Lock()
@@ -59,6 +62,12 @@ class TossClient:
         self._stock_universe_cache: list[dict] | None = None
         self._stock_universe_expires_at = 0.0
         self._stock_universe_lock = Lock()
+        self._stock_info_cache: dict[str, tuple[float, dict]] = {}
+        self._stock_info_lock = Lock()
+        self._candle_cache: dict[
+            tuple[str, str], tuple[float, int, list[LiveStockCandle]]
+        ] = {}
+        self._candle_lock = Lock()
 
     @property
     def configured(self) -> bool:
@@ -191,6 +200,41 @@ class TossClient:
         """토스 API의 1 = 100% 비율 값을 화면용 퍼센트 값으로 변환한다."""
         return cls._decimal(value) * Decimal("100")
 
+    def kr_market_open_today(self) -> tuple[str, bool]:
+        """KST 기준 오늘 국내 통합장이 열리는 날인지 조회한다."""
+        kst = timezone(timedelta(hours=9))
+        today = datetime.now(kst).date().isoformat()
+        now = monotonic()
+        if (self._kr_market_day_cache is not None
+                and self._kr_market_day_cache[0] == today
+                and now < self._kr_market_day_expires_at):
+            return self._kr_market_day_cache
+        with self._kr_market_day_lock:
+            now = monotonic()
+            if (self._kr_market_day_cache is not None
+                    and self._kr_market_day_cache[0] == today
+                    and now < self._kr_market_day_expires_at):
+                return self._kr_market_day_cache
+            query = urlencode({"date": today})
+            payload = self._authorized_json_request(
+                f"{self.base_url}/api/v1/market-calendar/KR?{query}"
+            )
+            result = payload.get("result")
+            market_day = result.get("today") if isinstance(result, dict) else None
+            if not isinstance(market_day, dict):
+                raise TossApiError("토스 API 국내 장 운영 응답 형식이 예상과 다릅니다.")
+            market_open_today = isinstance(market_day.get("integrated"), dict)
+            previous_day = result.get("previousBusinessDay")
+            previous_date = previous_day.get("date") if isinstance(previous_day, dict) else None
+            reference_date = str(
+                (market_day.get("date") or today)
+                if market_open_today else (previous_date or market_day.get("date") or today)
+            )
+            status = (reference_date, market_open_today)
+            self._kr_market_day_cache = status
+            self._kr_market_day_expires_at = monotonic() + 300
+            return status
+
     def portfolio(self) -> LivePortfolio:
         now = monotonic()
         if self._portfolio_cache is not None and now < self._portfolio_expires_at:
@@ -208,6 +252,11 @@ class TossClient:
             result = payload.get("result")
             if not isinstance(result, dict) or not isinstance(result.get("items"), list):
                 raise TossApiError("토스 API 보유자산 응답 형식이 예상과 다릅니다.")
+            try:
+                reference_date, market_open_today = self.kr_market_open_today()
+            except TossApiError:
+                reference_date = datetime.now(timezone(timedelta(hours=9))).date().isoformat()
+                market_open_today = None
             holdings = []
             for item in result["items"]:
                 market_value = item.get("marketValue") or {}
@@ -226,14 +275,18 @@ class TossClient:
                 ))
             account_no = str(account.get("accountNo", ""))
             label = ("*" * max(0, len(account_no) - 4) + account_no[-4:]) if account_no else f"계좌 {account_seq}"
+            daily_profit_loss = self._krw_amount((result.get("dailyProfitLoss") or {}).get("amount"))
+            daily_profit_rate = self._percent((result.get("dailyProfitLoss") or {}).get("rate"))
             portfolio = LivePortfolio(
                 account_label=label,
                 total_purchase_krw=self._decimal((result.get("totalPurchaseAmount") or {}).get("krw")),
                 market_value=self._krw_amount((result.get("marketValue") or {}).get("amount")),
                 profit_loss=self._krw_amount((result.get("profitLoss") or {}).get("amount")),
                 profit_rate=self._percent((result.get("profitLoss") or {}).get("rate")),
-                daily_profit_loss=self._krw_amount((result.get("dailyProfitLoss") or {}).get("amount")),
-                daily_profit_rate=self._percent((result.get("dailyProfitLoss") or {}).get("rate")),
+                daily_profit_loss=daily_profit_loss,
+                daily_profit_rate=daily_profit_rate,
+                daily_profit_reference_date=reference_date,
+                market_open_today=market_open_today,
                 holdings=holdings,
             )
             self._portfolio_cache = portfolio
@@ -318,14 +371,14 @@ class TossClient:
                     price=price,
                     change_rate_percent=self._percent(price_data.get("changeRate")),
                     max_quantity=int(cash // price),
-                    reason=f"국내 일일 거래대금 {rank}위 · 현재 원화 한도 내 1주 이상 가능",
+                    reason=f"국내 일일 거래대금 {rank}위 · 주문 가능 조건 충족",
                 ))
                 if len(candidates) >= count:
                     break
             candidate_list = LiveCandidateList(
                 available_cash_krw=cash,
                 ranked_at=ranked_at,
-                basis="국내 일일 거래대금 상위 종목 중 투자유의 종목을 제외하고 현재 원화로 1주 이상 가능한 종목",
+                basis="거래대금과 주문 가능 조건을 바탕으로 투자유의 종목을 제외한 탐색 결과",
                 disclaimer="투자 권유가 아닌 탐색 후보입니다. 수익을 보장하지 않으며 가격과 주문 가능 금액은 변할 수 있습니다.",
                 candidates=candidates,
             )
@@ -383,31 +436,52 @@ class TossClient:
             self._stock_universe_expires_at = monotonic() + 43200
             return universe
 
+    def warm_domestic_stock_universe(self) -> int:
+        """서버 시작 시 종목 목록을 미리 적재해 첫 화면 대기를 줄인다."""
+        return len(self._domestic_stock_universe())
+
     def search_domestic_stocks(self, query: str, page: int = 1,
                                page_size: int = 8) -> LiveStockSearchPage:
+        return self.list_domestic_stocks(
+            query=query, page=page, page_size=page_size, sort="POPULAR"
+        )
+
+    def list_domestic_stocks(self, *, query: str = "", market: str = "ALL",
+                             security_type: str = "ALL", sort: str = "POPULAR",
+                             page: int = 1, page_size: int = 20) -> LiveStockSearchPage:
         normalized = query.strip().casefold()
-        if not normalized:
-            return LiveStockSearchPage(
-                query=query, page=1, page_size=page_size, total=0, total_pages=1, results=[]
-            )
         matches = [
             item for item in self._domestic_stock_universe()
-            if normalized in str(item.get("name", "")).casefold()
-            or normalized in str(item.get("symbol", "")).casefold()
+            if (not normalized
+                or normalized in str(item.get("name", "")).casefold()
+                or normalized in str(item.get("symbol", "")).casefold())
+            and (market == "ALL" or str(item.get("market", "")) == market)
+            and (
+                security_type == "ALL"
+                or (security_type == "COMMON" and bool(item.get("isCommonShare", False)))
+                or str(item.get("securityType", "")) == security_type
+            )
         ]
         _, rankings = self._domestic_trading_amount_rankings()
         ranking_by_symbol = {str(item.get("symbol", "")): item for item in rankings}
-        matches.sort(key=lambda item: (
-            int((ranking_by_symbol.get(str(item.get("symbol", ""))) or {}).get("rank", 1_000_000)),
-            str(item.get("name", "")).casefold(),
-            str(item.get("symbol", "")),
-        ))
+        if sort == "NAME":
+            matches.sort(key=lambda item: (str(item.get("name", "")).casefold(),
+                                           str(item.get("symbol", ""))))
+        elif sort == "CODE":
+            matches.sort(key=lambda item: str(item.get("symbol", "")))
+        else:
+            matches.sort(key=lambda item: (
+                int((ranking_by_symbol.get(str(item.get("symbol", ""))) or {}).get("rank", 1_000_000)),
+                str(item.get("name", "")).casefold(),
+                str(item.get("symbol", "")),
+            ))
         total = len(matches)
         total_pages = max(1, (total + page_size - 1) // page_size)
         page = min(page, total_pages)
         start = (page - 1) * page_size
         matches = matches[start:start + page_size]
         prices = {}
+        details = {}
         if matches:
             symbols = [str(item.get("symbol", "")) for item in matches]
             price_query = urlencode({"symbols": ",".join(symbols)})
@@ -416,10 +490,24 @@ class TossClient:
             if not isinstance(result, list):
                 raise TossApiError("토스 API 현재가 응답 형식이 예상과 다릅니다.")
             prices = {str(item.get("symbol", "")): item for item in result}
+            detail_payload = self._authorized_json_request(
+                f"{self.base_url}/api/v1/stocks?{price_query}"
+            )
+            detail_rows = detail_payload.get("result")
+            if not isinstance(detail_rows, list):
+                raise TossApiError("토스 API 종목 기본정보 응답 형식이 예상과 다릅니다.")
+            details = {str(item.get("symbol", "")): item for item in detail_rows}
+            with self._stock_info_lock:
+                expires_at = monotonic() + 43200
+                for symbol, detail in details.items():
+                    self._stock_info_cache[symbol] = (expires_at, detail)
         results = []
         for item in matches:
             symbol = str(item.get("symbol", ""))
             ranking = ranking_by_symbol.get(symbol)
+            current_price = (self._decimal(prices[symbol].get("lastPrice"))
+                             if symbol in prices else None)
+            shares = self._decimal((details.get(symbol) or {}).get("sharesOutstanding"))
             results.append(LiveStockSearchResult(
                 symbol=symbol,
                 name=str(item.get("name", "")),
@@ -427,11 +515,12 @@ class TossClient:
                 security_type=str(item.get("securityType", "")),
                 is_common_share=bool(item.get("isCommonShare", False)),
                 currency=str((prices.get(symbol) or {}).get("currency", "KRW")),
-                price=(self._decimal(prices[symbol].get("lastPrice")) if symbol in prices else None),
+                price=current_price,
                 change_rate_percent=(self._percent(((ranking or {}).get("price") or {}).get("changeRate"))
                                      if ranking else None),
                 trading_amount_rank=(int(ranking.get("rank")) if ranking else None),
                 trading_amount=(self._decimal(ranking.get("tradingAmount")) if ranking else None),
+                market_cap=(current_price * shares if current_price is not None and shares else None),
             ))
         return LiveStockSearchPage(
             query=query,
@@ -448,6 +537,150 @@ class TossClient:
             (item for item in self._domestic_stock_universe()
              if str(item.get("symbol", "")).upper() == normalized),
             None,
+        )
+
+    def _domestic_stock_info(self, symbol: str) -> dict:
+        normalized = symbol.strip().upper()
+        now = monotonic()
+        cached = self._stock_info_cache.get(normalized)
+        if cached is not None and now < cached[0]:
+            return cached[1]
+        query = urlencode({"symbols": normalized})
+        payload = self._authorized_json_request(f"{self.base_url}/api/v1/stocks?{query}")
+        rows = payload.get("result")
+        if not isinstance(rows, list):
+            raise TossApiError("토스 API 종목 기본정보 응답 형식이 예상과 다릅니다.")
+        detail = rows[0] if rows else {}
+        with self._stock_info_lock:
+            self._stock_info_cache[normalized] = (monotonic() + 43200, detail)
+        return detail
+
+    @staticmethod
+    def _chart_period(period: str, *, detailed: bool = False) -> tuple[str, int]:
+        periods = {
+            "1D": ("1m", 390 if detailed else 200),
+            "1W": (("1m", 1950) if detailed else ("1d", 7)),
+            "1M": (("1m", 8580) if detailed else ("1d", 22)),
+            "3M": ("1d", 60),
+            "1Y": ("1d", 200),
+        }
+        return periods.get(period.upper(), periods["1M"])
+
+    def _domestic_candles(self, symbol: str, interval: str, count: int) -> list[LiveStockCandle]:
+        normalized = symbol.strip().upper()
+        cache_key = (normalized, interval)
+        now = monotonic()
+        cached = self._candle_cache.get(cache_key)
+        if cached is not None and now < cached[0] and cached[1] >= count:
+            return cached[2][-count:]
+        with self._candle_lock:
+            now = monotonic()
+            cached = self._candle_cache.get(cache_key)
+            if cached is not None and now < cached[0] and cached[1] >= count:
+                return cached[2][-count:]
+        # 네트워크 호출 중에는 전체 차트 캐시 잠금을 잡지 않는다. 서로 다른 종목은
+        # 동시에 받아올 수 있어 목록의 미니 차트가 훨씬 빨리 채워진다.
+        raw_rows: list[dict] = []
+        before: str | None = None
+        seen_cursors: set[str] = set()
+        max_pages = max(1, (count + 199) // 200)
+        for page_index in range(max_pages):
+            query_values = {"symbol": normalized, "interval": interval}
+            if before:
+                query_values["before"] = before
+            query = urlencode(query_values)
+            payload = self._authorized_json_request(f"{self.base_url}/api/v1/candles?{query}")
+            result = payload.get("result")
+            rows = result.get("candles") if isinstance(result, dict) else None
+            if not isinstance(rows, list):
+                raise TossApiError("토스 API 차트 응답 형식이 예상과 다릅니다.")
+            raw_rows.extend(rows)
+            if len(raw_rows) >= count:
+                break
+            next_before = result.get("nextBefore") if isinstance(result, dict) else None
+            if not next_before or next_before in seen_cursors:
+                break
+            seen_cursors.add(str(next_before))
+            before = str(next_before)
+            if page_index + 1 < max_pages:
+                sleep(0.08)
+        candles = [LiveStockCandle(
+            timestamp=item.get("timestamp"),
+            open_price=self._decimal(item.get("openPrice")),
+            high_price=self._decimal(item.get("highPrice")),
+            low_price=self._decimal(item.get("lowPrice")),
+            close_price=self._decimal(item.get("closePrice")),
+            volume=self._decimal(item.get("volume")),
+        ) for item in reversed(raw_rows)]
+        cache_seconds = 1800 if interval == "1m" and count > 2000 else 300
+        with self._candle_lock:
+            self._candle_cache[cache_key] = (monotonic() + cache_seconds, count, candles)
+        return candles[-count:]
+
+    def domestic_sparklines(
+        self, symbols: list[str], count: int | None = None, period: str = "1D"
+    ) -> dict[str, list[Decimal]]:
+        interval, period_count = self._chart_period(period)
+        candle_count = count or period_count
+        lines: dict[str, list[Decimal]] = {}
+        for index, symbol in enumerate(symbols):
+            if index:
+                sleep(0.06)
+            try:
+                lines[symbol] = [
+                    item.close_price for item in self._domestic_candles(symbol, interval, candle_count)
+                ]
+            except TossApiError as exc:
+                if exc.status_code not in {400, 404}:
+                    raise
+                lines[symbol] = []
+        return lines
+
+    def domestic_stock_detail(self, symbol: str, period: str = "1D") -> LiveStockDetail:
+        stock = self.domestic_stock(symbol)
+        if not stock:
+            raise TossApiError("국내 종목을 찾지 못했습니다.", status_code=404,
+                               error_code="stock-not-found")
+        normalized = str(stock.get("symbol", "")).upper()
+        price_query = urlencode({"symbols": normalized})
+        price_payload = self._authorized_json_request(f"{self.base_url}/api/v1/prices?{price_query}")
+        price_rows = price_payload.get("result")
+        if not isinstance(price_rows, list):
+            raise TossApiError("토스 API 현재가 응답 형식이 예상과 다릅니다.")
+        price = price_rows[0] if price_rows else {}
+        stock_info = self._domestic_stock_info(normalized)
+        interval, candle_count = self._chart_period(period, detailed=True)
+        candles = self._domestic_candles(normalized, interval, candle_count)
+        current_price = self._decimal(price.get("lastPrice")) if price.get("lastPrice") is not None else None
+        _, rankings = self._domestic_trading_amount_rankings()
+        ranking = next((item for item in rankings if str(item.get("symbol", "")) == normalized), None)
+        ranking_change_rate = ((ranking or {}).get("price") or {}).get("changeRate")
+        change_rate = (self._percent(ranking_change_rate)
+                       if ranking_change_rate is not None else None)
+        if change_rate is None:
+            daily_candles = (candles if interval == "1d"
+                             else self._domestic_candles(normalized, "1d", 2))
+            if len(daily_candles) >= 2 and daily_candles[-2].close_price:
+                latest = current_price if current_price is not None else daily_candles[-1].close_price
+                change_rate = (latest / daily_candles[-2].close_price - Decimal("1")) * Decimal("100")
+        shares_outstanding = (self._decimal(stock_info.get("sharesOutstanding"))
+                              if stock_info.get("sharesOutstanding") is not None else None)
+        return LiveStockDetail(
+            symbol=normalized,
+            name=str(stock.get("name", "")),
+            market=str(stock.get("market", "")),
+            security_type=str(stock.get("securityType", "")),
+            is_common_share=bool(stock.get("isCommonShare", False)),
+            currency=str(price.get("currency", "KRW")),
+            price=current_price,
+            change_rate_percent=change_rate,
+            trading_amount_rank=(int(ranking.get("rank")) if ranking else None),
+            market_cap=(current_price * shares_outstanding
+                        if current_price is not None and shares_outstanding else None),
+            shares_outstanding=shares_outstanding,
+            trading_amount=(self._decimal(ranking.get("tradingAmount")) if ranking else None),
+            trading_volume=(self._decimal(ranking.get("tradingVolume")) if ranking else None),
+            candles=candles,
         )
 
     def favorite_stock_snapshots(self, favorites: list[dict]) -> list[LiveFavoriteStock]:

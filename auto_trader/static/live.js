@@ -6,10 +6,6 @@ let csrfToken = "";
 let portfolioLoading = false;
 let candidateLoading = false;
 let favoriteLoading = false;
-let searchTimer = null;
-let searchSequence = 0;
-let activeSearchQuery = "";
-let activeSearchPage = 1;
 
 const escapeHtml = (value) => String(value).replace(/[&<>'"]/g, (character) => ({
   "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;",
@@ -41,6 +37,17 @@ function renderPortfolio(data) {
     element.className = Number(amount) > 0 ? "positive" : Number(amount) < 0 ? "negative" : "neutral";
     $("#" + rateId).textContent = `${Number(rate).toFixed(2)}%`;
   }
+  const referenceDate = String(data.daily_profit_reference_date || "").replaceAll("-", ".");
+  if (data.market_open_today === false) {
+    $("#live-daily-profit-label").textContent = "최근 거래일 평가손익";
+    $("#live-daily-profit-basis").textContent = `${referenceDate} 기준 · 오늘 휴장`;
+  } else if (data.market_open_today === true) {
+    $("#live-daily-profit-label").textContent = "오늘 평가손익";
+    $("#live-daily-profit-basis").textContent = `${referenceDate} 거래일 기준`;
+  } else {
+    $("#live-daily-profit-label").textContent = "최근 일일 평가손익";
+    $("#live-daily-profit-basis").textContent = `${referenceDate} 장 상태 확인 불가`;
+  }
   $("#live-holdings-body").innerHTML = data.holdings.length ? data.holdings.map((item) => `<tr>
     <td>${stockCell(item)}</td><td>${number.format(Number(item.quantity))}주</td>
     <td>${won.format(Number(item.average_purchase_price))}</td><td>${won.format(Number(item.last_price))}</td>
@@ -60,10 +67,10 @@ function renderCandidates(data) {
   $("#candidate-body").innerHTML = data.candidates.length ? data.candidates.map((item) => {
     const rate = Number(item.change_rate_percent);
     const rateClass = rate > 0 ? "positive" : rate < 0 ? "negative" : "neutral";
-    return `<tr><td>${number.format(item.rank)}위</td><td>${stockCell({ ...item, market_country: "KR" })}</td>
+    return `<tr><td>${number.format(item.rank)}위</td><td><a class="candidate-stock-link" href="/stocks/${encodeURIComponent(item.symbol)}">${stockCell({ ...item, market_country: "KR" })}</a></td>
       <td>${won.format(Number(item.price))}</td><td class="${rateClass}">${rate.toFixed(2)}%</td>
       <td>${number.format(item.max_quantity)}주</td><td>${escapeHtml(item.reason)}</td></tr>`;
-  }).join("") : `<tr><td class="empty" colspan="6">현재 원화 한도 안에서 조건을 충족한 후보가 없습니다.</td></tr>`;
+  }).join("") : `<tr><td class="empty" colspan="6">현재 스캐너 조건에 맞는 종목이 없습니다.</td></tr>`;
 }
 
 function favoriteButton(symbol, active, label) {
@@ -84,7 +91,7 @@ function renderFavorites(items) {
       <strong class="favorite-price">${item.price === null ? "가격 정보 없음" : won.format(Number(item.price))}</strong>
       <div class="favorite-meta"><span class="${rateClass}">${rate === null ? "등락률 집계 없음" : `${rate > 0 ? "+" : ""}${rate.toFixed(2)}%`}</span><span>${rank}</span></div>
     </article>`;
-  }).join("") : `<div class="favorite-empty"><span>♡</span><strong>아직 관심 종목이 없습니다</strong><small>아래 종목 검색에서 하트를 눌러 추가하세요.</small></div>`;
+  }).join("") : `<div class="favorite-empty"><span>♡</span><strong>아직 관심 종목이 없습니다</strong><small>국내주식 페이지에서 하트를 눌러 추가하세요.</small></div>`;
 }
 
 async function refreshFavorites() {
@@ -140,49 +147,6 @@ async function refreshCandidates() {
     $("#candidate-message").textContent = error.message;
   } finally {
     candidateLoading = false;
-  }
-}
-
-function renderSearchResults(results) {
-  const typeLabels = {
-    FOREIGN_STOCK: "외국주식", DEPOSITARY_RECEIPT: "예탁증서", INFRASTRUCTURE_FUND: "인프라펀드",
-    REIT: "리츠", ETF: "ETF", FOREIGN_ETF: "해외 ETF", ETN: "ETN", STOCK_WARRANTS: "신주인수권",
-  };
-  $("#stock-search-body").innerHTML = results.length ? results.map((item) => {
-    const type = item.security_type === "STOCK"
-      ? (item.is_common_share ? "보통주" : "우선주")
-      : (typeLabels[item.security_type] || item.security_type);
-    const rate = item.change_rate_percent === null ? null : Number(item.change_rate_percent);
-    const rateClass = rate === null ? "neutral" : rate > 0 ? "positive" : rate < 0 ? "negative" : "neutral";
-    return `<tr>
-      <td class="rank-cell">${item.trading_amount_rank === null ? "100+" : number.format(item.trading_amount_rank)}</td>
-      <td class="stock-cell"><span class="stock-name">${escapeHtml(item.name)}</span><span class="stock-code">${escapeHtml(item.symbol)}</span></td>
-      <td class="type-cell"><span class="security-type">${escapeHtml(type)}</span></td>
-      <td class="price-cell">${item.price === null ? "-" : won.format(Number(item.price))}</td>
-      <td class="change-cell ${rateClass}">${rate === null ? "-" : `${rate > 0 ? "+" : ""}${rate.toFixed(2)}%`}</td>
-      <td class="favorite-cell">${favoriteButton(item.symbol, item.is_favorite, item.name)}</td>
-    </tr>`;
-  }).join("") : `<tr><td class="empty" colspan="6">일치하는 국내 종목이 없습니다.</td></tr>`;
-}
-
-function renderSearchPagination(data) {
-  const pagination = $("#stock-search-pagination");
-  pagination.classList.toggle("hidden", data.total === 0);
-  $("#stock-search-page").textContent = `${number.format(data.page)} / ${number.format(data.total_pages)}`;
-  $("#stock-search-prev").disabled = data.page <= 1;
-  $("#stock-search-next").disabled = data.page >= data.total_pages;
-}
-
-async function searchStocks(query, page, sequence) {
-  try {
-    const data = await api(`/live/stocks/search?q=${encodeURIComponent(query)}&page=${page}&page_size=8`);
-    if (sequence !== searchSequence) return;
-    activeSearchPage = data.page;
-    renderSearchResults(data.results);
-    renderSearchPagination(data);
-    $("#stock-search-message").textContent = `총 ${number.format(data.total)}개 · 당일 시장 거래대금 인기순 · 페이지당 8개`;
-  } catch (error) {
-    if (sequence === searchSequence) $("#stock-search-message").textContent = error.message;
   }
 }
 
@@ -270,40 +234,6 @@ async function initialize() {
     });
   } catch (_) { window.location.replace("/login"); }
 }
-
-$("#live-stock-search").addEventListener("input", (event) => {
-  clearTimeout(searchTimer);
-  const query = event.target.value.trim();
-  activeSearchQuery = query;
-  activeSearchPage = 1;
-  searchSequence += 1;
-  const sequence = searchSequence;
-  if (!query) {
-    $("#stock-search-body").innerHTML = `<tr><td class="empty" colspan="6">검색어를 입력하세요.</td></tr>`;
-    $("#stock-search-message").textContent = "당일 시장 거래대금 상위 100위가 먼저 표시됩니다.";
-    $("#stock-search-pagination").classList.add("hidden");
-    return;
-  }
-  $("#stock-search-message").textContent = "검색 중...";
-  searchTimer = setTimeout(() => searchStocks(query, 1, sequence), 350);
-});
-
-$("#stock-search-prev").addEventListener("click", () => {
-  if (!activeSearchQuery || activeSearchPage <= 1) return;
-  searchSequence += 1;
-  searchStocks(activeSearchQuery, activeSearchPage - 1, searchSequence);
-});
-
-$("#stock-search-next").addEventListener("click", () => {
-  if (!activeSearchQuery) return;
-  searchSequence += 1;
-  searchStocks(activeSearchQuery, activeSearchPage + 1, searchSequence);
-});
-
-$("#stock-search-body").addEventListener("click", (event) => {
-  const button = event.target.closest("[data-favorite-symbol]");
-  if (button) toggleFavorite(button);
-});
 
 $("#favorite-grid").addEventListener("click", (event) => {
   const button = event.target.closest("[data-favorite-symbol]");

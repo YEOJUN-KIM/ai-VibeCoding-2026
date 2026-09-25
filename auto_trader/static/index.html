@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Paper Trade · 국내주식 모의 자동매매</title>
+  <title>PAPER 트레이딩 랩</title>
   <link rel="stylesheet" href="/static/styles.css">
   <script src="/static/app.js" defer></script>
 </head>
@@ -12,8 +12,8 @@
     <header class="topbar">
       <div>
         <p class="eyebrow">PAPER TRADING LAB</p>
-        <h1>국내주식 모의 자동매매</h1>
-        <p class="subtitle">실제 돈을 사용하지 않는 연습용 대시보드</p>
+        <h1>PAPER 트레이딩 랩</h1>
+        <p class="subtitle">가상자금으로 전략과 주문 흐름을 안전하게 검증하는 연습 공간</p>
       </div>
       <div class="header-actions">
         <div class="mode-box">
@@ -30,7 +30,17 @@
         </div>
       </div>
     </header>
-    <nav class="mode-nav"><a class="active paper-link" href="/paper">PAPER 모의매매</a><a href="/live">LIVE 실제계좌</a></nav>
+    <nav class="workspace-nav" aria-label="주요 페이지">
+      <div class="workspace-nav-brand"><span>INVESTMENT WORKSPACE</span><strong>자산과 시장을 한곳에서</strong></div>
+      <div class="workspace-nav-links">
+        <a class="workspace-nav-link live-link" href="/live"><span class="nav-index">01</span><span><strong>실제계좌</strong><small>LIVE 포트폴리오</small></span></a>
+        <a class="workspace-nav-link" href="/stocks"><span class="nav-index">02</span><span><strong>국내주식</strong><small>마켓 탐색</small></span></a>
+        <a class="workspace-nav-link active paper-link" href="/paper"><span class="nav-index">03</span><span><strong>모의매매</strong><small>PAPER 랩</small></span></a>
+        <span class="workspace-nav-link is-disabled" aria-disabled="true"><span class="nav-index">04</span><span><strong>장기분석</strong><small>준비 중</small></span></span>
+        <span class="workspace-nav-link is-disabled" aria-disabled="true"><span class="nav-index">05</span><span><strong>뉴스·리서치</strong><small>준비 중</small></span></span>
+        <span class="workspace-nav-link is-disabled" aria-disabled="true"><span class="nav-index">06</span><span><strong>설정</strong><small>준비 중</small></span></span>
+      </div>
+    </nav>
 
     <main>
       <section class="control-panel panel">
@@ -48,8 +58,8 @@
       </section>
 
       <section class="panel strategy-settings-panel">
-        <div><p class="section-kicker">STRATEGY SETTINGS</p><h2>모의 자동매매 설정</h2>
-          <p class="subtitle">단기는 장기보다 작아야 하며 자동매매를 중지한 상태에서만 변경할 수 있습니다.</p></div>
+        <div><p class="section-kicker">STRATEGY CONTROL</p><h2>전략 컨트롤</h2>
+          <p class="subtitle">실행 주기와 이동평균 조건, 주문 수량을 조정합니다.</p></div>
         <form id="strategy-settings-form" class="strategy-settings-form">
           <label>실행 간격(초)<input id="strategy-interval" type="number" min="1" max="60" required></label>
           <label>단기 이동평균<input id="strategy-short" type="number" min="2" max="100" required></label>
@@ -93,8 +103,8 @@
       <section class="content-grid">
         <article class="panel wide risk-panel">
           <div class="panel-heading">
-            <div><p class="section-kicker">RISK LIMITS</p><h2>투자 한도 설정</h2>
-              <p class="subtitle">매도는 위험을 줄이는 행동이므로 아래 매수 한도와 관계없이 허용됩니다.</p></div>
+            <div><p class="section-kicker">RISK GUARD</p><h2>리스크 가드</h2>
+              <p class="subtitle">매수 한도와 손실 기준을 설정해 전략의 위험 범위를 제어합니다.</p></div>
             <span class="pill running" id="risk-pill">매수 가능</span>
           </div>
           <form id="risk-form">
@@ -117,7 +127,7 @@
           <div class="panel-heading">
             <div>
               <p class="section-kicker">WATCHLIST</p>
-              <h2>감시 종목</h2>
+              <h2>전략 워치리스트</h2>
             </div>
             <span class="updated" id="updated-at">업데이트 대기 중</span>
           </div>
@@ -135,7 +145,7 @@
           <div class="panel-heading">
             <div>
               <p class="section-kicker">PAPER ORDER</p>
-              <h2>수동 모의주문</h2>
+              <h2>PAPER 주문</h2>
             </div>
           </div>
           <form id="order-form">
@@ -158,7 +168,7 @@
 
         <article class="panel">
           <div class="panel-heading">
-            <div><p class="section-kicker">PORTFOLIO</p><h2>보유 종목</h2></div>
+            <div><p class="section-kicker">PAPER PORTFOLIO</p><h2>PAPER 포트폴리오</h2></div>
           </div>
           <div class="table-wrap">
             <table>
@@ -170,7 +180,7 @@
 
         <article class="panel">
           <div class="panel-heading">
-            <div><p class="section-kicker">ACTIVITY</p><h2>최근 주문</h2></div>
+            <div><p class="section-kicker">ORDER ACTIVITY</p><h2>주문 타임라인</h2></div>
           </div>
           <div class="table-wrap">
             <table>

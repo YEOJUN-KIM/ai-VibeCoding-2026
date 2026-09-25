@@ -155,6 +155,8 @@ class LivePortfolio(BaseModel):
     profit_rate: Decimal
     daily_profit_loss: Decimal
     daily_profit_rate: Decimal
+    daily_profit_reference_date: str
+    market_open_today: bool | None = None
     holdings: list[LiveHolding]
 
 
@@ -193,6 +195,7 @@ class LiveStockSearchResult(BaseModel):
     change_rate_percent: Decimal | None = None
     trading_amount_rank: int | None = None
     trading_amount: Decimal | None = None
+    market_cap: Decimal | None = None
     is_favorite: bool = False
 
 
@@ -203,6 +206,32 @@ class LiveStockSearchPage(BaseModel):
     total: int
     total_pages: int
     results: list[LiveStockSearchResult]
+
+
+class LiveStockCandle(BaseModel):
+    timestamp: datetime
+    open_price: Decimal
+    high_price: Decimal
+    low_price: Decimal
+    close_price: Decimal
+    volume: Decimal
+
+
+class LiveStockDetail(BaseModel):
+    symbol: str
+    name: str
+    market: str
+    security_type: str
+    is_common_share: bool
+    currency: str
+    price: Decimal | None = None
+    change_rate_percent: Decimal | None = None
+    trading_amount_rank: int | None = None
+    market_cap: Decimal | None = None
+    shares_outstanding: Decimal | None = None
+    trading_amount: Decimal | None = None
+    trading_volume: Decimal | None = None
+    candles: list[LiveStockCandle]
 
 
 class FavoriteStockCreate(BaseModel):

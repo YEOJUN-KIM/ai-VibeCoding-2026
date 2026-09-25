@@ -131,7 +131,7 @@ function renderRisk(risk) {
 async function refresh() {
   try {
     const [health, stocks, quotes, account, orders, strategy, risk] = await Promise.all([
-      api("/health"), api("/stocks"), api("/quotes"), api("/account"), api("/orders"), api("/strategy/status"), api("/risk"),
+      api("/health"), api("/paper/stocks"), api("/quotes"), api("/account"), api("/orders"), api("/strategy/status"), api("/risk"),
     ]);
     $("#server-dot").classList.toggle("online", health.status === "ok");
     $("#total-asset").textContent = won.format(Number(account.total_asset));

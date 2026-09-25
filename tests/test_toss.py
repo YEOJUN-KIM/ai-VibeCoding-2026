@@ -3,6 +3,7 @@ import io
 import json
 import unittest
 from datetime import datetime, timezone
+from decimal import Decimal
 from unittest.mock import patch
 from urllib.error import HTTPError
 
@@ -106,6 +107,9 @@ class TossClientTests(unittest.TestCase):
                     "lastPrice": "1100", "marketValue": {"purchaseAmount": "1000", "amount": "1100"},
                     "profitLoss": {"amount": "100", "rate": "0.10"},
                     "dailyProfitLoss": {"amount": "20", "rate": "0.02"}, "cost": {}}]}}),
+            FakeResponse({"result": {"today": {
+                "date": "2026-09-25", "integrated": {"regularMarket": {}}
+            }}}),
         ]
         client = TossClient(client_id="id", client_secret="secret")
         portfolio = client.portfolio()
@@ -115,7 +119,39 @@ class TossClientTests(unittest.TestCase):
         self.assertEqual(portfolio.holdings[0].profit_rate, 10)
         self.assertEqual(portfolio.holdings[0].symbol, "005930")
         self.assertIs(portfolio, client.portfolio())
-        self.assertEqual(mocked.call_count, 3)
+        self.assertEqual(portfolio.daily_profit_loss, 20)
+        self.assertTrue(portfolio.market_open_today)
+        self.assertEqual(mocked.call_count, 4)
+
+    @patch("auto_trader.toss.urlopen")
+    def test_portfolio_uses_previous_business_day_label_on_kr_market_holiday(self, mocked):
+        mocked.side_effect = [
+            FakeResponse({"access_token": "token", "expires_in": 3600}),
+            FakeResponse({"result": [{"accountSeq": 1, "accountNo": "12345678"}]}),
+            FakeResponse({"result": {
+                "totalPurchaseAmount": {"krw": "1000"},
+                "marketValue": {"amount": {"krw": "1100"}},
+                "profitLoss": {"amount": {"krw": "100"}, "rate": "0.10"},
+                "dailyProfitLoss": {"amount": {"krw": "20"}, "rate": "0.02"},
+                "items": [{
+                    "symbol": "005930", "name": "삼성전자", "marketCountry": "KR",
+                    "currency": "KRW", "quantity": "1", "averagePurchasePrice": "1000",
+                    "lastPrice": "1100", "marketValue": {"purchaseAmount": "1000", "amount": "1100"},
+                    "profitLoss": {"amount": "100", "rate": "0.10"},
+                    "dailyProfitLoss": {"amount": "20", "rate": "0.02"},
+                }],
+            }}),
+            FakeResponse({"result": {
+                "today": {"date": "2026-09-25", "integrated": None},
+                "previousBusinessDay": {"date": "2026-09-23", "integrated": {}},
+            }}),
+        ]
+        portfolio = TossClient(client_id="id", client_secret="secret").portfolio()
+        self.assertFalse(portfolio.market_open_today)
+        self.assertEqual(portfolio.daily_profit_reference_date, "2026-09-23")
+        self.assertEqual(portfolio.daily_profit_loss, 20)
+        self.assertEqual(portfolio.daily_profit_rate, 2)
+        self.assertEqual(portfolio.holdings[0].daily_profit_loss, 20)
 
     @patch("auto_trader.toss.urlopen")
     def test_domestic_trading_amount_watchlist(self, mocked):
@@ -195,16 +231,125 @@ class TossClientTests(unittest.TestCase):
                 {"symbol": "009150", "lastPrice": "150000", "currency": "KRW"},
                 {"symbol": "005930", "lastPrice": "70000", "currency": "KRW"},
             ]}),
+            FakeResponse({"result": [
+                {"symbol": "009150", "sharesOutstanding": "1000000"},
+                {"symbol": "005930", "sharesOutstanding": "5900000000"},
+            ]}),
         ]
         page = TossClient(client_id="id", client_secret="secret").search_domestic_stocks("삼성")
         self.assertEqual([item.name for item in page.results], ["삼성전기", "삼성전자"])
         self.assertEqual(page.results[0].price, 150000)
         self.assertEqual(page.results[0].change_rate_percent, 0)
         self.assertEqual(page.results[0].trading_amount_rank, 7)
+        self.assertEqual(page.results[0].trading_amount, 15000000)
+        self.assertEqual(page.results[0].market_cap, 150000000000)
         self.assertEqual(page.results[0].market, "KOSPI")
         self.assertEqual(page.total, 2)
         self.assertEqual(page.total_pages, 1)
         mocked_sleep.assert_called_once()
+
+    @patch("auto_trader.toss.sleep")
+    @patch("auto_trader.toss.urlopen")
+    def test_domestic_stock_list_filters_market_and_type(self, mocked, mocked_sleep):
+        mocked.side_effect = [
+            FakeResponse({"access_token": "token", "expires_in": 3600}),
+            FakeResponse({"result": [
+                {"symbol": "005930", "name": "삼성전자", "securityType": "STOCK", "isCommonShare": True},
+                {"symbol": "069500", "name": "KODEX 200", "securityType": "ETF", "isCommonShare": False},
+            ]}),
+            FakeResponse({"result": [
+                {"symbol": "247540", "name": "에코프로비엠", "securityType": "STOCK", "isCommonShare": True},
+            ]}),
+            FakeResponse({"result": {"rankedAt": "2026-09-25T10:00:00+09:00", "rankings": [
+                {"rank": 1, "symbol": "247540", "price": {"changeRate": "0.03"}, "tradingAmount": "9000000"},
+            ]}}),
+            FakeResponse({"result": [
+                {"symbol": "247540", "lastPrice": "180000", "currency": "KRW"},
+            ]}),
+            FakeResponse({"result": [
+                {"symbol": "247540", "sharesOutstanding": "50000000"},
+            ]}),
+        ]
+        page = TossClient(client_id="id", client_secret="secret").list_domestic_stocks(
+            market="KOSDAQ", security_type="COMMON", sort="NAME"
+        )
+        self.assertEqual(page.total, 1)
+        self.assertEqual(page.results[0].symbol, "247540")
+        self.assertEqual(page.results[0].market, "KOSDAQ")
+        self.assertEqual(page.results[0].change_rate_percent, 3)
+        self.assertEqual(page.results[0].market_cap, 9000000000000)
+        mocked_sleep.assert_called_once()
+
+    @patch("auto_trader.toss.sleep")
+    @patch("auto_trader.toss.urlopen")
+    def test_domestic_stock_detail_and_sparkline_share_candle_cache(self, mocked, mocked_sleep):
+        mocked.side_effect = [
+            FakeResponse({"access_token": "token", "expires_in": 3600}),
+            FakeResponse({"result": [
+                {"symbol": "005930", "name": "삼성전자", "securityType": "STOCK", "isCommonShare": True},
+            ]}),
+            FakeResponse({"result": []}),
+            FakeResponse({"result": [
+                {"symbol": "005930", "lastPrice": "72000", "currency": "KRW"},
+            ]}),
+            FakeResponse({"result": [
+                {"symbol": "005930", "sharesOutstanding": "5900000000"},
+            ]}),
+            FakeResponse({"result": {"candles": [
+                {"timestamp": "2026-09-24T00:00:00+09:00", "openPrice": "71000", "highPrice": "73000", "lowPrice": "70500", "closePrice": "72000", "volume": "200"},
+                {"timestamp": "2026-09-23T00:00:00+09:00", "openPrice": "70000", "highPrice": "71500", "lowPrice": "69500", "closePrice": "71000", "volume": "100"},
+            ]}}),
+            FakeResponse({"result": {"rankedAt": "2026-09-24T10:00:00+09:00", "rankings": [
+                {"rank": 2, "symbol": "005930", "price": {"lastPrice": "72000"}},
+            ]}}),
+        ]
+        client = TossClient(client_id="id", client_secret="secret")
+        detail = client.domestic_stock_detail("005930", period="3M")
+        line = client.domestic_sparklines(["005930"], count=15, period="3M")
+        self.assertEqual(detail.name, "삼성전자")
+        self.assertEqual(detail.change_rate_percent.quantize(Decimal("0.01")), Decimal("1.41"))
+        self.assertEqual(detail.market_cap, Decimal("424800000000000"))
+        self.assertEqual(line["005930"], [Decimal("71000"), Decimal("72000")])
+        self.assertEqual(mocked.call_count, 7)
+        mocked_sleep.assert_called_once()
+
+    @patch("auto_trader.toss.urlopen")
+    def test_intraday_sparkline_requests_one_minute_candles(self, mocked):
+        mocked.side_effect = [
+            FakeResponse({"access_token": "token", "expires_in": 3600}),
+            FakeResponse({"result": {"candles": [
+                {"timestamp": "2026-09-24T10:01:00+09:00", "openPrice": "71000", "highPrice": "71100", "lowPrice": "70900", "closePrice": "71050", "volume": "10"},
+                {"timestamp": "2026-09-24T10:00:00+09:00", "openPrice": "70900", "highPrice": "71000", "lowPrice": "70800", "closePrice": "70950", "volume": "8"},
+            ]}}),
+        ]
+        result = TossClient(client_id="id", client_secret="secret").domestic_sparklines(
+            ["005930"], period="1D"
+        )
+        request_url = mocked.call_args_list[1].args[0].full_url
+        self.assertIn("interval=1m", request_url)
+        self.assertNotIn("count=", request_url)
+        self.assertEqual(result["005930"], [Decimal("70950"), Decimal("71050")])
+
+    @patch("auto_trader.toss.sleep")
+    @patch("auto_trader.toss.urlopen")
+    def test_intraday_candles_follow_pagination_cursor(self, mocked, mocked_sleep):
+        mocked.side_effect = [
+            FakeResponse({"access_token": "token", "expires_in": 3600}),
+            FakeResponse({"result": {"nextBefore": "2026-09-24T10:00:00+09:00", "candles": [
+                {"timestamp": "2026-09-24T10:02:00+09:00", "openPrice": "102", "highPrice": "103", "lowPrice": "101", "closePrice": "102", "volume": "3"},
+                {"timestamp": "2026-09-24T10:01:00+09:00", "openPrice": "101", "highPrice": "102", "lowPrice": "100", "closePrice": "101", "volume": "2"},
+            ]}}),
+            FakeResponse({"result": {"candles": [
+                {"timestamp": "2026-09-24T10:00:00+09:00", "openPrice": "100", "highPrice": "101", "lowPrice": "99", "closePrice": "100", "volume": "1"},
+            ]}}),
+        ]
+        candles = TossClient(client_id="id", client_secret="secret")._domestic_candles(
+            "005930", "1m", 201
+        )
+        second_page_url = mocked.call_args_list[2].args[0].full_url
+        self.assertIn("before=2026-09-24T10%3A00%3A00%2B09%3A00", second_page_url)
+        self.assertEqual([item.close_price for item in candles], [Decimal("100"), Decimal("101"), Decimal("102")])
+        mocked_sleep.assert_called_once_with(0.08)
 
     @patch("auto_trader.toss.urlopen")
     def test_favorite_snapshots_include_price_change_and_rank(self, mocked):

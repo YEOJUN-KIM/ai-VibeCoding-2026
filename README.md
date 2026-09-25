@@ -5,9 +5,17 @@
 
 - [Windows 설치 및 실행 가이드](docs/INSTALL_WINDOWS.md)
 - [개발 현황과 계획](docs/ROADMAP.md)
+- [작업 기록](docs/CHANGELOG.md)
 - [제품 요구사항](docs/PRD.md)
 - [프로젝트 파일 설명](docs/PROJECT_STRUCTURE.md)
 - [데이터베이스 안내](docs/DATABASE.md)
+
+## 주요 화면
+
+- `/live`: 실제 토스증권 계좌와 관심종목
+- `/stocks`: 코스피·코스닥 전체 종목 탐색
+- `/stocks/{종목코드}`: 종목별 상세 차트와 시장 정보
+- `/paper`: 모의매매와 자동매매 전략 연습
 
 ## Chapter 1
 AI에게 코딩을 시키자, 제대로!
