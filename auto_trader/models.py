@@ -251,6 +251,46 @@ class LiveFavoriteStock(BaseModel):
     trading_amount_rank: int | None = None
 
 
+class NewsArticle(BaseModel):
+    title: str
+    url: str
+    source: str
+    published_at: datetime
+
+
+class NewsIssue(BaseModel):
+    title: str
+    article_count: int
+    source_count: int
+    latest_at: datetime
+    key_topics: list[str]
+    articles: list[NewsArticle]
+
+
+class AiNewsBriefing(BaseModel):
+    summary: str
+    key_points: list[str]
+    opportunity_factors: list[str]
+    risk_factors: list[str]
+    related_entities: list[str]
+    generated_at: datetime
+    model: str
+
+
+class NewsDigest(BaseModel):
+    query: str
+    generated_at: datetime
+    source_name: str
+    overview: str
+    key_topics: list[str]
+    article_count: int
+    articles: list[NewsArticle]
+    issue_count: int = 0
+    issues: list[NewsIssue] = Field(default_factory=list)
+    ai_status: str = "not_configured"
+    ai_briefing: AiNewsBriefing | None = None
+
+
 class SessionInfo(BaseModel):
     username: str
     csrf_token: str

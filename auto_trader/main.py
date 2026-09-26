@@ -24,7 +24,7 @@ from .auth import (
 )
 from .models import (Account, FavoriteStockCreate, LiveBuyingPower, LiveCandidateList,
                      LiveFavoriteStock, LivePinRequest, LivePinStatus, LivePortfolio,
-                     LiveStockDetail, LiveStockSearchPage, LoginRequest, Order, OrderRequest,
+                     LiveStockDetail, LiveStockSearchPage, LoginRequest, NewsDigest, Order, OrderRequest,
                      Quote, RiskSettings, RiskSettingsUpdate, RiskStatus, SessionInfo, Stock,
                      StrategySettingsUpdate, StrategyStatus, TossConnectionStatus)
 from .paper import PaperBroker
@@ -35,6 +35,8 @@ from .risk import RiskManager
 from .toss import TossApiError, TossClient
 from .database import connect, initialize
 from .favorites import add_favorite, favorite_symbols, list_favorites, remove_favorite
+from .news import NewsFeedError, news_service
+from .ai_news import ai_news_service
 
 
 market = MarketSimulator(symbols=settings.watch_symbols)
@@ -132,6 +134,13 @@ def domestic_stocks_page(request: Request) -> FileResponse | RedirectResponse:
     if not session_from_request(request):
         return RedirectResponse("/login", status_code=303)
     return FileResponse(static_dir / "stocks.html")
+
+
+@app.get("/news", include_in_schema=False, response_model=None)
+def news_page(request: Request) -> FileResponse | RedirectResponse:
+    if not session_from_request(request):
+        return RedirectResponse("/login", status_code=303)
+    return FileResponse(static_dir / "news.html")
 
 
 @app.get("/stocks/{symbol}", include_in_schema=False, response_model=None)
@@ -336,6 +345,24 @@ def live_stock_detail(
     except TossApiError as exc:
         status_code = 404 if exc.status_code == 404 else 502
         raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+
+@app.get("/research/news", response_model=NewsDigest)
+def research_news(
+    q: str | None = Query(default=None, min_length=1, max_length=60),
+    limit: int = Query(default=12, ge=3, le=20),
+    _: AuthenticatedUser = Depends(require_user),
+) -> NewsDigest:
+    try:
+        if q is not None:
+            return ai_news_service.enrich(news_service.search(q, limit=limit))
+        digest = news_service.search("(주식 OR 증시 OR 코스피 OR 코스닥) when:1d", limit=limit)
+        digest = digest.model_copy(update={"query": "오늘의 주요 증시 이슈"})
+        return ai_news_service.enrich(digest)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except NewsFeedError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @app.get("/live/favorites", response_model=list[LiveFavoriteStock])

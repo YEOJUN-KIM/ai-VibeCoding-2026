@@ -18,6 +18,8 @@ auto_trader/
 ├── set_live_pin.py
 ├── toss.py
 ├── favorites.py
+├── news.py
+├── ai_news.py
 ├── simulator.py
 ├── paper.py
 ├── risk.py
@@ -29,6 +31,12 @@ auto_trader/
 │   ├── app.js
 │   ├── live.html
 │   ├── live.js
+│   ├── stocks.html
+│   ├── stocks.js
+│   ├── stock-detail.html
+│   ├── stock-detail.js
+│   ├── news.html
+│   ├── news.js
 │   └── styles.css
 └── README.md
 
@@ -37,11 +45,14 @@ docs/
 ├── DATABASE.md
 ├── PRD.md
 ├── PROJECT_STRUCTURE.md
+├── CHANGELOG.md
 └── ROADMAP.md
 
 tests/
 ├── test_auth.py
 ├── test_favorites.py
+├── test_news.py
+├── test_ai_news.py
 ├── test_paper.py
 └── test_toss.py
 ```
@@ -54,11 +65,11 @@ tests/
 
 ### `main.py`
 
-FastAPI 앱, 웹 페이지와 API 라우트를 연결한다. 인증, PAPER 계좌, 위험 설정, 토스 LIVE 계좌, 국내 종목 검색, 관심종목 API를 한곳에서 조합한다.
+FastAPI 앱, 웹 페이지와 API 라우트를 연결한다. 인증, PAPER 계좌, 위험 설정, 토스 LIVE 계좌, 국내 종목·관심종목과 뉴스 API를 한곳에서 조합한다.
 
 ### `models.py`
 
-계좌·주문·전략·LIVE 자산·종목 검색·관심종목 등 요청과 응답 데이터의 형식을 Pydantic 모델로 정의한다.
+계좌·주문·전략·LIVE 자산·종목 검색·관심종목·뉴스 이슈 등 요청과 응답 데이터의 형식을 Pydantic 모델로 정의한다.
 
 ### `settings.py`
 
@@ -110,6 +121,16 @@ PostgreSQL 연결과 트랜잭션을 관리하고, 앱 시작 시 필요한 테�
 
 사용자별 관심종목을 PostgreSQL에 추가·조회·삭제한다. 한 사용자는 최대 20개를 저장할 수 있다.
 
+## 뉴스·리서치
+
+### `news.py`
+
+Google 뉴스 공개 RSS에서 제목·출처·게시 시각을 읽는다. 제목 토큰을 정리하고 유사도를 비교해 대표 기사와 관련 기사로 묶으며, 반복 키워드와 핵심 이슈 순서를 계산한다.
+
+### `ai_news.py`
+
+OpenAI Responses API를 이용하는 구조화 뉴스 브리핑 구현이다. 현재는 `AI_NEWS_ENABLED=false`가 기본이며 화면과 호출을 연결하지 않은 보류 기능이다.
+
 ## 웹 화면
 
 ### `static/login.html`, `static/login.js`
@@ -133,9 +154,21 @@ PAPER 대시보드다. 가상 자산, 모의 주문, 전략 상태, 투자 한�
 
 토스 공식 Open API 응답에 산업 분류 필드가 없어 산업/테마 표시는 아직 제공하지 않는다. 실제 주문 기능도 잠겨 있다.
 
+### `static/stocks.html`, `static/stocks.js`
+
+코스피·코스닥 종목 목록, 검색·필터·정렬·페이지 이동, 관심종목과 기간별 스파크라인을 담당한다.
+
+### `static/stock-detail.html`, `static/stock-detail.js`
+
+종목별 기간 차트, 거래량, 이동평균선, 마켓 스냅샷과 관련 뉴스를 표시한다.
+
+### `static/news.html`, `static/news.js`
+
+오늘의 핵심 이슈 카드, 뉴스 검색, 이슈별 대표·관련 기사와 키워드를 표시한다. 기사는 새 탭의 원문으로 연결한다.
+
 ### `static/styles.css`
 
-로그인, PAPER와 LIVE 화면의 공통 바이올렛 테마, 간격, 카드, 표, 버튼과 반응형 레이아웃을 담당한다. 상승은 빨간색, 하락은 파란색, 관심종목은 금색으로 구분한다.
+로그인, PAPER, LIVE, 국내주식, 종목 상세와 뉴스 화면의 공통 바이올렛 테마, 간격, 카드, 표, 버튼과 반응형 레이아웃을 담당한다. 상승은 빨간색, 하락은 파란색, 관심종목은 금색으로 구분한다.
 
 ## 프로젝트 루트
 
@@ -145,6 +178,7 @@ PAPER 대시보드다. 가상 자산, 모의 주문, 전략 상태, 투자 한�
 - `README.md`: 프로젝트 입구와 문서 링크
 - `docs/INSTALL_WINDOWS.md`: 새 Windows PC 설치·실행 절차
 - `docs/ROADMAP.md`: 구현 현황과 다음 작업 순서
+- `docs/CHANGELOG.md`: 날짜별 사용자 화면과 기술 변경 기록
 - `docs/PRD.md`: 제품 목표와 요구사항
 - `docs/DATABASE.md`: 영구 저장 데이터와 메모리 데이터 구분
 
@@ -152,6 +186,8 @@ PAPER 대시보드다. 가상 자산, 모의 주문, 전략 상태, 투자 한�
 
 - `test_auth.py`: 관리자 로그인, 세션, PIN과 인증 보호
 - `test_favorites.py`: 관심종목 저장 제한과 사용자별 분리
+- `test_news.py`: RSS 해석, 키워드 정리, 이슈 그룹화와 캐시
+- `test_ai_news.py`: 비활성 상태, 구조화 응답, 캐시와 API 실패 대체 처리
 - `test_paper.py`: PAPER 체결, 비용, 중복 요청, 동시성과 위험 한도
 - `test_toss.py`: 토스 응답 처리, 검색, 캐시와 토큰 재시도
 

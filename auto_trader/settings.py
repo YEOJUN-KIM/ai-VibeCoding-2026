@@ -57,6 +57,10 @@ class Settings:
     toss_allowed_ip: str
     toss_api_base_url: str
     toss_ws_url: str
+    openai_api_key: str
+    ai_news_enabled: bool
+    openai_model: str
+    openai_api_base_url: str
     postgres_host: str
     postgres_port: int
     postgres_db: str
@@ -108,6 +112,10 @@ def load_settings() -> Settings:
         toss_allowed_ip=os.getenv("TOSS_ALLOWED_IP", ""),
         toss_api_base_url=os.getenv("TOSS_API_BASE_URL", "https://openapi.tossinvest.com"),
         toss_ws_url=os.getenv("TOSS_WS_URL", "wss://openapi-ws.tossinvest.com/ws/v1"),
+        openai_api_key=os.getenv("OPENAI_API_KEY", ""),
+        ai_news_enabled=_boolean("AI_NEWS_ENABLED", False),
+        openai_model=os.getenv("OPENAI_MODEL", "gpt-6-luna"),
+        openai_api_base_url=os.getenv("OPENAI_API_BASE_URL", "https://api.openai.com/v1"),
         postgres_host=os.getenv("POSTGRES_HOST", "127.0.0.1"),
         postgres_port=_integer("POSTGRES_PORT", 5432),
         postgres_db=os.getenv("POSTGRES_DB", "auto_trader"),

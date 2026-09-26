@@ -8,6 +8,7 @@ let detailSequence = 0;
 let activeChartMode = "candle";
 let lastDetailData = null;
 let lastChartCandles = [];
+let loadedNewsSymbol = "";
 const periodLabels = {
   "1D": ["1일", "1 DAY"], "1W": ["7일", "7 DAYS"], "1M": ["1개월", "1 MONTH"],
   "3M": ["3개월", "3 MONTHS"], "1Y": ["1년", "1 YEAR"],
@@ -181,6 +182,59 @@ function formatTooltipTimestamp(value) {
     : { year: "numeric", month: "2-digit", day: "2-digit" });
 }
 
+function formatNewsTime(value) {
+  const date = new Date(value);
+  const elapsedMinutes = Math.max(0, Math.floor((Date.now() - date.getTime()) / 60000));
+  if (elapsedMinutes < 60) return `${Math.max(1, elapsedMinutes)}분 전`;
+  if (elapsedMinutes < 1440) return `${Math.floor(elapsedMinutes / 60)}시간 전`;
+  return date.toLocaleDateString("ko-KR", { month: "short", day: "numeric" });
+}
+
+function renderStockNews(data) {
+  $("#stock-news-overview").textContent = data.overview;
+  const keywords = $("#stock-news-keywords");
+  keywords.replaceChildren(...data.key_topics.map((topic) => {
+    const span = document.createElement("span");
+    span.textContent = `# ${topic}`;
+    return span;
+  }));
+  const list = $("#stock-news-list");
+  list.replaceChildren();
+  if (!data.articles.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "이 종목의 최근 기사를 찾지 못했습니다.";
+    list.append(empty);
+    return;
+  }
+  data.articles.slice(0, 6).forEach((article) => {
+    const link = document.createElement("a");
+    link.className = "stock-news-item";
+    link.href = article.url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    const title = document.createElement("strong");
+    title.textContent = article.title;
+    const meta = document.createElement("span");
+    meta.textContent = `${article.source} · ${formatNewsTime(article.published_at)}`;
+    link.append(title, meta);
+    list.append(link);
+  });
+}
+
+async function loadStockNews(name, symbol) {
+  if (loadedNewsSymbol === symbol) return;
+  loadedNewsSymbol = symbol;
+  $("#stock-news-more").href = `/news?q=${encodeURIComponent(name)}`;
+  try {
+    renderStockNews(await api(`/research/news?q=${encodeURIComponent(name)}&limit=8`));
+  } catch (error) {
+    $("#stock-news-overview").textContent = error.message;
+    $("#stock-news-list").innerHTML = '<div class="empty"></div>';
+    $("#stock-news-list .empty").textContent = "관련 뉴스를 불러오지 못했습니다.";
+  }
+}
+
 function updateChartHover(event) {
   const chart = $("#detail-chart");
   const svg = chart.querySelector(".stock-detail-chart");
@@ -275,6 +329,7 @@ function renderDetail(data) {
   $("#detail-message").textContent = activePeriod === "1D"
     ? "1분봉 추세선이며 체결 시점에 따라 실제 가격과 차이가 날 수 있습니다."
     : "일봉 종가 추세선이며 장중 가격과 차이가 날 수 있습니다.";
+  loadStockNews(data.name, data.symbol);
 }
 
 async function loadDetail(period) {

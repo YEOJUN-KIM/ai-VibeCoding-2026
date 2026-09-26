@@ -21,7 +21,7 @@
         <a class="workspace-nav-link active stocks-link" href="/stocks"><span class="nav-index">02</span><span><strong>국내주식</strong><small>마켓 탐색</small></span></a>
         <a class="workspace-nav-link paper-link" href="/paper"><span class="nav-index">03</span><span><strong>모의매매</strong><small>PAPER 랩</small></span></a>
         <span class="workspace-nav-link is-disabled"><span class="nav-index">04</span><span><strong>장기분석</strong><small>준비 중</small></span></span>
-        <span class="workspace-nav-link is-disabled"><span class="nav-index">05</span><span><strong>뉴스·리서치</strong><small>준비 중</small></span></span>
+        <a class="workspace-nav-link news-link" href="/news"><span class="nav-index">05</span><span><strong>뉴스·리서치</strong><small>최근 보도 흐름</small></span></a>
         <span class="workspace-nav-link is-disabled"><span class="nav-index">06</span><span><strong>설정</strong><small>준비 중</small></span></span>
       </div>
     </nav>
@@ -59,6 +59,12 @@
           <div><span>거래량</span><strong id="metric-volume">-</strong><small>당일 누적</small></div>
           <div><span>상장주식수</span><strong id="metric-shares">-</strong><small>종목 기본정보</small></div>
         </div>
+      </section>
+      <section class="panel stock-news-panel">
+        <div class="panel-heading"><div><p class="section-kicker">RELATED COVERAGE</p><h2>이 종목의 최근 뉴스</h2><p class="subtitle">최근 기사 제목에서 반복되는 화제와 원문 출처를 확인합니다.</p></div><a class="button secondary" id="stock-news-more" href="/news">전체 뉴스 보기</a></div>
+        <div class="stock-news-brief"><p id="stock-news-overview">종목 정보를 불러온 뒤 관련 뉴스를 찾습니다.</p><div class="news-keywords" id="stock-news-keywords"></div></div>
+        <div class="stock-news-list" id="stock-news-list"><div class="empty">관련 뉴스를 준비하고 있습니다.</div></div>
+        <p class="news-disclaimer">기사 제목을 바탕으로 정리한 보도 흐름이며 투자 판단이나 매매 신호가 아닙니다.</p>
       </section>
       <p class="form-message" id="detail-message">토스증권 일봉 데이터를 불러오고 있습니다.</p>
     </main>
