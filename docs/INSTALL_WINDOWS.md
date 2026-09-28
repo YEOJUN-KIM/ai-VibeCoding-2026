@@ -97,11 +97,15 @@ POSTGRES_PASSWORD=직접_지정한_DB_암호
 TOSS_CLIENT_ID=발급받은_Client_ID
 TOSS_CLIENT_SECRET=발급받은_Client_Secret
 TOSS_ACCOUNT=
-TOSS_ALLOWED_IP=토스증권에_등록한_공인_IP
+
+# 선택 사항: 종목 상세 기업·재무·배당·공시
+DART_API_KEY=발급받은_OpenDART_인증키
 ```
 
 - `.env`에는 따옴표나 등호 주변의 불필요한 공백을 넣지 않는 것이 안전하다.
 - `TOSS_ACCOUNT`는 계좌를 하나만 사용한다면 비워 둘 수 있다.
+- `DART_API_KEY`는 무료 OpenDART 인증키이며, 비워 두면 기업·재무·배당·공시만 표시되지 않는다.
+- 토스 허용 IP는 `.env`가 아니라 토스증권 Open API 관리 화면에 등록한다.
 - `.env`는 Git에서 제외되며 절대 커밋하지 않는다.
 
 ## 6. 토스증권 Open API 준비

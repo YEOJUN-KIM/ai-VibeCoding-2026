@@ -17,6 +17,8 @@ auto_trader/
 ├── create_admin.py
 ├── set_live_pin.py
 ├── toss.py
+├── dart.py
+├── industries.py
 ├── favorites.py
 ├── news.py
 ├── ai_news.py
@@ -53,6 +55,7 @@ tests/
 ├── test_favorites.py
 ├── test_news.py
 ├── test_ai_news.py
+├── test_dart.py
 ├── test_paper.py
 └── test_toss.py
 ```
@@ -73,7 +76,7 @@ FastAPI 앱, 웹 페이지와 API 라우트를 연결한다. 인증, PAPER 계�
 
 ### `settings.py`
 
-프로젝트 루트의 `.env`를 읽는다. 서버, PAPER, 전략, PostgreSQL과 토스증권 연결 설정을 코드와 분리한다.
+프로젝트 루트의 `.env`를 읽는다. 서버, PAPER, 전략, PostgreSQL, 토스증권과 선택 사항인 OpenDART 연결 설정을 코드와 분리한다.
 
 ### `database.py`, `schema.sql`
 
@@ -121,6 +124,16 @@ PostgreSQL 연결과 트랜잭션을 관리하고, 앱 시작 시 필요한 테�
 
 사용자별 관심종목을 PostgreSQL에 추가·조회·삭제한다. 한 사용자는 최대 20개를 저장할 수 있다.
 
+## 기업정보·공시
+
+### `dart.py`
+
+선택 설정인 OpenDART 인증키로 종목코드와 법인 고유번호를 연결하고 기업개황, 최근 3개년 재무, 배당과 최근 공시를 조회한다. 종목별 결과는 10분간 메모리에 캐시하며 키가 없어도 나머지 화면은 정상 작동한다.
+
+### `industries.py`
+
+OpenDART의 한국표준산업분류 코드를 사람이 읽을 수 있는 업종명으로 변환한다. 코드와 명칭은 향후 국내주식 업종 필터와 동종 기업 비교에 재사용할 수 있다.
+
 ## 뉴스·리서치
 
 ### `news.py`
@@ -160,7 +173,7 @@ PAPER 대시보드다. 가상 자산, 모의 주문, 전략 상태, 투자 한�
 
 ### `static/stock-detail.html`, `static/stock-detail.js`
 
-종목별 기간 차트, 거래량, 이동평균선, 마켓 스냅샷과 관련 뉴스를 표시한다.
+종목별 기간 차트, 거래량, 이동평균선, 마켓 스냅샷과 관련 뉴스를 표시한다. 일반 주식에는 OpenDART 기업개황·재무·배당·공시와 최근 3개년 실적 차트를 제공하며 ETF·ETN에서는 기업 전용 영역을 숨긴다.
 
 ### `static/news.html`, `static/news.js`
 
@@ -188,6 +201,7 @@ PAPER 대시보드다. 가상 자산, 모의 주문, 전략 상태, 투자 한�
 - `test_favorites.py`: 관심종목 저장 제한과 사용자별 분리
 - `test_news.py`: RSS 해석, 키워드 정리, 이슈 그룹화와 캐시
 - `test_ai_news.py`: 비활성 상태, 구조화 응답, 캐시와 API 실패 대체 처리
+- `test_dart.py`: 재무 증감률 계산과 한국표준산업분류 업종명 변환
 - `test_paper.py`: PAPER 체결, 비용, 중복 요청, 동시성과 위험 한도
 - `test_toss.py`: 토스 응답 처리, 검색, 캐시와 토큰 재시도
 
