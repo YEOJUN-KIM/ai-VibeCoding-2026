@@ -257,6 +257,23 @@ $("#logout-button").addEventListener("click", async () => {
   }
 });
 
+function selectPaperSection(section) {
+  document.querySelectorAll("[data-paper-tab]").forEach((button) => {
+    const active = button.dataset.paperTab === section;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  document.querySelectorAll("[data-paper-panel]").forEach((panel) => {
+    panel.hidden = panel.dataset.paperPanel !== section;
+  });
+  window.history.replaceState(null, "", `${window.location.pathname}#${section}`);
+}
+
+$("#paper-section-tabs").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-paper-tab]");
+  if (button) selectPaperSection(button.dataset.paperTab);
+});
+
 $("#order-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const message = $("#order-message");
@@ -282,6 +299,8 @@ async function initializeDashboard() {
     const session = await api("/auth/me");
     csrfToken = session.csrf_token;
     $("#current-user").textContent = session.username;
+    const requestedSection = window.location.hash.slice(1);
+    if (["trading", "watchlist", "strategy", "risk"].includes(requestedSection)) selectPaperSection(requestedSection);
     await refresh();
     setInterval(refresh, 2000);
   } catch (error) {

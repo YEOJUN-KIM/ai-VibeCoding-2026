@@ -57,7 +57,14 @@
         </div>
       </section>
 
-      <section class="panel strategy-settings-panel">
+      <nav class="workspace-section-tabs" id="paper-section-tabs" role="tablist" aria-label="PAPER 화면 구역">
+        <button type="button" role="tab" aria-selected="true" data-paper-tab="trading" class="active"><span>01</span>주문·포트폴리오</button>
+        <button type="button" role="tab" aria-selected="false" data-paper-tab="watchlist"><span>02</span>전략 워치리스트</button>
+        <button type="button" role="tab" aria-selected="false" data-paper-tab="strategy"><span>03</span>전략 설정</button>
+        <button type="button" role="tab" aria-selected="false" data-paper-tab="risk"><span>04</span>리스크 관리</button>
+      </nav>
+
+      <section class="panel strategy-settings-panel workspace-section-panel" data-paper-panel="strategy" hidden>
         <div><p class="section-kicker">STRATEGY CONTROL</p><h2>전략 컨트롤</h2>
           <p class="subtitle">실행 주기와 이동평균 조건, 주문 수량을 조정합니다.</p></div>
         <form id="strategy-settings-form" class="strategy-settings-form">
@@ -101,7 +108,7 @@
       </section>
       <p class="subtitle" id="cost-policy">모의 비용 설정을 불러오는 중입니다.</p>
       <section class="content-grid">
-        <article class="panel wide risk-panel">
+        <article class="panel wide risk-panel workspace-section-panel" data-paper-panel="risk" hidden>
           <div class="panel-heading">
             <div><p class="section-kicker">RISK GUARD</p><h2>리스크 가드</h2>
               <p class="subtitle">매수 한도와 손실 기준을 설정해 전략의 위험 범위를 제어합니다.</p></div>
@@ -123,7 +130,7 @@
           <div class="risk-usage" id="risk-usage"></div>
         </article>
 
-        <article class="panel wide">
+        <article class="panel wide workspace-section-panel" data-paper-panel="watchlist" hidden>
           <div class="panel-heading">
             <div>
               <p class="section-kicker">WATCHLIST</p>
@@ -141,7 +148,7 @@
           </div>
         </article>
 
-        <article class="panel order-panel">
+        <article class="panel order-panel workspace-section-panel" data-paper-panel="trading">
           <div class="panel-heading">
             <div>
               <p class="section-kicker">PAPER ORDER</p>
@@ -166,7 +173,7 @@
           <p class="form-message" id="order-message"></p>
         </article>
 
-        <article class="panel">
+        <article class="panel workspace-section-panel" data-paper-panel="trading">
           <div class="panel-heading">
             <div><p class="section-kicker">PAPER PORTFOLIO</p><h2>PAPER 포트폴리오</h2></div>
           </div>
@@ -178,7 +185,7 @@
           </div>
         </article>
 
-        <article class="panel">
+        <article class="panel wide workspace-section-panel" data-paper-panel="trading">
           <div class="panel-heading">
             <div><p class="section-kicker">ORDER ACTIVITY</p><h2>주문 타임라인</h2></div>
           </div>

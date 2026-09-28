@@ -27,6 +27,12 @@ function stockCell(item) {
   return `<span class="stock-name">${escapeHtml(item.name)}</span><span class="stock-code">${escapeHtml(item.symbol)} · ${escapeHtml(item.market_country)}</span>`;
 }
 
+function holdingStockCell(item) {
+  const content = stockCell(item);
+  if (!item.symbol || item.market_country !== "KR") return content;
+  return `<a class="candidate-stock-link" href="/stocks/${encodeURIComponent(item.symbol)}?from=live&section=portfolio" title="${escapeHtml(item.name)} 상세 보기">${content}</a>`;
+}
+
 function renderPortfolio(data) {
   $("#live-account-label").textContent = `${data.account_label} · 5초 자동 갱신`;
   $("#live-purchase").textContent = won.format(Number(data.total_purchase_krw));
@@ -49,7 +55,7 @@ function renderPortfolio(data) {
     $("#live-daily-profit-basis").textContent = `${referenceDate} 장 상태 확인 불가`;
   }
   $("#live-holdings-body").innerHTML = data.holdings.length ? data.holdings.map((item) => `<tr>
-    <td>${stockCell(item)}</td><td>${number.format(Number(item.quantity))}주</td>
+    <td>${holdingStockCell(item)}</td><td>${number.format(Number(item.quantity))}주</td>
     <td>${won.format(Number(item.average_purchase_price))}</td><td>${won.format(Number(item.last_price))}</td>
     <td>${won.format(Number(item.market_value))}</td>
     <td class="${Number(item.profit_loss) > 0 ? "positive" : Number(item.profit_loss) < 0 ? "negative" : "neutral"}">${won.format(Number(item.profit_loss))} (${Number(item.profit_rate).toFixed(2)}%)</td>
@@ -67,7 +73,7 @@ function renderCandidates(data) {
   $("#candidate-body").innerHTML = data.candidates.length ? data.candidates.map((item) => {
     const rate = Number(item.change_rate_percent);
     const rateClass = rate > 0 ? "positive" : rate < 0 ? "negative" : "neutral";
-    return `<tr><td>${number.format(item.rank)}위</td><td><a class="candidate-stock-link" href="/stocks/${encodeURIComponent(item.symbol)}">${stockCell({ ...item, market_country: "KR" })}</a></td>
+    return `<tr><td>${number.format(item.rank)}위</td><td><a class="candidate-stock-link" href="/stocks/${encodeURIComponent(item.symbol)}?from=live&section=scanner">${stockCell({ ...item, market_country: "KR" })}</a></td>
       <td>${won.format(Number(item.price))}</td><td class="${rateClass}">${rate.toFixed(2)}%</td>
       <td>${number.format(item.max_quantity)}주</td><td>${escapeHtml(item.reason)}</td></tr>`;
   }).join("") : `<tr><td class="empty" colspan="6">현재 스캐너 조건에 맞는 종목이 없습니다.</td></tr>`;
@@ -86,10 +92,13 @@ function renderFavorites(items) {
     const rate = item.change_rate_percent === null ? null : Number(item.change_rate_percent);
     const rateClass = rate === null ? "neutral" : rate > 0 ? "positive" : rate < 0 ? "negative" : "neutral";
     const rank = item.trading_amount_rank === null ? "거래대금 100위 밖" : `거래대금 ${number.format(item.trading_amount_rank)}위`;
+    const detailUrl = `/stocks/${encodeURIComponent(item.symbol)}?from=live&section=favorites`;
     return `<article class="favorite-card">
-      <div class="favorite-card-head"><div><span class="stock-name">${escapeHtml(item.name)}</span><span class="stock-code">${escapeHtml(item.symbol)} · ${escapeHtml(item.market)}</span></div>${favoriteButton(item.symbol, true, item.name)}</div>
-      <strong class="favorite-price">${item.price === null ? "가격 정보 없음" : won.format(Number(item.price))}</strong>
-      <div class="favorite-meta"><span class="${rateClass}">${rate === null ? "등락률 집계 없음" : `${rate > 0 ? "+" : ""}${rate.toFixed(2)}%`}</span><span>${rank}</span></div>
+      <div class="favorite-card-head"><a class="favorite-stock-link" href="${detailUrl}" title="${escapeHtml(item.name)} 상세 보기"><span class="stock-name">${escapeHtml(item.name)}</span><span class="stock-code">${escapeHtml(item.symbol)} · ${escapeHtml(item.market)}</span></a>${favoriteButton(item.symbol, true, item.name)}</div>
+      <a class="favorite-card-body" href="${detailUrl}" aria-label="${escapeHtml(item.name)} 상세 보기">
+        <strong class="favorite-price">${item.price === null ? "가격 정보 없음" : won.format(Number(item.price))}</strong>
+        <div class="favorite-meta"><span class="${rateClass}">${rate === null ? "등락률 집계 없음" : `${rate > 0 ? "+" : ""}${rate.toFixed(2)}%`}</span><span>${rank}</span></div>
+      </a>
     </article>`;
   }).join("") : `<div class="favorite-empty"><span>♡</span><strong>아직 관심 종목이 없습니다</strong><small>국내주식 페이지에서 하트를 눌러 추가하세요.</small></div>`;
 }
@@ -199,6 +208,23 @@ $("#close-live-modal").addEventListener("click", closeAuthModal);
 $("#live-auth-modal").addEventListener("click", (event) => { if (event.target === $("#live-auth-modal")) closeAuthModal(); });
 document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeAuthModal(); });
 
+function selectLiveSection(section) {
+  document.querySelectorAll("[data-live-tab]").forEach((button) => {
+    const active = button.dataset.liveTab === section;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  document.querySelectorAll("[data-live-panel]").forEach((panel) => {
+    panel.hidden = panel.dataset.livePanel !== section;
+  });
+  window.history.replaceState(null, "", `${window.location.pathname}#${section}`);
+}
+
+$("#live-section-tabs").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-live-tab]");
+  if (button) selectLiveSection(button.dataset.liveTab);
+});
+
 $("#live-pin-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const input = $("#live-pin");
@@ -221,6 +247,8 @@ async function initialize() {
     const session = await api("/auth/me");
     csrfToken = session.csrf_token;
     $("#current-user").textContent = session.username;
+    const requestedSection = window.location.hash.slice(1);
+    if (["portfolio", "favorites", "scanner"].includes(requestedSection)) selectLiveSection(requestedSection);
     const pin = await api("/auth/live-pin");
     if (pin.authorized) $("#unlock-live-button").textContent = "LIVE 인증 완료";
     await refreshPortfolio();

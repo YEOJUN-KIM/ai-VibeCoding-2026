@@ -57,6 +57,8 @@ class Settings:
     toss_allowed_ip: str
     toss_api_base_url: str
     toss_ws_url: str
+    dart_api_key: str
+    dart_api_base_url: str
     openai_api_key: str
     ai_news_enabled: bool
     openai_model: str
@@ -112,6 +114,8 @@ def load_settings() -> Settings:
         toss_allowed_ip=os.getenv("TOSS_ALLOWED_IP", ""),
         toss_api_base_url=os.getenv("TOSS_API_BASE_URL", "https://openapi.tossinvest.com"),
         toss_ws_url=os.getenv("TOSS_WS_URL", "wss://openapi-ws.tossinvest.com/ws/v1"),
+        dart_api_key=os.getenv("DART_API_KEY", ""),
+        dart_api_base_url=os.getenv("DART_API_BASE_URL", "https://opendart.fss.or.kr/api"),
         openai_api_key=os.getenv("OPENAI_API_KEY", ""),
         ai_news_enabled=_boolean("AI_NEWS_ENABLED", False),
         openai_model=os.getenv("OPENAI_MODEL", "gpt-6-luna"),

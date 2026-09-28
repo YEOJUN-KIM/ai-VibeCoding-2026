@@ -41,12 +41,17 @@
         </div>
       </section>
 
-      <section class="panel news-core-panel">
+      <nav class="workspace-section-tabs" id="news-section-tabs" role="tablist" aria-label="뉴스 화면 구역">
+        <button type="button" role="tab" aria-selected="true" data-news-tab="core" class="active"><span>01</span>핵심 이슈</button>
+        <button type="button" role="tab" aria-selected="false" data-news-tab="coverage"><span>02</span>전체 보도 흐름</button>
+      </nav>
+
+      <section class="panel news-core-panel workspace-section-panel" data-news-panel="core">
         <div class="panel-heading"><div><p class="section-kicker">TOP STORIES</p><h2 id="news-core-title">오늘의 핵심 이슈</h2><p class="subtitle">기사 수와 매체 수, 최근 게시 시각을 기준으로 먼저 볼 이슈를 골랐습니다.</p></div><span class="market-badge" id="news-core-count">-</span></div>
         <div class="news-core-grid" id="news-core-grid"><div class="empty">핵심 이슈를 고르는 중입니다.</div></div>
       </section>
 
-      <section class="news-layout">
+      <section class="news-layout workspace-section-panel" data-news-panel="coverage" hidden>
         <article class="panel news-brief-panel">
           <div class="panel-heading"><div><p class="section-kicker">COVERAGE BRIEF</p><h2 id="news-brief-title">오늘의 주요 증시 이슈</h2></div><span class="market-badge" id="news-count">-</span></div>
           <p class="news-overview" id="news-overview">뉴스를 불러오는 중입니다.</p>

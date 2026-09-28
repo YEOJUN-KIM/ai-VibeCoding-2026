@@ -1,6 +1,6 @@
 """API 요청과 응답에 사용하는 데이터 모델."""
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
 
@@ -231,7 +231,54 @@ class LiveStockDetail(BaseModel):
     shares_outstanding: Decimal | None = None
     trading_amount: Decimal | None = None
     trading_volume: Decimal | None = None
+    english_name: str | None = None
+    isin_code: str | None = None
+    list_date: date | None = None
+    listing_status: str | None = None
+    nxt_supported: bool | None = None
+    krx_trading_suspended: bool | None = None
+    nxt_trading_suspended: bool | None = None
     candles: list[LiveStockCandle]
+
+
+class CompanyMetric(BaseModel):
+    label: str
+    value: str
+    previous_value: str | None = None
+    change_rate_percent: Decimal | None = None
+
+
+class CompanyDisclosure(BaseModel):
+    title: str
+    receipt_no: str
+    receipt_date: str
+    submitter: str | None = None
+
+
+class CompanyFinancialYear(BaseModel):
+    year: str
+    revenue: Decimal | None = None
+    operating_income: Decimal | None = None
+    net_income: Decimal | None = None
+
+
+class LiveCompanyProfile(BaseModel):
+    configured: bool
+    available: bool
+    message: str
+    fiscal_year: str | None = None
+    corporation_name: str | None = None
+    ceo_name: str | None = None
+    industry_code: str | None = None
+    industry_name: str | None = None
+    established_date: str | None = None
+    address: str | None = None
+    homepage: str | None = None
+    fiscal_month: str | None = None
+    financials: list[CompanyMetric] = Field(default_factory=list)
+    financial_history: list[CompanyFinancialYear] = Field(default_factory=list)
+    dividends: list[CompanyMetric] = Field(default_factory=list)
+    disclosures: list[CompanyDisclosure] = Field(default_factory=list)
 
 
 class FavoriteStockCreate(BaseModel):

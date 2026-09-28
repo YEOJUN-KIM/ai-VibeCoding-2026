@@ -36,7 +36,13 @@
         <span>현재는 계좌 조회만 가능하며 실제 주문 기능은 잠겨 있습니다.</span>
       </section>
 
-      <section class="panel live-portfolio-panel">
+      <nav class="workspace-section-tabs" id="live-section-tabs" role="tablist" aria-label="LIVE 화면 구역">
+        <button type="button" role="tab" aria-selected="true" data-live-tab="portfolio" class="active"><span>01</span>내 자산</button>
+        <button type="button" role="tab" aria-selected="false" data-live-tab="favorites"><span>02</span>관심종목</button>
+        <button type="button" role="tab" aria-selected="false" data-live-tab="scanner"><span>03</span>마켓 스캐너</button>
+      </nav>
+
+      <section class="panel live-portfolio-panel workspace-section-panel" data-live-panel="portfolio">
         <div class="panel-heading">
           <div><p class="section-kicker">LIVE PORTFOLIO · READ ONLY</p><h2>LIVE 포트폴리오</h2><p class="subtitle" id="live-account-label">실제 계좌의 자산 현황을 불러오고 있습니다.</p></div>
           <div class="live-connection"><span class="status-dot" id="account-dot"></span><span id="live-connection-status">연결 중...</span></div>
@@ -57,7 +63,7 @@
         <p class="form-message" id="live-portfolio-message">실제 계좌를 자동으로 불러오는 중입니다.</p>
       </section>
 
-      <section class="panel favorite-panel">
+      <section class="panel favorite-panel workspace-section-panel" data-live-panel="favorites" hidden>
         <div class="panel-heading">
           <div><p class="section-kicker">MY WATCHLIST</p><h2>관심종목 워치리스트</h2><p class="subtitle">저장한 종목의 현재가와 시장 흐름을 한곳에서 확인합니다.</p></div>
           <span class="favorite-count" id="favorite-count">0 / 20</span>
@@ -68,7 +74,7 @@
         <p class="form-message" id="favorite-message">관심 종목은 이 컴퓨터의 PostgreSQL에 저장됩니다.</p>
       </section>
 
-      <section class="panel live-discovery-panel">
+      <section class="panel live-discovery-panel workspace-section-panel" data-live-panel="scanner" hidden>
         <div class="panel-heading">
           <div><p class="section-kicker">MARKET SCANNER · READ ONLY</p><h2>국내주식 마켓 스캐너</h2><p class="subtitle" id="candidate-basis">거래대금과 주문 가능 조건을 바탕으로 시장의 종목을 탐색합니다.</p></div>
         </div>

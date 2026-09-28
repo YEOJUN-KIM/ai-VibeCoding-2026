@@ -9,10 +9,16 @@ let activeChartMode = "candle";
 let lastDetailData = null;
 let lastChartCandles = [];
 let loadedNewsSymbol = "";
+let loadedCompanySymbol = "";
+let activeDetailSection = "chart";
 const periodLabels = {
   "1D": ["1일", "1 DAY"], "1W": ["7일", "7 DAYS"], "1M": ["1개월", "1 MONTH"],
   "3M": ["3개월", "3 MONTHS"], "1Y": ["1년", "1 YEAR"],
 };
+
+function isCorporateStock(data) {
+  return String(data?.security_type || "").toUpperCase() === "STOCK";
+}
 
 async function api(path, options = {}) {
   const method = (options.method || "GET").toUpperCase();
@@ -190,6 +196,199 @@ function formatNewsTime(value) {
   return date.toLocaleDateString("ko-KR", { month: "short", day: "numeric" });
 }
 
+function financialKrw(value) {
+  const amount = Number(String(value ?? "").replaceAll(",", ""));
+  if (!Number.isFinite(amount)) return value || "-";
+  const absolute = Math.abs(amount);
+  const sign = amount < 0 ? "-" : "";
+  if (absolute >= 1_0000_0000_0000) return `${sign}${(absolute / 1_0000_0000_0000).toFixed(1)}조원`;
+  if (absolute >= 1_0000_0000) return `${sign}${(absolute / 1_0000_0000).toFixed(1)}억원`;
+  if (absolute >= 1_0000) return `${sign}${(absolute / 1_0000).toFixed(1)}만원`;
+  return `${integer.format(amount)}원`;
+}
+
+function selectDetailSection(section) {
+  activeDetailSection = section;
+  document.querySelectorAll("[data-detail-tab]").forEach((button) => {
+    const active = button.dataset.detailTab === section;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  document.querySelectorAll("[data-detail-panel]").forEach((panel) => {
+    panel.hidden = panel.dataset.detailPanel !== section;
+  });
+  if (section === "news" && lastDetailData) loadStockNews(lastDetailData.name, lastDetailData.symbol);
+  if (section === "company" && lastDetailData && isCorporateStock(lastDetailData)) loadCompanyProfile(lastDetailData.symbol);
+  const url = new URL(window.location.href);
+  url.hash = section;
+  window.history.replaceState(null, "", url);
+}
+
+function formatListDate(value) {
+  if (!value) return "-";
+  const date = new Date(`${value}T00:00:00+09:00`);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString("ko-KR", {
+    year: "numeric", month: "long", day: "numeric",
+  });
+}
+
+function formatCompactDate(value) {
+  if (!value || value.length !== 8) return value || "-";
+  return `${value.slice(0, 4)}.${value.slice(4, 6)}.${value.slice(6, 8)}`;
+}
+
+function renderMetricGrid(selector, metrics, emptyMessage, financial = false) {
+  const grid = $(selector);
+  grid.replaceChildren();
+  if (!metrics.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = emptyMessage;
+    grid.append(empty);
+    return;
+  }
+  metrics.forEach((metric) => {
+    const card = document.createElement("div");
+    const label = document.createElement("span");
+    const value = document.createElement("strong");
+    const previous = document.createElement("small");
+    label.textContent = metric.label;
+    value.textContent = financial ? financialKrw(metric.value) : metric.value;
+    if (financial && ["영업이익", "당기순이익"].includes(metric.label)) {
+      const amount = Number(String(metric.value).replaceAll(",", ""));
+      value.className = amount > 0 ? "positive" : amount < 0 ? "negative" : "neutral";
+    }
+    const previousText = metric.previous_value && metric.previous_value !== "-"
+      ? `전년 ${financial ? financialKrw(metric.previous_value) : metric.previous_value}` : "최근 사업보고서 기준";
+    const rate = metric.change_rate_percent == null ? null : Number(metric.change_rate_percent);
+    previous.textContent = rate == null ? previousText : `${previousText} · 전년 대비 ${rate > 0 ? "+" : ""}${rate.toFixed(1)}%`;
+    if (rate != null) previous.className = rate > 0 ? "positive" : rate < 0 ? "negative" : "neutral";
+    card.append(label, value, previous);
+    grid.append(card);
+  });
+}
+
+function renderFinancialHistory(history) {
+  const container = $("#company-financial-history");
+  container.replaceChildren();
+  if (!history.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "비교할 최근 3개년 재무정보가 없습니다.";
+    container.append(empty);
+    return;
+  }
+  const series = [
+    ["revenue", "매출액"], ["operating_income", "영업이익"], ["net_income", "당기순이익"],
+  ];
+  const values = history.flatMap((item) => series.map(([key]) => Math.abs(Number(item[key] || 0))));
+  const max = Math.max(...values, 1);
+  const heading = document.createElement("div");
+  heading.className = "financial-history-heading";
+  const title = document.createElement("strong");
+  title.textContent = "최근 3개년 실적 추이";
+  const legend = document.createElement("div");
+  legend.className = "financial-history-legend";
+  series.forEach(([key, label]) => {
+    const item = document.createElement("span");
+    item.className = key;
+    item.textContent = label;
+    legend.append(item);
+  });
+  heading.append(title, legend);
+  const chart = document.createElement("div");
+  chart.className = "financial-history-chart";
+  history.forEach((period) => {
+    const group = document.createElement("div");
+    group.className = "financial-year-group";
+    const bars = document.createElement("div");
+    bars.className = "financial-year-bars";
+    series.forEach(([key, label]) => {
+      const amount = Number(period[key] || 0);
+      const bar = document.createElement("div");
+      bar.className = `financial-bar ${key}${amount < 0 ? " negative" : ""}`;
+      bar.style.height = `${Math.max(amount ? 4 : 0, Math.abs(amount) / max * 100)}%`;
+      bar.title = `${period.year}년 ${label} ${financialKrw(amount)}`;
+      bar.setAttribute("aria-label", bar.title);
+      bars.append(bar);
+    });
+    const year = document.createElement("strong");
+    year.textContent = `${period.year}년`;
+    group.append(bars, year);
+    chart.append(group);
+  });
+  container.append(heading, chart);
+}
+
+function renderCompanyProfile(data) {
+  $("#company-info-note").textContent = data.message;
+  $("#company-ceo").textContent = data.ceo_name || "-";
+  $("#company-industry").textContent = data.industry_name || "-";
+  $("#company-industry-code").textContent = data.industry_code ? `한국표준산업분류 ${data.industry_code}` : "OpenDART 분류 기준";
+  $("#company-established").textContent = formatCompactDate(data.established_date);
+  $("#company-fiscal-month").textContent = data.fiscal_month ? `${data.fiscal_month}월` : "-";
+  renderMetricGrid("#company-financial-grid", data.financials, data.configured ? "표시할 연간 재무 주요계정이 없습니다." : "OpenDART API 키를 설정하면 재무정보가 표시됩니다.", true);
+  renderFinancialHistory(data.financial_history || []);
+  renderMetricGrid("#company-dividend-grid", data.dividends, data.configured ? "최근 사업보고서에서 배당정보를 찾지 못했습니다." : "OpenDART API 키를 설정하면 배당정보가 표시됩니다.");
+  const profile = $("#company-profile-detail");
+  profile.replaceChildren();
+  [["법인명", data.corporation_name], ["주소", data.address]].forEach(([labelText, valueText]) => {
+    const card = document.createElement("div");
+    const label = document.createElement("span");
+    const value = document.createElement("strong");
+    label.textContent = labelText;
+    value.textContent = valueText || "-";
+    card.append(label, value);
+    profile.append(card);
+  });
+  if (data.homepage) {
+    const card = document.createElement("div");
+    const label = document.createElement("span");
+    const link = document.createElement("a");
+    label.textContent = "홈페이지";
+    link.href = /^https?:\/\//i.test(data.homepage) ? data.homepage : `https://${data.homepage}`;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = data.homepage;
+    card.append(label, link);
+    profile.append(card);
+  }
+  const disclosures = $("#company-disclosure-list");
+  disclosures.replaceChildren();
+  if (!data.disclosures.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = data.configured ? "최근 공시가 없습니다." : "OpenDART API 키를 설정하면 최근 공시가 표시됩니다.";
+    disclosures.append(empty);
+  } else {
+    data.disclosures.forEach((item) => {
+      const link = document.createElement("a");
+      link.className = "company-disclosure-item";
+      link.href = `https://dart.fss.or.kr/dsaf001/main.do?rcpNo=${encodeURIComponent(item.receipt_no)}`;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      const title = document.createElement("strong");
+      const date = document.createElement("span");
+      title.textContent = item.title;
+      date.textContent = formatCompactDate(item.receipt_date);
+      link.append(title, date);
+      disclosures.append(link);
+    });
+  }
+}
+
+async function loadCompanyProfile(symbol) {
+  if (loadedCompanySymbol === symbol) return;
+  loadedCompanySymbol = symbol;
+  $("#company-info-note").textContent = "OpenDART 기업정보를 확인하고 있습니다.";
+  try {
+    renderCompanyProfile(await api(`/live/stocks/${encodeURIComponent(symbol)}/company`));
+  } catch (error) {
+    loadedCompanySymbol = "";
+    $("#company-info-note").textContent = error.message;
+  }
+}
+
 function renderStockNews(data) {
   $("#stock-news-overview").textContent = data.overview;
   const keywords = $("#stock-news-keywords");
@@ -241,8 +440,13 @@ function updateChartHover(event) {
   const tooltip = $("#chart-tooltip");
   const crosshair = svg?.querySelector(".chart-crosshair");
   if (!svg || !tooltip || !crosshair || !lastChartCandles.length) return;
-  const rect = svg.getBoundingClientRect();
-  const viewX = ((event.clientX - rect.left) / rect.width) * 1100;
+  const svgPoint = svg.createSVGPoint();
+  svgPoint.x = event.clientX;
+  svgPoint.y = event.clientY;
+  const screenMatrix = svg.getScreenCTM();
+  if (!screenMatrix) return;
+  const viewPoint = svgPoint.matrixTransform(screenMatrix.inverse());
+  const viewX = viewPoint.x;
   const plotLeft = Number(svg.dataset.plotLeft);
   const plotWidth = Number(svg.dataset.plotWidth);
   if (viewX < plotLeft || viewX > plotLeft + plotWidth) {
@@ -251,7 +455,7 @@ function updateChartHover(event) {
     return;
   }
   const index = Math.max(0, Math.min(lastChartCandles.length - 1,
-    Math.floor(((viewX - plotLeft) / plotWidth) * lastChartCandles.length)));
+    Math.round(((viewX - plotLeft) / plotWidth) * lastChartCandles.length - .5)));
   const candle = lastChartCandles[index];
   const previous = lastChartCandles[Math.max(0, index - 1)];
   const close = Number(candle.close_price);
@@ -271,10 +475,12 @@ function updateChartHover(event) {
   const rateClass = rate > 0 ? "positive" : rate < 0 ? "negative" : "neutral";
   tooltip.innerHTML = `<strong>${formatTooltipTimestamp(candle.timestamp)}</strong><div><span>종가</span><b>${won.format(close)}</b></div><div><span>등락률</span><b class="${rateClass}">${rate > 0 ? "+" : ""}${rate.toFixed(2)}%</b></div>${isPriceGap ? `<div><span>가격 갭</span><b class="${gapRate > 0 ? "positive" : "negative"}">${gapRate > 0 ? "+" : ""}${gapRate.toFixed(2)}%</b></div>` : ""}<div class="tooltip-ohlc"><span>시 ${won.format(Number(candle.open_price))}</span><span>고 ${won.format(Number(candle.high_price))}</span><span>저 ${won.format(Number(candle.low_price))}</span></div><small>거래량 ${integer.format(Number(candle.volume))}주</small>`;
   tooltip.hidden = false;
-  const pointerX = event.clientX - rect.left;
+  const chartRect = chart.getBoundingClientRect();
+  const pointerX = event.clientX - chartRect.left;
+  const pointerY = event.clientY - chartRect.top;
   const tooltipWidth = 218;
-  tooltip.style.left = `${pointerX + tooltipWidth + 24 > rect.width ? pointerX - tooltipWidth - 12 : pointerX + 14}px`;
-  tooltip.style.top = `${Math.max(8, Math.min(rect.height - 156, event.clientY - rect.top - 30))}px`;
+  tooltip.style.left = `${pointerX + tooltipWidth + 24 > chartRect.width ? pointerX - tooltipWidth - 12 : pointerX + 14}px`;
+  tooltip.style.top = `${Math.max(8, Math.min(chartRect.height - 156, pointerY - 30))}px`;
   crosshair.setAttribute("visibility", "visible");
   crosshair.querySelector(".crosshair-x").setAttribute("x1", x);
   crosshair.querySelector(".crosshair-x").setAttribute("x2", x);
@@ -301,6 +507,25 @@ function renderDetail(data) {
   $("#detail-change").textContent = rate == null ? "-" : `${rate > 0 ? "+" : ""}${rate.toFixed(2)}%`;
   $("#detail-change").className = rate == null || rate === 0 ? "neutral" : rate > 0 ? "positive" : "negative";
   $("#detail-type").textContent = data.trading_amount_rank == null ? data.market : `거래대금 ${data.trading_amount_rank}위`;
+  $("#company-english-name").textContent = data.english_name || "-";
+  $("#company-market-type").textContent = `${data.market} · ${data.is_common_share ? "보통주" : data.security_type}`;
+  $("#company-list-date").textContent = formatListDate(data.list_date);
+  $("#company-market-cap").textContent = compactKrw(data.market_cap);
+  $("#company-shares").textContent = data.shares_outstanding == null ? "-" : `${integer.format(Number(data.shares_outstanding))}주`;
+  $("#company-isin").textContent = data.isin_code || "-";
+  $("#company-listing-status").textContent = data.listing_status === "ACTIVE" ? "정상 상장" : (data.listing_status || "상태 미확인");
+  $("#company-krx-status").textContent = data.krx_trading_suspended == null
+    ? "확인 불가" : data.krx_trading_suspended ? "거래 정지" : "정상 거래";
+  $("#company-krx-status").className = data.krx_trading_suspended ? "negative" : "positive";
+  $("#company-nxt-status").textContent = data.nxt_supported == null
+    ? "확인 불가" : data.nxt_supported ? (data.nxt_trading_suspended ? "지원 · 거래 정지" : "지원") : "미지원";
+  const corporateStock = isCorporateStock(data);
+  document.querySelectorAll("[data-corporate-only]").forEach((element) => { element.hidden = !corporateStock; });
+  if (!corporateStock) {
+    document.querySelectorAll("[data-company-tab]").forEach((item) => item.classList.toggle("active", item.dataset.companyTab === "overview"));
+    document.querySelectorAll("[data-company-panel]").forEach((panel) => { panel.hidden = panel.dataset.companyPanel !== "overview"; });
+    $("#company-info-note").textContent = `${data.security_type || "해당 상품"}은 기업 공시 대상 정보 대신 종목 기본정보만 제공합니다.`;
+  }
   const [periodLabel, periodKicker] = periodLabels[activePeriod];
   $("#detail-high-label").textContent = `${periodLabel} 최고가`;
   $("#detail-low-label").textContent = `${periodLabel} 최저가`;
@@ -329,7 +554,8 @@ function renderDetail(data) {
   $("#detail-message").textContent = activePeriod === "1D"
     ? "1분봉 추세선이며 체결 시점에 따라 실제 가격과 차이가 날 수 있습니다."
     : "일봉 종가 추세선이며 장중 가격과 차이가 날 수 있습니다.";
-  loadStockNews(data.name, data.symbol);
+  if (activeDetailSection === "news") loadStockNews(data.name, data.symbol);
+  if (activeDetailSection === "company" && corporateStock) loadCompanyProfile(data.symbol);
 }
 
 async function loadDetail(period) {
@@ -364,6 +590,39 @@ $("#detail-chart-modes").addEventListener("click", (event) => {
 });
 $("#detail-chart").addEventListener("pointermove", updateChartHover);
 $("#detail-chart").addEventListener("pointerleave", clearChartHover);
+$("#detail-back-button").addEventListener("click", () => {
+  const params = new URLSearchParams(window.location.search);
+  const source = params.get("from");
+  const section = params.get("section");
+  if (source === "live") {
+    const liveSection = ["portfolio", "favorites", "scanner"].includes(section) ? section : "portfolio";
+    window.location.assign(`/live#${liveSection}`);
+    return;
+  }
+  const referrer = document.referrer;
+  if (referrer) {
+    try {
+      const previous = new URL(referrer);
+      if (previous.origin === window.location.origin && previous.pathname !== "/login") {
+        window.history.back();
+        return;
+      }
+    } catch (_) { /* 잘못된 referrer는 안전한 기본 경로로 이동한다. */ }
+  }
+  window.location.assign("/stocks");
+});
+$("#detail-section-tabs").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-detail-tab]");
+  if (button) selectDetailSection(button.dataset.detailTab);
+});
+document.querySelector(".company-category-tabs").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-company-tab]");
+  if (!button) return;
+  document.querySelectorAll("[data-company-tab]").forEach((item) => item.classList.toggle("active", item === button));
+  document.querySelectorAll("[data-company-panel]").forEach((panel) => {
+    panel.hidden = panel.dataset.companyPanel !== button.dataset.companyTab;
+  });
+});
 
 async function initialize() {
   try {
@@ -371,6 +630,8 @@ async function initialize() {
     csrfToken = session.csrf_token;
     $("#current-user").textContent = session.username;
     activeSymbol = decodeURIComponent(window.location.pathname.split("/").filter(Boolean).at(-1) || "");
+    const requestedSection = window.location.hash.slice(1);
+    if (["chart", "company", "market", "news"].includes(requestedSection)) selectDetailSection(requestedSection);
     await loadDetail(activePeriod);
   } catch (error) {
     $("#detail-message").textContent = error.message;

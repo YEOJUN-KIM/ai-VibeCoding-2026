@@ -24,7 +24,7 @@ from .auth import (
 )
 from .models import (Account, FavoriteStockCreate, LiveBuyingPower, LiveCandidateList,
                      LiveFavoriteStock, LivePinRequest, LivePinStatus, LivePortfolio,
-                     LiveStockDetail, LiveStockSearchPage, LoginRequest, NewsDigest, Order, OrderRequest,
+                     LiveCompanyProfile, LiveStockDetail, LiveStockSearchPage, LoginRequest, NewsDigest, Order, OrderRequest,
                      Quote, RiskSettings, RiskSettingsUpdate, RiskStatus, SessionInfo, Stock,
                      StrategySettingsUpdate, StrategyStatus, TossConnectionStatus)
 from .paper import PaperBroker
@@ -37,6 +37,7 @@ from .database import connect, initialize
 from .favorites import add_favorite, favorite_symbols, list_favorites, remove_favorite
 from .news import NewsFeedError, news_service
 from .ai_news import ai_news_service
+from .dart import dart_client
 
 
 market = MarketSimulator(symbols=settings.watch_symbols)
@@ -345,6 +346,14 @@ def live_stock_detail(
     except TossApiError as exc:
         status_code = 404 if exc.status_code == 404 else 502
         raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+
+@app.get("/live/stocks/{symbol}/company", response_model=LiveCompanyProfile)
+def live_stock_company(
+    symbol: str,
+    _: AuthenticatedUser = Depends(require_user),
+) -> LiveCompanyProfile:
+    return dart_client.company_profile(symbol)
 
 
 @app.get("/research/news", response_model=NewsDigest)

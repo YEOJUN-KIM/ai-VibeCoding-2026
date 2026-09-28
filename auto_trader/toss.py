@@ -665,6 +665,9 @@ class TossClient:
                 change_rate = (latest / daily_candles[-2].close_price - Decimal("1")) * Decimal("100")
         shares_outstanding = (self._decimal(stock_info.get("sharesOutstanding"))
                               if stock_info.get("sharesOutstanding") is not None else None)
+        korean_market_detail = stock_info.get("koreanMarketDetail")
+        if not isinstance(korean_market_detail, dict):
+            korean_market_detail = {}
         return LiveStockDetail(
             symbol=normalized,
             name=str(stock.get("name", "")),
@@ -680,6 +683,17 @@ class TossClient:
             shares_outstanding=shares_outstanding,
             trading_amount=(self._decimal(ranking.get("tradingAmount")) if ranking else None),
             trading_volume=(self._decimal(ranking.get("tradingVolume")) if ranking else None),
+            english_name=(str(stock_info.get("englishName"))
+                          if stock_info.get("englishName") else None),
+            isin_code=(str(stock_info.get("isinCode")) if stock_info.get("isinCode") else None),
+            list_date=stock_info.get("listDate"),
+            listing_status=(str(stock_info.get("status")) if stock_info.get("status") else None),
+            nxt_supported=(bool(korean_market_detail.get("nxtSupported"))
+                           if "nxtSupported" in korean_market_detail else None),
+            krx_trading_suspended=(bool(korean_market_detail.get("krxTradingSuspended"))
+                                   if "krxTradingSuspended" in korean_market_detail else None),
+            nxt_trading_suspended=(bool(korean_market_detail.get("nxtTradingSuspended"))
+                                   if "nxtTradingSuspended" in korean_market_detail else None),
             candles=candles,
         )
 

@@ -187,6 +187,26 @@ document.querySelectorAll("[data-news-query]").forEach((button) => {
   button.addEventListener("click", () => loadNews(button.dataset.newsQuery));
 });
 document.querySelector("[data-news-mode='hot']").addEventListener("click", () => loadNews("", { hot: true }));
+
+function selectNewsSection(section) {
+  document.querySelectorAll("[data-news-tab]").forEach((button) => {
+    const active = button.dataset.newsTab === section;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  document.querySelectorAll("[data-news-panel]").forEach((panel) => {
+    panel.hidden = panel.dataset.newsPanel !== section;
+  });
+  const url = new URL(window.location.href);
+  url.hash = section;
+  window.history.replaceState(null, "", url);
+}
+
+$("#news-section-tabs").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-news-tab]");
+  if (button) selectNewsSection(button.dataset.newsTab);
+});
+
 $("#logout-button").addEventListener("click", async () => {
   try { await api("/auth/logout", { method: "POST" }); } finally { window.location.replace("/login"); }
 });
@@ -196,6 +216,8 @@ async function initialize() {
     const session = await api("/auth/me");
     csrfToken = session.csrf_token;
     $("#current-user").textContent = session.username;
+    const requestedSection = window.location.hash.slice(1);
+    if (["core", "coverage"].includes(requestedSection)) selectNewsSection(requestedSection);
     const initialQuery = new URLSearchParams(window.location.search).get("q");
     await loadNews(initialQuery || "", { hot: !initialQuery });
   } catch (error) {

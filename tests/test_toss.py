@@ -293,7 +293,12 @@ class TossClientTests(unittest.TestCase):
                 {"symbol": "005930", "lastPrice": "72000", "currency": "KRW"},
             ]}),
             FakeResponse({"result": [
-                {"symbol": "005930", "sharesOutstanding": "5900000000"},
+                {"symbol": "005930", "sharesOutstanding": "5900000000",
+                 "englishName": "SamsungElec", "isinCode": "KR7005930003",
+                 "listDate": "1975-06-11", "status": "ACTIVE",
+                 "koreanMarketDetail": {"nxtSupported": True,
+                                         "krxTradingSuspended": False,
+                                         "nxtTradingSuspended": False}},
             ]}),
             FakeResponse({"result": {"candles": [
                 {"timestamp": "2026-09-24T00:00:00+09:00", "openPrice": "71000", "highPrice": "73000", "lowPrice": "70500", "closePrice": "72000", "volume": "200"},
@@ -309,6 +314,11 @@ class TossClientTests(unittest.TestCase):
         self.assertEqual(detail.name, "삼성전자")
         self.assertEqual(detail.change_rate_percent.quantize(Decimal("0.01")), Decimal("1.41"))
         self.assertEqual(detail.market_cap, Decimal("424800000000000"))
+        self.assertEqual(detail.english_name, "SamsungElec")
+        self.assertEqual(detail.isin_code, "KR7005930003")
+        self.assertEqual(detail.list_date.isoformat(), "1975-06-11")
+        self.assertTrue(detail.nxt_supported)
+        self.assertFalse(detail.krx_trading_suspended)
         self.assertEqual(line["005930"], [Decimal("71000"), Decimal("72000")])
         self.assertEqual(mocked.call_count, 7)
         mocked_sleep.assert_called_once()
