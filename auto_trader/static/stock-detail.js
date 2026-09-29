@@ -11,6 +11,13 @@ let lastChartCandles = [];
 let loadedNewsSymbol = "";
 let loadedCompanySymbol = "";
 let activeDetailSection = "chart";
+let activeOrderSide = "BUY";
+let retryOrderPreviewAfterPin = false;
+const detailCache = new Map();
+const detailRequests = new Map();
+let approvedOrderPayload = null;
+let approvedOrderPreview = null;
+let pendingClientOrderId = null;
 const periodLabels = {
   "1D": ["1일", "1 DAY"], "1W": ["7일", "7 DAYS"], "1M": ["1개월", "1 MONTH"],
   "3M": ["3개월", "3 MONTHS"], "1Y": ["1년", "1 YEAR"],
@@ -27,7 +34,9 @@ async function api(path, options = {}) {
   if (response.status === 401) { window.location.replace("/login"); throw new Error("로그인이 필요합니다."); }
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: "요청에 실패했습니다." }));
-    throw new Error(error.detail || "요청에 실패했습니다.");
+    const requestError = new Error(error.detail || "요청에 실패했습니다.");
+    requestError.status = response.status;
+    throw requestError;
   }
   return response.status === 204 ? null : response.json();
 }
@@ -194,6 +203,74 @@ function formatNewsTime(value) {
   if (elapsedMinutes < 60) return `${Math.max(1, elapsedMinutes)}분 전`;
   if (elapsedMinutes < 1440) return `${Math.floor(elapsedMinutes / 60)}시간 전`;
   return date.toLocaleDateString("ko-KR", { month: "short", day: "numeric" });
+}
+
+function updateOrderEstimate() {
+  const quantity = Math.max(0, Number($("#order-quantity").value) || 0);
+  const marketOrder = $("#order-type").value === "MARKET";
+  const conditionalOrder = $("#order-mode").value === "SINGLE";
+  const price = marketOrder ? Number(lastDetailData?.price || 0) : Math.max(0, Number($("#order-price").value) || 0);
+  $("#order-price").disabled = marketOrder;
+  $("#order-estimated-amount").textContent = price && quantity ? won.format(price * quantity) : "-";
+  $("#order-estimate-note").textContent = marketOrder ? "현재가 기준 예상 · 실제 체결가와 다를 수 있음" : "지정가 기준 · 수수료·세금 제외";
+  document.querySelectorAll(".conditional-order-field").forEach((field) => { field.hidden = !conditionalOrder; });
+  const sideLabel = activeOrderSide === "BUY" ? "매수" : "매도";
+  const typeLabel = marketOrder ? "시장가" : "지정가";
+  if (conditionalOrder) {
+    const triggerPrice = Math.max(0, Number($("#order-trigger-price").value) || 0);
+    const triggerLabel = triggerPrice ? won.format(triggerPrice) : "감시 가격";
+    $("#order-dry-run-preview").textContent = `${triggerLabel} 도달 시 ${typeLabel} ${sideLabel} · ${integer.format(quantity)}주 · DRY RUN`;
+  } else {
+    $("#order-dry-run-preview").textContent = `일반 ${typeLabel} ${sideLabel} · ${integer.format(quantity)}주 · DRY RUN`;
+  }
+}
+
+function defaultConditionalExpiry() {
+  const expiry = new Date();
+  expiry.setDate(expiry.getDate() + 30);
+  return `${expiry.getFullYear()}-${String(expiry.getMonth() + 1).padStart(2, "0")}-${String(expiry.getDate()).padStart(2, "0")}`;
+}
+
+function currentOrderPayload() {
+  const conditionalOrder = $("#order-mode").value === "SINGLE";
+  const marketOrder = $("#order-type").value === "MARKET";
+  return {
+    symbol: activeSymbol,
+    side: activeOrderSide,
+    mode: conditionalOrder ? "SINGLE" : "STANDARD",
+    order_type: marketOrder ? "MARKET" : "LIMIT",
+    quantity: Number($("#order-quantity").value),
+    order_price: marketOrder ? null : Number($("#order-price").value),
+    trigger_price: conditionalOrder ? Number($("#order-trigger-price").value) : null,
+    expire_date: conditionalOrder ? $("#order-expire-date").value : null,
+  };
+}
+
+function formatOrderSide(side) { return side === "BUY" ? "매수" : "매도"; }
+
+async function loadDryRunHistory() {
+  const list = $("#dry-run-history-list");
+  try {
+    const orders = await api("/live/orders/dry-run");
+    list.replaceChildren();
+    if (!orders.length) {
+      const empty = document.createElement("span");
+      empty.textContent = "아직 저장된 DRY RUN 주문이 없습니다.";
+      list.append(empty);
+      return;
+    }
+    orders.slice(0, 3).forEach((order) => {
+      const row = document.createElement("div");
+      const title = document.createElement("strong");
+      const meta = document.createElement("small");
+      title.textContent = `${order.stock_name} · ${formatOrderSide(order.side)} ${integer.format(Number(order.quantity))}주`;
+      meta.textContent = `${won.format(Number(order.estimated_amount))} · ${new Date(order.created_at).toLocaleString("ko-KR")}`;
+      row.append(title, meta);
+      list.append(row);
+    });
+  } catch (error) {
+    list.textContent = error.message;
+  }
 }
 
 function financialKrw(value) {
@@ -502,7 +579,11 @@ function renderDetail(data) {
   $("#detail-market").textContent = `${data.market} · ${data.is_common_share ? "보통주" : data.security_type}`;
   $("#detail-name").textContent = data.name;
   $("#detail-symbol").textContent = data.symbol;
+  $("#order-stock-name").textContent = data.name;
+  $("#order-stock-symbol").textContent = data.symbol;
   $("#detail-price").textContent = data.price == null ? "-" : won.format(Number(data.price));
+  if (data.price != null && !$("#order-price").dataset.edited) $("#order-price").value = Math.round(Number(data.price));
+  updateOrderEstimate();
   const rate = data.change_rate_percent == null ? null : Number(data.change_rate_percent);
   $("#detail-change").textContent = rate == null ? "-" : `${rate > 0 ? "+" : ""}${rate.toFixed(2)}%`;
   $("#detail-change").className = rate == null || rate === 0 ? "neutral" : rate > 0 ? "positive" : "negative";
@@ -562,16 +643,51 @@ async function loadDetail(period) {
   activePeriod = period;
   const sequence = ++detailSequence;
   document.querySelectorAll("[data-period]").forEach((button) => button.classList.toggle("active", button.dataset.period === period));
+  if (detailCache.has(period)) {
+    renderDetail(detailCache.get(period));
+    return;
+  }
   $("#detail-message").textContent = `${periodLabels[period][0]} 차트를 불러오는 중입니다.`;
+  $("#detail-chart").classList.add("loading");
+  $("#detail-chart").setAttribute("aria-busy", "true");
   try {
-    const data = await api(`/live/stocks/${encodeURIComponent(activeSymbol)}/detail?period=${period}`);
+    const data = await fetchDetail(period);
     if (sequence === detailSequence) renderDetail(data);
   } catch (error) {
     if (sequence !== detailSequence) return;
     $("#detail-message").textContent = error.message;
     $("#detail-chart").innerHTML = `<div class="empty"></div>`;
     $("#detail-chart .empty").textContent = error.message;
+  } finally {
+    if (sequence === detailSequence) {
+      $("#detail-chart").classList.remove("loading");
+      $("#detail-chart").removeAttribute("aria-busy");
+    }
   }
+}
+
+function fetchDetail(period) {
+  if (detailCache.has(period)) return Promise.resolve(detailCache.get(period));
+  if (detailRequests.has(period)) return detailRequests.get(period);
+  const request = api(`/live/stocks/${encodeURIComponent(activeSymbol)}/detail?period=${period}`)
+    .then((data) => {
+      detailCache.set(period, data);
+      return data;
+    })
+    .finally(() => detailRequests.delete(period));
+  detailRequests.set(period, request);
+  return request;
+}
+
+function prefetchNearbyPeriods() {
+  const start = async () => {
+    // 사용자가 자주 누르는 순서대로 준비한다. 순차 실행해 토스 호출 한도를 보호한다.
+    for (const period of ["1W", "1M", "1Y", "3M"]) {
+      try { await fetchDetail(period); } catch (_) { /* 전환 시 화면에서 다시 시도한다. */ }
+    }
+  };
+  if ("requestIdleCallback" in window) window.requestIdleCallback(start, { timeout: 1200 });
+  else window.setTimeout(start, 350);
 }
 
 $("#logout-button").addEventListener("click", async () => {
@@ -590,12 +706,174 @@ $("#detail-chart-modes").addEventListener("click", (event) => {
 });
 $("#detail-chart").addEventListener("pointermove", updateChartHover);
 $("#detail-chart").addEventListener("pointerleave", clearChartHover);
+$("#order-side-tabs").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-order-side]");
+  if (!button) return;
+  activeOrderSide = button.dataset.orderSide;
+  document.querySelectorAll("[data-order-side]").forEach((item) => {
+    item.classList.toggle("active", item === button);
+    item.classList.toggle("buy", item === button && activeOrderSide === "BUY");
+    item.classList.toggle("sell", item === button && activeOrderSide === "SELL");
+  });
+  updateOrderEstimate();
+});
+$("#order-mode").addEventListener("change", updateOrderEstimate);
+$("#order-type").addEventListener("change", updateOrderEstimate);
+$("#order-quantity").addEventListener("input", updateOrderEstimate);
+$("#order-trigger-price").addEventListener("input", updateOrderEstimate);
+$("#order-price").addEventListener("input", () => {
+  $("#order-price").dataset.edited = "true";
+  updateOrderEstimate();
+});
+$("#live-order-preview-button").addEventListener("click", async () => {
+  const button = $("#live-order-preview-button");
+  const result = $("#order-preview-result");
+  const payload = currentOrderPayload();
+  approvedOrderPayload = null;
+  approvedOrderPreview = null;
+  button.disabled = true;
+  button.textContent = "검토 중...";
+  result.hidden = false;
+  result.className = "order-preview-result loading";
+  result.textContent = "계좌와 위험 한도를 확인하고 있습니다.";
+  try {
+    const preview = await api("/live/orders/preview", {
+      method: "POST",
+      body: JSON.stringify({
+        ...payload,
+      }),
+    });
+    result.className = `order-preview-result ${preview.approved ? "approved" : "rejected"}`;
+    result.replaceChildren();
+    const heading = document.createElement("strong");
+    heading.textContent = preview.approved ? "DRY RUN 검토 통과" : "DRY RUN 검토 보류";
+    const message = document.createElement("p");
+    message.textContent = preview.message;
+    const checks = document.createElement("ul");
+    preview.checks.forEach((check) => {
+      const item = document.createElement("li");
+      item.className = check.passed ? "passed" : "failed";
+      item.textContent = `${check.passed ? "✓" : "!"} ${check.message}`;
+      checks.append(item);
+    });
+    result.append(heading, message, checks);
+    if (preview.approved) {
+      approvedOrderPayload = payload;
+      approvedOrderPreview = preview;
+      const confirmButton = document.createElement("button");
+      confirmButton.type = "button";
+      confirmButton.className = "button order-final-confirm-button";
+      confirmButton.textContent = "최종 확인으로 이동";
+      confirmButton.addEventListener("click", openDryRunConfirmModal);
+      result.append(confirmButton);
+    }
+  } catch (error) {
+    if (error.status === 403 && error.message.includes("LIVE PIN")) {
+      retryOrderPreviewAfterPin = true;
+      $("#detail-live-auth-modal").classList.remove("hidden");
+      $("#detail-live-pin").focus();
+      result.hidden = true;
+      return;
+    }
+    result.className = "order-preview-result rejected";
+    result.textContent = error.message;
+  } finally {
+    button.disabled = false;
+    button.textContent = "주문 검토";
+  }
+});
+function openDryRunConfirmModal() {
+  if (!approvedOrderPayload || !approvedOrderPreview) return;
+  pendingClientOrderId = crypto.randomUUID();
+  const summary = $("#dry-run-confirm-summary");
+  const values = [
+    ["종목", `${approvedOrderPreview.name} (${approvedOrderPreview.symbol})`],
+    ["매매", formatOrderSide(approvedOrderPayload.side)],
+    ["방식", approvedOrderPayload.mode === "SINGLE" ? "목표가 도달 주문" : "일반 주문"],
+    ["호가", approvedOrderPayload.order_type === "MARKET" ? "시장가" : `지정가 ${won.format(approvedOrderPayload.order_price)}`],
+    ["수량", `${integer.format(approvedOrderPayload.quantity)}주`],
+    ["예상 금액", won.format(Number(approvedOrderPreview.estimated_amount))],
+  ];
+  if (approvedOrderPayload.mode === "SINGLE") {
+    values.push(["감시 가격", won.format(approvedOrderPayload.trigger_price)], ["만료일", approvedOrderPayload.expire_date]);
+  }
+  summary.replaceChildren(...values.map(([labelText, valueText]) => {
+    const row = document.createElement("div");
+    const label = document.createElement("span");
+    const value = document.createElement("strong");
+    label.textContent = labelText;
+    value.textContent = valueText;
+    row.append(label, value);
+    return row;
+  }));
+  $("#dry-run-confirm-status").textContent = "확정 후에도 실제 자산에는 변화가 없습니다.";
+  $("#dry-run-confirm-modal").classList.remove("hidden");
+}
+
+function closeDryRunConfirmModal() {
+  $("#dry-run-confirm-modal").classList.add("hidden");
+}
+$("#close-dry-run-confirm").addEventListener("click", closeDryRunConfirmModal);
+$("#cancel-dry-run-confirm").addEventListener("click", closeDryRunConfirmModal);
+$("#dry-run-confirm-modal").addEventListener("click", (event) => {
+  if (event.target === $("#dry-run-confirm-modal")) closeDryRunConfirmModal();
+});
+$("#confirm-dry-run-order").addEventListener("click", async () => {
+  if (!approvedOrderPayload || !pendingClientOrderId) return;
+  const button = $("#confirm-dry-run-order");
+  const status = $("#dry-run-confirm-status");
+  button.disabled = true;
+  status.textContent = "안전 검사를 다시 실행하고 기록하고 있습니다.";
+  try {
+    const order = await api("/live/orders/dry-run", {
+      method: "POST",
+      body: JSON.stringify({ ...approvedOrderPayload, client_order_id: pendingClientOrderId }),
+    });
+    closeDryRunConfirmModal();
+    const result = $("#order-preview-result");
+    result.hidden = false;
+    result.className = "order-preview-result approved";
+    result.textContent = `DRY RUN 주문 #${order.id}을 저장했습니다. 실제 주문은 전송되지 않았습니다.`;
+    approvedOrderPayload = null;
+    approvedOrderPreview = null;
+    pendingClientOrderId = null;
+    await loadDryRunHistory();
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+});
+function closeDetailPinModal() {
+  $("#detail-live-auth-modal").classList.add("hidden");
+  $("#detail-live-pin").value = "";
+}
+$("#close-detail-live-modal").addEventListener("click", closeDetailPinModal);
+$("#detail-live-auth-modal").addEventListener("click", (event) => {
+  if (event.target === $("#detail-live-auth-modal")) closeDetailPinModal();
+});
+$("#detail-live-pin-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const status = $("#detail-live-pin-status");
+  status.textContent = "PIN을 확인하고 있습니다.";
+  try {
+    await api("/auth/live-pin/verify", { method: "POST", body: JSON.stringify({ pin: $("#detail-live-pin").value }) });
+    status.textContent = "인증되었습니다.";
+    closeDetailPinModal();
+    if (retryOrderPreviewAfterPin) {
+      retryOrderPreviewAfterPin = false;
+      $("#live-order-preview-button").click();
+    }
+  } catch (error) {
+    status.textContent = error.message;
+  }
+});
 $("#detail-back-button").addEventListener("click", () => {
   const params = new URLSearchParams(window.location.search);
   const source = params.get("from");
   const section = params.get("section");
   if (source === "live") {
-    const liveSection = ["portfolio", "favorites", "scanner"].includes(section) ? section : "portfolio";
+    const liveSection = ["portfolio", "favorites", "scanner", "orders"].includes(section) ? section : "portfolio";
     window.location.assign(`/live#${liveSection}`);
     return;
   }
@@ -626,13 +904,19 @@ document.querySelector(".company-category-tabs").addEventListener("click", (even
 
 async function initialize() {
   try {
+    $("#order-expire-date").value = defaultConditionalExpiry();
     const session = await api("/auth/me");
     csrfToken = session.csrf_token;
     $("#current-user").textContent = session.username;
+    const risk = await api("/risk");
+    $("#order-cash-policy").textContent = "현재 DRY RUN 투자 한도 테스트 모드";
+    $("#order-cash-policy-detail").textContent = `검증을 위해 1회·종목별·전체 투자 한도와 최소 현금 비율만 임시로 적용하지 않습니다. 실제 주문 가능 현금과 매도 보유 수량은 항상 검사합니다. 원래 안전 기준은 주문 후 현금 ${Number(risk.settings.min_cash_ratio).toFixed(0)}% 이상입니다.`;
     activeSymbol = decodeURIComponent(window.location.pathname.split("/").filter(Boolean).at(-1) || "");
     const requestedSection = window.location.hash.slice(1);
     if (["chart", "company", "market", "news"].includes(requestedSection)) selectDetailSection(requestedSection);
     await loadDetail(activePeriod);
+    await loadDryRunHistory();
+    prefetchNearbyPeriods();
   } catch (error) {
     $("#detail-message").textContent = error.message;
     $("#detail-chart").innerHTML = `<div class="empty"></div>`;

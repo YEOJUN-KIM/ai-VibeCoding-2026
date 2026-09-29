@@ -68,6 +68,7 @@ class TossClient:
             tuple[str, str], tuple[float, int, list[LiveStockCandle]]
         ] = {}
         self._candle_lock = Lock()
+        self._candle_request_locks: dict[tuple[str, str], Lock] = {}
 
     @property
     def configured(self) -> bool:
@@ -560,7 +561,9 @@ class TossClient:
         periods = {
             "1D": ("1m", 390 if detailed else 200),
             "1W": (("1m", 1950) if detailed else ("1d", 7)),
-            "1M": (("1m", 8580) if detailed else ("1d", 22)),
+            # 한 달 분봉은 최대 43페이지를 순차 호출해야 해 화면 전환이 지나치게 느리다.
+            # 월간 추세에는 거래일별 일봉을 사용해 한 번의 요청으로 응답한다.
+            "1M": ("1d", 22),
             "3M": ("1d", 60),
             "1Y": ("1d", 200),
         }
@@ -574,48 +577,48 @@ class TossClient:
         if cached is not None and now < cached[0] and cached[1] >= count:
             return cached[2][-count:]
         with self._candle_lock:
-            now = monotonic()
+            request_lock = self._candle_request_locks.setdefault(cache_key, Lock())
+        # 같은 종목·주기의 중복 페이지 수집만 직렬화한다. 서로 다른 종목은 병렬 조회된다.
+        with request_lock:
             cached = self._candle_cache.get(cache_key)
-            if cached is not None and now < cached[0] and cached[1] >= count:
+            if cached is not None and monotonic() < cached[0] and cached[1] >= count:
                 return cached[2][-count:]
-        # 네트워크 호출 중에는 전체 차트 캐시 잠금을 잡지 않는다. 서로 다른 종목은
-        # 동시에 받아올 수 있어 목록의 미니 차트가 훨씬 빨리 채워진다.
-        raw_rows: list[dict] = []
-        before: str | None = None
-        seen_cursors: set[str] = set()
-        max_pages = max(1, (count + 199) // 200)
-        for page_index in range(max_pages):
-            query_values = {"symbol": normalized, "interval": interval}
-            if before:
-                query_values["before"] = before
-            query = urlencode(query_values)
-            payload = self._authorized_json_request(f"{self.base_url}/api/v1/candles?{query}")
-            result = payload.get("result")
-            rows = result.get("candles") if isinstance(result, dict) else None
-            if not isinstance(rows, list):
-                raise TossApiError("토스 API 차트 응답 형식이 예상과 다릅니다.")
-            raw_rows.extend(rows)
-            if len(raw_rows) >= count:
-                break
-            next_before = result.get("nextBefore") if isinstance(result, dict) else None
-            if not next_before or next_before in seen_cursors:
-                break
-            seen_cursors.add(str(next_before))
-            before = str(next_before)
-            if page_index + 1 < max_pages:
-                sleep(0.08)
-        candles = [LiveStockCandle(
-            timestamp=item.get("timestamp"),
-            open_price=self._decimal(item.get("openPrice")),
-            high_price=self._decimal(item.get("highPrice")),
-            low_price=self._decimal(item.get("lowPrice")),
-            close_price=self._decimal(item.get("closePrice")),
-            volume=self._decimal(item.get("volume")),
-        ) for item in reversed(raw_rows)]
-        cache_seconds = 1800 if interval == "1m" and count > 2000 else 300
-        with self._candle_lock:
-            self._candle_cache[cache_key] = (monotonic() + cache_seconds, count, candles)
-        return candles[-count:]
+            raw_rows: list[dict] = []
+            before: str | None = None
+            seen_cursors: set[str] = set()
+            max_pages = max(1, (count + 199) // 200)
+            for page_index in range(max_pages):
+                query_values = {"symbol": normalized, "interval": interval}
+                if before:
+                    query_values["before"] = before
+                query = urlencode(query_values)
+                payload = self._authorized_json_request(f"{self.base_url}/api/v1/candles?{query}")
+                result = payload.get("result")
+                rows = result.get("candles") if isinstance(result, dict) else None
+                if not isinstance(rows, list):
+                    raise TossApiError("토스 API 차트 응답 형식이 예상과 다릅니다.")
+                raw_rows.extend(rows)
+                if len(raw_rows) >= count:
+                    break
+                next_before = result.get("nextBefore") if isinstance(result, dict) else None
+                if not next_before or next_before in seen_cursors:
+                    break
+                seen_cursors.add(str(next_before))
+                before = str(next_before)
+                if page_index + 1 < max_pages:
+                    sleep(0.08)
+            candles = [LiveStockCandle(
+                timestamp=item.get("timestamp"),
+                open_price=self._decimal(item.get("openPrice")),
+                high_price=self._decimal(item.get("highPrice")),
+                low_price=self._decimal(item.get("lowPrice")),
+                close_price=self._decimal(item.get("closePrice")),
+                volume=self._decimal(item.get("volume")),
+            ) for item in reversed(raw_rows)]
+            cache_seconds = 1800 if interval == "1m" and count > 2000 else 300
+            with self._candle_lock:
+                self._candle_cache[cache_key] = (monotonic() + cache_seconds, count, candles)
+            return candles[-count:]
 
     def domestic_sparklines(
         self, symbols: list[str], count: int | None = None, period: str = "1D"

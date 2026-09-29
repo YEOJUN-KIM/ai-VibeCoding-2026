@@ -61,6 +61,7 @@ class Settings:
     dart_api_base_url: str
     openai_api_key: str
     ai_news_enabled: bool
+    live_dry_run_ignore_financial_limits: bool
     openai_model: str
     openai_api_base_url: str
     postgres_host: str
@@ -118,6 +119,7 @@ def load_settings() -> Settings:
         dart_api_base_url=os.getenv("DART_API_BASE_URL", "https://opendart.fss.or.kr/api"),
         openai_api_key=os.getenv("OPENAI_API_KEY", ""),
         ai_news_enabled=_boolean("AI_NEWS_ENABLED", False),
+        live_dry_run_ignore_financial_limits=_boolean("LIVE_DRY_RUN_IGNORE_FINANCIAL_LIMITS", False),
         openai_model=os.getenv("OPENAI_MODEL", "gpt-6-luna"),
         openai_api_base_url=os.getenv("OPENAI_API_BASE_URL", "https://api.openai.com/v1"),
         postgres_host=os.getenv("POSTGRES_HOST", "127.0.0.1"),

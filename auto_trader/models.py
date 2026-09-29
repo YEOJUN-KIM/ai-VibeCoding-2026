@@ -125,6 +125,67 @@ class LivePinStatus(BaseModel):
     authorized_until: datetime | None = None
 
 
+class LiveOrderPreviewRequest(BaseModel):
+    symbol: str = Field(pattern=r"^[A-Za-z0-9.\-]{1,12}$")
+    side: OrderSide
+    mode: str = Field(pattern=r"^(STANDARD|SINGLE)$")
+    order_type: str = Field(pattern=r"^(LIMIT|MARKET)$")
+    quantity: Decimal = Field(gt=0, max_digits=18, decimal_places=6)
+    order_price: Decimal | None = Field(default=None, gt=0)
+    trigger_price: Decimal | None = Field(default=None, gt=0)
+    expire_date: date | None = None
+
+
+class LiveOrderPreviewCheck(BaseModel):
+    name: str
+    passed: bool
+    message: str
+
+
+class LiveOrderPreview(BaseModel):
+    approved: bool
+    dry_run: bool = True
+    symbol: str
+    name: str
+    side: OrderSide
+    mode: str
+    order_type: str
+    quantity: Decimal
+    reference_price: Decimal
+    estimated_amount: Decimal
+    checks: list[LiveOrderPreviewCheck]
+    message: str
+
+
+class LiveDryRunConfirmRequest(LiveOrderPreviewRequest):
+    client_order_id: str = Field(min_length=8, max_length=36, pattern=r"^[a-zA-Z0-9\-_]+$")
+
+
+class LiveDryRunOrder(BaseModel):
+    id: int
+    client_order_id: str
+    account_label: str
+    symbol: str
+    stock_name: str
+    side: OrderSide
+    mode: str
+    order_type: str
+    quantity: Decimal
+    order_price: Decimal | None = None
+    trigger_price: Decimal | None = None
+    expire_date: date | None = None
+    reference_price: Decimal
+    estimated_amount: Decimal
+    status: str
+    dry_run: bool
+    validation_snapshot: dict = Field(default_factory=dict)
+    created_at: datetime
+
+
+class DeletedOrderCount(BaseModel):
+    deleted: int
+
+
 class TossConnectionStatus(BaseModel):
     configured: bool
     connected: bool

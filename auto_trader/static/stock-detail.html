@@ -79,14 +79,40 @@
       </section>
       <section class="panel stock-chart-panel detail-section-panel" id="detail-chart-panel" data-detail-panel="chart" data-layout="chart-only">
         <div class="panel-heading"><div><p class="section-kicker" id="detail-period-kicker">1 DAY</p><h2>가격·거래량 차트</h2><p class="subtitle">기간별 캔들과 거래량, 이동평균선으로 시장 흐름을 살펴봅니다.</p></div><span class="market-badge" id="detail-type">-</span></div>
-        <div class="stock-chart-toolbar">
-          <div class="chart-mode-tabs" id="detail-chart-modes" aria-label="차트 종류 선택"><button type="button" data-chart-mode="candle" class="active">캔들</button><button type="button" data-chart-mode="line">라인</button></div>
-          <div class="chart-period-tabs" id="detail-period-tabs" aria-label="차트 기간 선택">
-            <button type="button" data-period="1D" class="active">1일</button><button type="button" data-period="1W">7일</button><button type="button" data-period="1M">1개월</button><button type="button" data-period="3M">3개월</button><button type="button" data-period="1Y">1년</button>
+        <div class="detail-trading-layout">
+          <div class="detail-chart-workspace">
+            <div class="stock-chart-toolbar">
+              <div class="chart-mode-tabs" id="detail-chart-modes" aria-label="차트 종류 선택"><button type="button" data-chart-mode="candle" class="active">캔들</button><button type="button" data-chart-mode="line">라인</button></div>
+              <div class="chart-period-tabs" id="detail-period-tabs" aria-label="차트 기간 선택">
+                <button type="button" data-period="1D" class="active">1일</button><button type="button" data-period="1W">7일</button><button type="button" data-period="1M">1개월</button><button type="button" data-period="3M">3개월</button><button type="button" data-period="1Y">1년</button>
+              </div>
+            </div>
+            <div class="stock-chart-wrap" id="detail-chart"><div class="empty">차트 데이터를 불러오는 중입니다.</div></div>
+            <div class="chart-caption"><span id="chart-start">-</span><span id="chart-range">-</span><span id="chart-end">-</span></div>
           </div>
+          <aside class="live-order-panel" aria-labelledby="live-order-title">
+            <div class="live-order-heading"><div><p class="section-kicker">LIVE ORDER</p><h3 id="live-order-title">주문 패널</h3></div><span class="order-lock-badge">DRY RUN</span></div>
+            <p class="live-order-symbol"><strong id="order-stock-name">종목 로딩 중</strong><span id="order-stock-symbol">-</span></p>
+            <div class="order-side-tabs" id="order-side-tabs" aria-label="매매 구분">
+              <button type="button" class="active buy" data-order-side="BUY">매수</button><button type="button" data-order-side="SELL">매도</button>
+            </div>
+            <div class="order-field-grid">
+              <label>주문 방식<select id="order-mode"><option value="STANDARD">일반 주문</option><option value="SINGLE">목표가 도달 주문</option></select></label>
+              <label class="conditional-order-field" hidden>감시 가격<input id="order-trigger-price" type="number" min="1" step="1" inputmode="numeric"><small>현재가가 이 가격에 닿으면 주문을 생성합니다.</small></label>
+              <label>주문 유형<select id="order-type"><option value="LIMIT">지정가</option><option value="MARKET">시장가</option></select></label>
+              <label>가격<input id="order-price" type="number" min="1" step="1" inputmode="numeric"></label>
+              <label>수량<input id="order-quantity" type="number" min="1" step="1" value="1" inputmode="numeric"></label>
+              <label class="conditional-order-field" hidden>만료일<input id="order-expire-date" type="date"><small>조건이 충족되지 않으면 이 날짜에 자동 만료됩니다.</small></label>
+            </div>
+            <div class="order-estimate"><span>예상 주문 금액</span><strong id="order-estimated-amount">-</strong><small id="order-estimate-note">수수료·세금 제외</small></div>
+            <div class="order-policy-guide"><strong>주문 안전 기준</strong><p id="order-cash-policy">투자 한도를 확인하고 있습니다.</p><small id="order-cash-policy-detail">현금 보유 비율은 주문 후에도 남겨둘 원화 현금의 최소 비중입니다. 기준보다 낮아지는 신규 매수는 검토 단계에서 보류됩니다.</small></div>
+            <div class="order-dry-run-preview" id="order-dry-run-preview">일반 지정가 매수 주문을 준비합니다.</div>
+            <button class="button live-order-submit" id="live-order-preview-button" type="button">주문 검토</button>
+            <div class="order-preview-result" id="order-preview-result" hidden></div>
+            <div class="dry-run-history"><strong>최근 DRY RUN 기록</strong><div id="dry-run-history-list"><span>기록을 불러오는 중입니다.</span></div></div>
+            <p class="live-order-notice">현재는 화면 설계 단계로 실제 주문이 전송되지 않습니다.</p>
+          </aside>
         </div>
-        <div class="stock-chart-wrap" id="detail-chart"><div class="empty">차트 데이터를 불러오는 중입니다.</div></div>
-        <div class="chart-caption"><span id="chart-start">-</span><span id="chart-range">-</span><span id="chart-end">-</span></div>
       </section>
       <section class="panel stock-metrics-panel detail-section-panel" data-detail-panel="market" hidden>
         <div class="panel-heading"><div><p class="section-kicker">MARKET SNAPSHOT</p><h2>마켓 스냅샷</h2><p class="subtitle">최근 봉의 가격과 당일 거래 지표를 간결하게 정리합니다.</p></div></div>
@@ -110,6 +136,30 @@
       <p class="form-message" id="detail-message">토스증권 일봉 데이터를 불러오고 있습니다.</p>
     </main>
     <footer><span>가격 정보는 투자 권유가 아니며 실제 주문 전에 다시 확인하세요.</span><a href="/docs">API 문서 열기</a></footer>
+  </div>
+  <div class="modal-backdrop hidden" id="detail-live-auth-modal" role="dialog" aria-modal="true" aria-labelledby="detail-live-auth-title">
+    <section class="modal-card">
+      <button class="modal-close" id="close-detail-live-modal" type="button" aria-label="닫기">×</button>
+      <p class="eyebrow">LIVE AUTHORIZATION</p>
+      <h2 id="detail-live-auth-title">주문 검토 PIN 인증</h2>
+      <p class="subtitle">실계좌 주문 정보를 검토하기 전에 6자리 LIVE PIN을 확인합니다. 인증은 5분간 유효합니다.</p>
+      <form id="detail-live-pin-form">
+        <label>6자리 PIN<input id="detail-live-pin" type="password" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" required></label>
+        <button class="button primary" type="submit">PIN 인증</button>
+      </form>
+      <p class="form-message" id="detail-live-pin-status">인증 후 주문 검토를 자동으로 다시 실행합니다.</p>
+    </section>
+  </div>
+  <div class="modal-backdrop hidden" id="dry-run-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="dry-run-confirm-title">
+    <section class="modal-card dry-run-confirm-card">
+      <button class="modal-close" id="close-dry-run-confirm" type="button" aria-label="닫기">×</button>
+      <p class="eyebrow">FINAL CONFIRMATION</p>
+      <h2 id="dry-run-confirm-title">DRY RUN 주문 최종 확인</h2>
+      <p class="subtitle">아래 내용을 확인하면 PostgreSQL에 연습 주문 기록을 남깁니다. 토스증권으로 실제 주문은 전송되지 않습니다.</p>
+      <div class="dry-run-confirm-summary" id="dry-run-confirm-summary"></div>
+      <p class="form-message" id="dry-run-confirm-status">확정 후에도 실제 자산에는 변화가 없습니다.</p>
+      <div class="dry-run-confirm-actions"><button class="button secondary" id="cancel-dry-run-confirm" type="button">취소</button><button class="button primary" id="confirm-dry-run-order" type="button">DRY RUN 주문 확정</button></div>
+    </section>
   </div>
 </body>
 </html>

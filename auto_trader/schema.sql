@@ -108,3 +108,51 @@ CREATE TABLE IF NOT EXISTS risk_daily_snapshots (
     opening_asset NUMERIC NOT NULL CHECK (opening_asset >= 0),
     PRIMARY KEY (account_id, trade_date)
 );
+
+CREATE TABLE IF NOT EXISTS broker_accounts (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES admin_users(id) ON DELETE CASCADE,
+    broker TEXT NOT NULL CHECK (broker IN ('TOSS')),
+    external_account_ref TEXT NOT NULL,
+    account_label TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (user_id, broker, external_account_ref)
+);
+CREATE TABLE IF NOT EXISTS live_orders (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES admin_users(id) ON DELETE RESTRICT,
+    broker_account_id BIGINT NOT NULL REFERENCES broker_accounts(id) ON DELETE RESTRICT,
+    client_order_id TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    stock_name TEXT NOT NULL,
+    side TEXT NOT NULL CHECK (side IN ('BUY','SELL')),
+    mode TEXT NOT NULL CHECK (mode IN ('STANDARD','SINGLE')),
+    order_type TEXT NOT NULL CHECK (order_type IN ('LIMIT','MARKET')),
+    quantity NUMERIC NOT NULL CHECK (quantity > 0),
+    order_price NUMERIC CHECK (order_price > 0),
+    trigger_price NUMERIC CHECK (trigger_price > 0),
+    expire_date DATE,
+    reference_price NUMERIC NOT NULL CHECK (reference_price > 0),
+    estimated_amount NUMERIC NOT NULL CHECK (estimated_amount > 0),
+    status TEXT NOT NULL CHECK (status IN ('DRY_RUN_CONFIRMED','CANCELLED')),
+    dry_run BOOLEAN NOT NULL DEFAULT true CHECK (dry_run),
+    validation_snapshot JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (user_id, client_order_id)
+);
+CREATE TABLE IF NOT EXISTS live_order_events (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    live_order_id BIGINT NOT NULL REFERENCES live_orders(id) ON DELETE CASCADE,
+    event_type TEXT NOT NULL,
+    message TEXT NOT NULL,
+    details JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS broker_accounts_user ON broker_accounts(user_id, id);
+CREATE INDEX IF NOT EXISTS live_orders_user_time ON live_orders(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS live_orders_account_time ON live_orders(broker_account_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS live_order_events_order_time ON live_order_events(live_order_id, created_at DESC);
+ALTER TABLE live_orders DROP CONSTRAINT IF EXISTS live_orders_status_check;
+ALTER TABLE live_orders ADD CONSTRAINT live_orders_status_check
+    CHECK (status IN ('DRY_RUN_CONFIRMED','CANCELLED'));

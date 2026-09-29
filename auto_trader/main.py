@@ -2,6 +2,7 @@
 
 import asyncio
 from contextlib import asynccontextmanager
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
@@ -22,8 +23,10 @@ from .auth import (
     session_from_request,
     verify_live_pin,
 )
-from .models import (Account, FavoriteStockCreate, LiveBuyingPower, LiveCandidateList,
-                     LiveFavoriteStock, LivePinRequest, LivePinStatus, LivePortfolio,
+from .models import (Account, DeletedOrderCount, FavoriteStockCreate, LiveBuyingPower, LiveCandidateList,
+                     LiveDryRunConfirmRequest, LiveDryRunOrder, LiveFavoriteStock,
+                     LiveOrderPreview, LiveOrderPreviewCheck, LiveOrderPreviewRequest,
+                     LivePinRequest, LivePinStatus, LivePortfolio,
                      LiveCompanyProfile, LiveStockDetail, LiveStockSearchPage, LoginRequest, NewsDigest, Order, OrderRequest,
                      Quote, RiskSettings, RiskSettingsUpdate, RiskStatus, SessionInfo, Stock,
                      StrategySettingsUpdate, StrategyStatus, TossConnectionStatus)
@@ -38,6 +41,8 @@ from .favorites import add_favorite, favorite_symbols, list_favorites, remove_fa
 from .news import NewsFeedError, news_service
 from .ai_news import ai_news_service
 from .dart import dart_client
+from .live_orders import (cancel_dry_run_order, delete_today_dry_run_orders,
+                          list_dry_run_orders, save_dry_run_order)
 
 
 market = MarketSimulator(symbols=settings.watch_symbols)
@@ -266,6 +271,134 @@ def live_buying_power(_: AuthenticatedUser = Depends(require_user)) -> LiveBuyin
         return toss_client.buying_power()
     except TossApiError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post("/live/orders/preview", response_model=LiveOrderPreview)
+def preview_live_order(
+    payload: LiveOrderPreviewRequest,
+    request: Request,
+    user: AuthenticatedUser = Depends(require_csrf),
+) -> LiveOrderPreview:
+    _, authorized_until = live_pin_status(request, user)
+    if authorized_until is None:
+        raise HTTPException(status_code=403, detail="주문을 검토하려면 LIVE PIN 인증이 필요합니다.")
+    if payload.mode == "SINGLE" and (payload.trigger_price is None or payload.expire_date is None):
+        raise HTTPException(status_code=422, detail="목표가 도달 주문에는 감시 가격과 만료일이 필요합니다.")
+    if payload.mode == "SINGLE" and payload.expire_date < date.today():
+        raise HTTPException(status_code=422, detail="조건주문 만료일은 오늘 이후여야 합니다.")
+    if payload.order_type == "LIMIT" and payload.order_price is None:
+        raise HTTPException(status_code=422, detail="지정가 주문에는 주문 가격이 필요합니다.")
+    try:
+        stock = toss_client.domestic_stock(payload.symbol)
+        if not stock:
+            raise HTTPException(status_code=404, detail="국내 상장 종목을 찾지 못했습니다.")
+        detail = toss_client.domestic_stock_detail(payload.symbol, period="1D")
+        if detail.price is None:
+            raise HTTPException(status_code=409, detail="현재가를 확인할 수 없어 주문을 검토할 수 없습니다.")
+        reference_price = payload.order_price if payload.order_type == "LIMIT" else detail.price
+        estimated_amount = reference_price * payload.quantity
+        portfolio = toss_client.portfolio()
+        buying_power = toss_client.buying_power()
+        config = risk_manager.settings()
+    except TossApiError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    checks: list[LiveOrderPreviewCheck] = []
+    relaxed_financial_limits = settings.live_dry_run_ignore_financial_limits
+
+    def add_check(name: str, passed: bool, success: str, failure: str) -> None:
+        checks.append(LiveOrderPreviewCheck(name=name, passed=passed, message=success if passed else failure))
+
+    def add_financial_check(name: str, passed: bool, success: str, failure: str) -> None:
+        if relaxed_financial_limits:
+            message = success if passed else f"테스트 모드에서 한도 적용을 생략했습니다: {failure}"
+            checks.append(LiveOrderPreviewCheck(name=name, passed=True, message=message))
+        else:
+            add_check(name, passed, success, failure)
+
+    add_check("LIVE PIN", True, "LIVE PIN 인증이 유효합니다.", "LIVE PIN 인증이 필요합니다.")
+    if relaxed_financial_limits:
+        add_check("DRY RUN 테스트", True, "투자 정책 한도만 적용하지 않는 테스트 모드입니다. 실제 현금과 보유 수량은 검사합니다.", "")
+    add_financial_check("주문 금액", estimated_amount <= config.max_order_amount,
+                        "1회 주문 한도 이내입니다.", "1회 최대 주문 금액을 초과합니다.")
+    holding = next((item for item in portfolio.holdings if item.symbol.upper() == payload.symbol.upper()), None)
+    if payload.side.value == "BUY":
+        symbol_value = holding.market_value if holding else Decimal(0)
+        total_asset = portfolio.market_value + buying_power.krw_cash_buying_power
+        remaining_cash = buying_power.krw_cash_buying_power - estimated_amount
+        current_cash_ratio = buying_power.krw_cash_buying_power / total_asset * 100 if total_asset else Decimal(0)
+        cash_ratio = remaining_cash / total_asset * 100 if total_asset else Decimal(0)
+        add_check("주문 가능 금액", estimated_amount <= buying_power.krw_cash_buying_power,
+                  "원화 주문 가능 금액 이내입니다.", "원화 주문 가능 금액이 부족합니다.")
+        add_financial_check("종목별 한도", symbol_value + estimated_amount <= config.max_symbol_amount,
+                            "종목별 투자 한도 이내입니다.", "종목별 최대 투자 금액을 초과합니다.")
+        add_financial_check("전체 투자 한도", portfolio.market_value + estimated_amount <= config.max_total_investment,
+                            "전체 투자 한도 이내입니다.", "전체 최대 투자 금액을 초과합니다.")
+        add_financial_check("최소 현금", cash_ratio >= config.min_cash_ratio,
+                            f"현금 비율 {current_cash_ratio:.1f}% → {cash_ratio:.1f}%로, 기준 {config.min_cash_ratio:.1f}% 이상입니다.",
+                            f"현금 비율 {current_cash_ratio:.1f}% → {cash_ratio:.1f}%로, 안전 기준 {config.min_cash_ratio:.1f}%보다 낮아집니다.")
+    else:
+        available_quantity = holding.quantity if holding else Decimal(0)
+        add_check("보유 수량", payload.quantity <= available_quantity,
+                  "현재 보유 수량 이내입니다.", "매도할 보유 수량이 부족합니다.")
+    approved = all(check.passed for check in checks)
+    return LiveOrderPreview(
+        approved=approved,
+        symbol=payload.symbol.upper(),
+        name=str(stock.get("name", payload.symbol)),
+        side=payload.side,
+        mode=payload.mode,
+        order_type=payload.order_type,
+        quantity=payload.quantity,
+        reference_price=reference_price,
+        estimated_amount=estimated_amount,
+        checks=checks,
+        message=("모든 사전 검사를 통과했습니다. 실제 주문은 전송되지 않았습니다."
+                 if approved else "통과하지 못한 항목이 있습니다. 실제 주문은 전송되지 않았습니다."),
+    )
+
+
+@app.post("/live/orders/dry-run", response_model=LiveDryRunOrder, status_code=201)
+def confirm_live_dry_run_order(
+    payload: LiveDryRunConfirmRequest,
+    request: Request,
+    user: AuthenticatedUser = Depends(require_csrf),
+) -> LiveDryRunOrder:
+    preview = preview_live_order(payload, request, user)
+    if not preview.approved:
+        failed = next((check.message for check in preview.checks if not check.passed), preview.message)
+        raise HTTPException(status_code=409, detail=f"주문 검토를 통과하지 못했습니다: {failed}")
+    try:
+        account = toss_client.selected_account()
+        account_label = toss_client.buying_power().account_label
+        order, _ = save_dry_run_order(user.id, account, account_label, payload, preview)
+        return order
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except TossApiError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.get("/live/orders/dry-run", response_model=list[LiveDryRunOrder])
+def live_dry_run_orders(user: AuthenticatedUser = Depends(require_user)) -> list[LiveDryRunOrder]:
+    return list_dry_run_orders(user.id)
+
+
+@app.post("/live/orders/dry-run/{order_id}/cancel", response_model=LiveDryRunOrder)
+def cancel_live_dry_run_order(
+    order_id: int, user: AuthenticatedUser = Depends(require_csrf)
+) -> LiveDryRunOrder:
+    try:
+        return cancel_dry_run_order(user.id, order_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.delete("/live/orders/dry-run/today", response_model=DeletedOrderCount)
+def delete_live_dry_run_orders_today(
+    user: AuthenticatedUser = Depends(require_csrf),
+) -> DeletedOrderCount:
+    return DeletedOrderCount(deleted=delete_today_dry_run_orders(user.id))
 
 
 @app.get("/live/candidates", response_model=LiveCandidateList)

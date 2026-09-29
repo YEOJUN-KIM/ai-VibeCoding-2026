@@ -40,6 +40,7 @@
         <button type="button" role="tab" aria-selected="true" data-live-tab="portfolio" class="active"><span>01</span>내 자산</button>
         <button type="button" role="tab" aria-selected="false" data-live-tab="favorites"><span>02</span>관심종목</button>
         <button type="button" role="tab" aria-selected="false" data-live-tab="scanner"><span>03</span>마켓 스캐너</button>
+        <button type="button" role="tab" aria-selected="false" data-live-tab="orders"><span>04</span>주문 관리</button>
       </nav>
 
       <section class="panel live-portfolio-panel workspace-section-panel" data-live-panel="portfolio">
@@ -83,6 +84,18 @@
           <tbody id="candidate-body"><tr><td class="empty" colspan="6">종목 후보를 불러오는 중입니다.</td></tr></tbody>
         </table></div>
         <p class="form-message" id="candidate-message">투자 권유가 아닌 종목 탐색 참고 목록입니다.</p>
+      </section>
+
+      <section class="panel live-orders-panel workspace-section-panel" data-live-panel="orders" hidden>
+        <div class="panel-heading">
+          <div><p class="section-kicker">ORDER DESK · DRY RUN</p><h2>주문 관리</h2><p class="subtitle">현재 사용자가 확정한 연습 주문을 조회하고 취소·정리합니다. 실제 토스 주문은 포함되지 않습니다.</p></div>
+          <button class="button danger" id="delete-today-dry-runs" type="button">오늘 테스트 기록 삭제</button>
+        </div>
+        <div class="table-wrap"><table class="live-orders-table">
+          <thead><tr><th>상태</th><th>종목</th><th>주문</th><th>조건·가격</th><th>예상 금액</th><th>생성 시각</th><th>관리</th></tr></thead>
+          <tbody id="live-orders-body"><tr><td class="empty" colspan="7">DRY RUN 주문 기록을 불러오는 중입니다.</td></tr></tbody>
+        </table></div>
+        <p class="form-message" id="live-orders-message">주문 기록은 사용자와 연결 계좌별로 PostgreSQL에 저장됩니다.</p>
       </section>
 
     </main>
