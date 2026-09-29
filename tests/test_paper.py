@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from psycopg import sql
 from auto_trader import database, paper, risk
-from auto_trader.models import OrderRequest, RiskPreset, RiskSettingsUpdate
+from auto_trader.models import OrderRequest, RiskPreset, RiskSettingsUpdate, Stock
 from auto_trader.simulator import MarketSimulator
 from auto_trader.strategy import MovingAverageEngine
 
@@ -106,6 +106,32 @@ class PaperMemoryTests(unittest.TestCase):
         self.assertEqual(order.status.value, "REJECTED")
         self.assertIn("위험 한도", order.message)
 
+    def test_temporary_paper_exceptions_do_not_disable_other_limits(self):
+        broker = paper.PaperBroker(
+            self.market, Decimal("300000"), "paper-exception-test",
+            ignore_min_cash_ratio=True, ignore_daily_order_limit=True,
+        )
+        broker.initialize()
+        manager = risk.RiskManager(self.market)
+        broker.set_risk_manager(manager)
+        manager.update(RiskSettingsUpdate(
+            preset=RiskPreset.CUSTOM, max_order_amount=Decimal("1000000"),
+            max_symbol_amount=Decimal("1000000"), max_total_investment=Decimal("1000000"),
+            min_cash_ratio=Decimal("50"), daily_loss_limit=Decimal("1000000"),
+            daily_order_limit=1, profit_target=Decimal("1000000")))
+        first = broker.submit(OrderRequest(symbol="005930", side="BUY", quantity=1))
+        second = broker.submit(OrderRequest(symbol="005930", side="BUY", quantity=1))
+        self.assertEqual(first.status.value, "FILLED")
+        self.assertEqual(second.status.value, "FILLED")
+        manager.update(RiskSettingsUpdate(
+            preset=RiskPreset.CUSTOM, max_order_amount=Decimal("1"),
+            max_symbol_amount=Decimal("1000000"), max_total_investment=Decimal("1000000"),
+            min_cash_ratio=Decimal("50"), daily_loss_limit=Decimal("1000000"),
+            daily_order_limit=100, profit_target=Decimal("1000000")))
+        rejected = broker.submit(OrderRequest(symbol="005930", side="BUY", quantity=1))
+        self.assertEqual(rejected.status.value, "REJECTED")
+        self.assertIn("1회 최대 주문 금액", rejected.message)
+
     def test_risk_blocks_buy_but_allows_sell(self):
         self.buy()
         self.risk.update(RiskSettingsUpdate(
@@ -127,6 +153,22 @@ class PaperMemoryTests(unittest.TestCase):
         self.assertEqual(self.risk.status().daily_orders, 0)
         self.assertEqual(self.risk.settings(), before)
 
+    def test_live_snapshot_seeds_independent_paper_baseline(self):
+        self.market.upsert_stock(Stock(symbol="487240", name="KODEX AI전력핵심설비"), Decimal("36000"))
+        account = self.broker.load_snapshot(
+            cash=Decimal("50000"),
+            positions=[{"symbol": "487240", "quantity": 2, "average_price": Decimal("35000"),
+                        "current_price": Decimal("36000")}],
+        )
+        self.assertEqual(account.cash, Decimal("50000"))
+        self.assertEqual(account.initial_cash, Decimal("122000"))
+        self.assertEqual(account.positions[0].quantity, 2)
+        self.market._prices["487240"] = Decimal("37000")
+        self.assertEqual(self.broker.account().total_profit, Decimal("2000"))
+        reset = self.broker.reset_practice()
+        self.assertEqual(reset.positions[0].quantity, 2)
+        self.assertEqual(reset.total_profit, Decimal("2000"))
+
     def test_strategy_configuration(self):
         engine = MovingAverageEngine(self.market, self.broker)
         engine.configure(interval_seconds=3, short_period=7, long_period=30, order_quantity=2)
@@ -135,6 +177,22 @@ class PaperMemoryTests(unittest.TestCase):
                          (3, 7, 30, 2))
         with self.assertRaises(ValueError):
             engine.configure(interval_seconds=2, short_period=20, long_period=5, order_quantity=1)
+
+    def test_strategy_can_be_limited_to_selected_symbol(self):
+        engine = MovingAverageEngine(self.market, self.broker)
+        engine.configure(interval_seconds=2, short_period=2, long_period=3, order_quantity=1,
+                         target_symbol="005930")
+        engine.step()
+        self.assertEqual([item.symbol for item in engine.status().snapshots], ["005930"])
+
+    def test_strategy_can_watch_multiple_selected_symbols(self):
+        engine = MovingAverageEngine(self.market, self.broker)
+        engine.configure(interval_seconds=2, short_period=2, long_period=3, order_quantity=1,
+                         target_symbols=["005930", "000660"])
+        engine.step()
+        self.assertEqual(
+            {item.symbol for item in engine.status().snapshots}, {"005930", "000660"},
+        )
 
     def test_rounding_and_zero_capital(self):
         self.relax_risk()

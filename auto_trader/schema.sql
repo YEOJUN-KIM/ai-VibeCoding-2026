@@ -113,6 +113,16 @@ CREATE TABLE IF NOT EXISTS live_strategies (
     UNIQUE(user_id,name)
 );
 CREATE INDEX IF NOT EXISTS live_strategies_user ON live_strategies(user_id,updated_at DESC);
+CREATE TABLE IF NOT EXISTS live_strategy_symbols (
+    strategy_id BIGINT NOT NULL REFERENCES live_strategies(id) ON DELETE CASCADE,
+    symbol TEXT NOT NULL,
+    stock_name TEXT NOT NULL,
+    position INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (strategy_id, symbol)
+);
+INSERT INTO live_strategy_symbols(strategy_id,symbol,stock_name,position)
+SELECT id,symbol,stock_name,0 FROM live_strategies ON CONFLICT DO NOTHING;
+CREATE INDEX IF NOT EXISTS live_strategy_symbols_strategy ON live_strategy_symbols(strategy_id,position);
 
 CREATE TABLE IF NOT EXISTS risk_settings (
     account_id BIGINT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,

@@ -61,3 +61,13 @@ class LiveStrategyStoreTests(unittest.TestCase):
         live_strategies.save_strategy(self.user_id, self.payload(), "삼성전자")
         with self.assertRaisesRegex(ValueError, "같은 이름"):
             live_strategies.save_strategy(self.user_id, self.payload(symbol="000660"), "SK하이닉스")
+
+    def test_strategy_stores_multiple_target_symbols_in_order(self):
+        targets = [("005930", "삼성전자"), ("000660", "SK하이닉스")]
+        created = live_strategies.save_strategy(
+            self.user_id, self.payload(symbols=[item[0] for item in targets]),
+            "삼성전자", targets=targets,
+        )
+        self.assertEqual(created.symbols, ["005930", "000660"])
+        loaded = live_strategies.list_strategies(self.user_id)[0]
+        self.assertEqual([item.stock_name for item in loaded.targets], ["삼성전자", "SK하이닉스"])

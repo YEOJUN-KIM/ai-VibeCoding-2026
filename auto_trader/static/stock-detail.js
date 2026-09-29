@@ -220,9 +220,9 @@ function updateOrderEstimate() {
   if (conditionalOrder) {
     const triggerPrice = Math.max(0, Number($("#order-trigger-price").value) || 0);
     const triggerLabel = triggerPrice ? won.format(triggerPrice) : "감시 가격";
-    $("#order-dry-run-preview").textContent = `${triggerLabel} 도달 시 ${typeLabel} ${sideLabel} · ${integer.format(quantity)}주 · DRY RUN`;
+    $("#order-dry-run-preview").textContent = `${triggerLabel} 도달 시 ${typeLabel} ${sideLabel} · ${integer.format(quantity)}주 · 실제 주문`;
   } else {
-    $("#order-dry-run-preview").textContent = `일반 ${typeLabel} ${sideLabel} · ${integer.format(quantity)}주 · DRY RUN`;
+    $("#order-dry-run-preview").textContent = `일반 ${typeLabel} ${sideLabel} · ${integer.format(quantity)}주 · 실제 주문`;
   }
 }
 
@@ -747,7 +747,7 @@ $("#live-order-preview-button").addEventListener("click", async () => {
     result.className = `order-preview-result ${preview.approved ? "approved" : "rejected"}`;
     result.replaceChildren();
     const heading = document.createElement("strong");
-    heading.textContent = preview.approved ? "DRY RUN 검토 통과" : "DRY RUN 검토 보류";
+    heading.textContent = preview.approved ? "실제 주문 사전 검토 통과" : "실제 주문 사전 검토 보류";
     const message = document.createElement("p");
     message.textContent = preview.message;
     const checks = document.createElement("ul");
@@ -807,12 +807,13 @@ function openDryRunConfirmModal() {
     row.append(label, value);
     return row;
   }));
-  $("#dry-run-confirm-status").textContent = "확정 후에도 실제 자산에는 변화가 없습니다.";
   const realEligible = liveTradingReady && approvedOrderPayload.mode === "STANDARD"
     && approvedOrderPayload.order_type === "LIMIT" && Number.isInteger(Number(approvedOrderPayload.quantity));
-  $("#real-order-confirmation").classList.toggle("hidden", !realEligible);
-  $("#confirm-real-order").classList.toggle("hidden", !realEligible);
+  $("#dry-run-confirm-status").textContent = realEligible ? "실제 주문 전송 전 마지막 확인 단계입니다." : "실제 주문 안전 잠금이 해제되어야 전송할 수 있습니다.";
+  $("#real-order-confirmation").classList.remove("hidden");
+  $("#confirm-real-order").classList.remove("hidden");
   $("#real-order-confirm-checkbox").checked = false;
+  $("#real-order-confirm-checkbox").disabled = !realEligible;
   $("#confirm-real-order").disabled = true;
   $("#dry-run-confirm-modal").classList.remove("hidden");
 }
@@ -949,17 +950,16 @@ async function initialize() {
     csrfToken = session.csrf_token;
     $("#current-user").textContent = session.username;
     const risk = await api("/risk");
-    $("#order-cash-policy").textContent = "현재 DRY RUN 투자 한도 테스트 모드";
-    $("#order-cash-policy-detail").textContent = `검증을 위해 1회·종목별·전체 투자 한도와 최소 현금 비율만 임시로 적용하지 않습니다. 실제 주문 가능 현금과 매도 보유 수량은 항상 검사합니다. 원래 안전 기준은 주문 후 현금 ${Number(risk.settings.min_cash_ratio).toFixed(0)}% 이상입니다.`;
+    $("#order-cash-policy").textContent = "실제 주문 안전 한도 적용";
+    $("#order-cash-policy-detail").textContent = `실제 주문은 현금·보유 수량과 1회·종목별·전체 투자 한도, 주문 후 최소 현금 ${Number(risk.settings.min_cash_ratio).toFixed(0)}% 기준을 모두 검사합니다.`;
     const readiness = await api("/live/orders/real/readiness");
     liveTradingReady = readiness.configured && readiness.enabled;
-    $("#order-lock-badge").textContent = liveTradingReady ? "LIVE ENABLED" : "DRY RUN";
+    $("#order-lock-badge").textContent = liveTradingReady ? "LIVE ENABLED" : "LIVE LOCKED";
     $("#live-order-notice").textContent = readiness.message;
     activeSymbol = decodeURIComponent(window.location.pathname.split("/").filter(Boolean).at(-1) || "");
     const requestedSection = window.location.hash.slice(1);
     if (["chart", "company", "market", "news"].includes(requestedSection)) selectDetailSection(requestedSection);
     await loadDetail(activePeriod);
-    await loadDryRunHistory();
     prefetchNearbyPeriods();
   } catch (error) {
     $("#detail-message").textContent = error.message;

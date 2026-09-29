@@ -97,26 +97,34 @@ class RiskManager:
     def status(self) -> RiskStatus:
         config = self.settings()
         cash, invested, total_asset, daily_profit, orders = self._metrics()
-        reason = self.global_block_reason(config, daily_profit, orders)
+        reason = self.global_block_reason(
+            config, daily_profit, orders,
+            ignore_daily_order_limit=bool(getattr(self.broker, "ignore_daily_order_limit", False)),
+        )
         return RiskStatus(settings=config, invested_amount=invested,
                           cash_ratio=(cash / total_asset * 100 if total_asset else Decimal(0)),
                           daily_profit=daily_profit, daily_orders=orders,
                           new_buys_allowed=reason is None, block_reason=reason)
 
     @staticmethod
-    def global_block_reason(config, daily_profit, orders):
+    def global_block_reason(config, daily_profit, orders, *, ignore_daily_order_limit=False):
         if daily_profit <= -config.daily_loss_limit:
             return "일일 손실 한도에 도달했습니다."
         if daily_profit >= config.profit_target:
             return "수익 목표에 도달했습니다."
-        if orders >= config.daily_order_limit:
+        if not ignore_daily_order_limit and orders >= config.daily_order_limit:
             return "일일 주문 횟수 한도에 도달했습니다."
         return None
 
-    def check_buy(self, *, symbol: str, amount: Decimal, fee: Decimal) -> str | None:
+    def check_buy(self, *, symbol: str, amount: Decimal, fee: Decimal,
+                  ignore_min_cash_ratio: bool = False,
+                  ignore_daily_order_limit: bool = False) -> str | None:
         config = self.settings()
         cash, invested, total_asset, daily_profit, orders = self._metrics()
-        reason = self.global_block_reason(config, daily_profit, orders)
+        reason = self.global_block_reason(
+            config, daily_profit, orders,
+            ignore_daily_order_limit=ignore_daily_order_limit,
+        )
         if reason:
             return reason
         symbol_value = self.broker.position_value(symbol)
@@ -127,6 +135,6 @@ class RiskManager:
         if invested + amount > config.max_total_investment:
             return "전체 최대 투자 금액을 초과했습니다."
         remaining_cash = cash - amount - fee
-        if total_asset and remaining_cash / total_asset * 100 < config.min_cash_ratio:
+        if not ignore_min_cash_ratio and total_asset and remaining_cash / total_asset * 100 < config.min_cash_ratio:
             return "최소 현금 보유 비율 아래로 내려갑니다."
         return None

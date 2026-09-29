@@ -54,6 +54,13 @@ class MarketSimulator:
         self._stocks = {stock.symbol: stock for stock in stocks}
         self._prices = {stock.symbol: Decimal(prices[stock.symbol]) for stock in stocks}
 
+    def upsert_stock(self, stock: Stock, price: Decimal) -> None:
+        """실제 자산 스냅샷이나 저장 전략의 종목을 모의시장에 추가한다."""
+        if Decimal(price) <= 0:
+            raise ValueError("모의시장 종목 가격은 0보다 커야 합니다.")
+        self._stocks[stock.symbol] = stock
+        self._prices[stock.symbol] = Decimal(price)
+
     def has_symbol(self, symbol: str) -> bool:
         return symbol in self._stocks
 

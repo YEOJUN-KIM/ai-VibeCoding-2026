@@ -2,7 +2,7 @@
 
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import date, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -29,7 +29,7 @@ from .models import (Account, DeletedOrderCount, FavoriteStockCreate, LiveBuying
                      LivePinRequest, LivePinStatus, LivePortfolio,
                      LiveCompanyProfile, LiveRealOrderConfirmRequest, LiveStockDetail,
                      LiveStockSearchPage, LiveStrategy, LiveStrategyWrite, LiveTradingReadiness,
-                     LoginRequest, NewsDigest, Order, OrderRequest,
+                     LoginRequest, NewsDigest, Order, OrderRequest, PaperWorkspaceStatus,
                      Quote, RiskSettings, RiskSettingsUpdate, RiskStatus, SessionInfo, Stock,
                      StrategySettingsUpdate, StrategyStatus, TossConnectionStatus)
 from .paper import PaperBroker
@@ -52,7 +52,9 @@ from .live_strategies import delete_strategy, list_strategies, save_strategy
 
 market = MarketSimulator(symbols=settings.watch_symbols)
 broker = PaperBroker(market, initial_cash=settings.paper_initial_cash,
-                     fee_rate=settings.paper_fee_rate, sell_tax_rate=settings.paper_sell_tax_rate)
+                     fee_rate=settings.paper_fee_rate, sell_tax_rate=settings.paper_sell_tax_rate,
+                     ignore_min_cash_ratio=settings.paper_ignore_min_cash_ratio,
+                     ignore_daily_order_limit=settings.paper_ignore_daily_order_limit)
 engine = MovingAverageEngine(
     market,
     broker,
@@ -64,6 +66,9 @@ engine = MovingAverageEngine(
 risk_manager = RiskManager(market)
 toss_client = TossClient()
 watchlist_source = "fallback"
+paper_snapshot_at = None
+paper_source_account_label = None
+paper_selected_strategy: LiveStrategy | None = None
 static_dir = Path(__file__).parent / "static"
 
 
@@ -369,6 +374,18 @@ def _strategy_stock_name(symbol: str) -> str:
     return str(stock.get("name") or symbol.upper())
 
 
+def _strategy_targets(payload: LiveStrategyWrite) -> list[tuple[str, str]]:
+    symbols = list(dict.fromkeys(symbol.upper() for symbol in (payload.symbols or [payload.symbol])))
+    if not symbols or len(symbols) > 20:
+        raise HTTPException(status_code=422, detail="전략 대상 종목은 1개 이상 20개 이하로 선택하세요.")
+    targets = []
+    for symbol in symbols:
+        if not symbol.isdigit() or len(symbol) != 6:
+            raise HTTPException(status_code=422, detail=f"올바르지 않은 국내 종목코드입니다: {symbol}")
+        targets.append((symbol, _strategy_stock_name(symbol)))
+    return targets
+
+
 @app.post("/settings/strategies", response_model=LiveStrategy, status_code=201)
 def create_strategy_settings(
     payload: LiveStrategyWrite, user: AuthenticatedUser = Depends(require_csrf),
@@ -376,7 +393,8 @@ def create_strategy_settings(
     if payload.execution_mode == "LIVE" and payload.enabled:
         raise HTTPException(status_code=409, detail="LIVE 자동매매 엔진이 준비될 때까지 실제 실행 전략은 활성화할 수 없습니다.")
     try:
-        return save_strategy(user.id, payload, _strategy_stock_name(payload.symbol))
+        targets = _strategy_targets(payload)
+        return save_strategy(user.id, payload, targets[0][1], targets=targets)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -389,9 +407,8 @@ def update_strategy_settings(
     if payload.execution_mode == "LIVE" and payload.enabled:
         raise HTTPException(status_code=409, detail="LIVE 자동매매 엔진이 준비될 때까지 실제 실행 전략은 활성화할 수 없습니다.")
     try:
-        return save_strategy(
-            user.id, payload, _strategy_stock_name(payload.symbol), strategy_id=strategy_id,
-        )
+        targets = _strategy_targets(payload)
+        return save_strategy(user.id, payload, targets[0][1], strategy_id=strategy_id, targets=targets)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -529,7 +546,7 @@ def preview_live_order(
 ) -> LiveOrderPreview:
     return _preview_live_order(
         payload, request, user,
-        relax_financial_limits=settings.live_dry_run_ignore_financial_limits,
+        relax_financial_limits=False,
     )
 
 
@@ -818,6 +835,78 @@ def stocks(_: AuthenticatedUser = Depends(require_user)) -> list[Stock]:
     return market.stocks()
 
 
+@app.get("/paper/workspace", response_model=PaperWorkspaceStatus)
+def paper_workspace(_: AuthenticatedUser = Depends(require_user)) -> PaperWorkspaceStatus:
+    return PaperWorkspaceStatus(
+        account=broker.account(), snapshot_ready=paper_snapshot_at is not None,
+        snapshot_at=paper_snapshot_at, source_account_label=paper_source_account_label,
+        selected_strategy_id=paper_selected_strategy.id if paper_selected_strategy else None,
+        selected_strategy_name=paper_selected_strategy.name if paper_selected_strategy else None,
+        selected_symbol=paper_selected_strategy.symbol if paper_selected_strategy else None,
+        selected_symbols=[target.symbol for target in paper_selected_strategy.targets] if paper_selected_strategy else [],
+    )
+
+
+@app.post("/paper/snapshot/live", response_model=PaperWorkspaceStatus)
+async def snapshot_live_account(_: AuthenticatedUser = Depends(require_csrf)) -> PaperWorkspaceStatus:
+    global paper_snapshot_at, paper_source_account_label
+    await engine.stop()
+    try:
+        portfolio, buying_power = await asyncio.gather(
+            asyncio.to_thread(toss_client.portfolio), asyncio.to_thread(toss_client.buying_power),
+        )
+    except TossApiError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    positions = []
+    for holding in portfolio.holdings:
+        if holding.market_country != "KR" or holding.currency != "KRW":
+            continue
+        quantity = int(holding.quantity)
+        if quantity <= 0:
+            continue
+        market.upsert_stock(
+            Stock(symbol=holding.symbol, name=holding.name, market="KRX"), holding.last_price,
+        )
+        positions.append({
+            "symbol": holding.symbol, "quantity": quantity,
+            "average_price": holding.average_purchase_price, "current_price": holding.last_price,
+        })
+    broker.load_snapshot(cash=buying_power.krw_cash_buying_power, positions=positions)
+    paper_snapshot_at = datetime.now().astimezone()
+    paper_source_account_label = portfolio.account_label
+    return paper_workspace(_)
+
+
+@app.post("/paper/strategies/{strategy_id}/select", response_model=PaperWorkspaceStatus)
+async def select_paper_strategy(
+    strategy_id: int, user: AuthenticatedUser = Depends(require_csrf),
+) -> PaperWorkspaceStatus:
+    global paper_selected_strategy
+    await engine.stop()
+    strategy = next((item for item in list_strategies(user.id) if item.id == strategy_id), None)
+    if strategy is None:
+        raise HTTPException(status_code=404, detail="저장된 전략을 찾지 못했습니다.")
+    if strategy.execution_mode != "DRY_RUN":
+        raise HTTPException(status_code=409, detail="PAPER에서는 DRY RUN 전략만 선택할 수 있습니다.")
+    target_symbols = []
+    try:
+        for target in strategy.targets:
+            detail = await asyncio.to_thread(toss_client.domestic_stock_detail, target.symbol, "1D")
+            if detail.price is None:
+                raise HTTPException(status_code=409, detail=f"{target.stock_name}의 현재가를 확인할 수 없습니다.")
+            market.upsert_stock(Stock(symbol=target.symbol, name=target.stock_name, market="KRX"), detail.price)
+            target_symbols.append(target.symbol)
+    except TossApiError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    engine.configure(
+        interval_seconds=max(2, min(strategy.cooldown_minutes * 60 or 2, 60)),
+        short_period=strategy.short_period, long_period=strategy.long_period,
+        order_quantity=strategy.order_quantity, target_symbols=target_symbols,
+    )
+    paper_selected_strategy = strategy
+    return paper_workspace(user)
+
+
 @app.get("/quotes", response_model=list[Quote])
 def quotes(move: bool = False, _: AuthenticatedUser = Depends(require_user)) -> list[Quote]:
     if move:
@@ -891,6 +980,10 @@ def strategy_settings(
 
 @app.post("/strategy/start", response_model=StrategyStatus)
 async def strategy_start(_: AuthenticatedUser = Depends(require_csrf)) -> StrategyStatus:
+    if paper_snapshot_at is None:
+        raise HTTPException(status_code=409, detail="먼저 현재 실제 자산을 모의계좌에 복사하세요.")
+    if paper_selected_strategy is None:
+        raise HTTPException(status_code=409, detail="검증할 저장 전략을 먼저 선택하세요.")
     await engine.start()
     return engine.status()
 

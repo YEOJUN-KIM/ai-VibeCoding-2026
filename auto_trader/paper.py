@@ -13,7 +13,8 @@ from .simulator import MarketSimulator, SAMPLE_STOCKS
 class PaperBroker:
     def __init__(self, market: MarketSimulator, initial_cash=Decimal("10000000"),
                  account_name="paper-default", fee_rate=Decimal("0"),
-                 sell_tax_rate=Decimal("0")):
+                 sell_tax_rate=Decimal("0"), ignore_min_cash_ratio=False,
+                 ignore_daily_order_limit=False):
         for rate in (fee_rate, sell_tax_rate):
             if not rate.is_finite() or not Decimal(0) <= rate <= Decimal(1):
                 raise ValueError("비용률은 0부터 1 사이의 유한한 값이어야 합니다.")
@@ -21,18 +22,22 @@ class PaperBroker:
             raise ValueError("수수료와 매도 세금 비율의 합은 1 이하여야 합니다.")
         self.fee_rate = fee_rate
         self.sell_tax_rate = sell_tax_rate
+        self.ignore_min_cash_ratio = bool(ignore_min_cash_ratio)
+        self.ignore_daily_order_limit = bool(ignore_daily_order_limit)
         self.market = market
         self.initial_cash = Decimal(initial_cash)
         self.account_name = account_name
         self.account_id = None
         self.risk_manager = None
         self._lock = RLock()
+        self._seed_cash = self.initial_cash
+        self._seed_positions: dict[str, dict[str, Decimal | int]] = {}
         self._reset_memory()
 
     def _reset_memory(self) -> None:
         with self._lock:
-            self._cash = self.initial_cash
-            self._positions: dict[str, dict[str, Decimal | int]] = {}
+            self._cash = self._seed_cash
+            self._positions = {symbol: dict(position) for symbol, position in self._seed_positions.items()}
             self._orders: list[Order] = []
             self._requests: dict[str, Order] = {}
             self._next_order_id = 1
@@ -75,7 +80,9 @@ class PaperBroker:
             tax = ((amount * self.sell_tax_rate).quantize(Decimal("1"), rounding=ROUND_DOWN)
                    if request.side == OrderSide.SELL else Decimal(0))
             status, message = OrderStatus.FILLED, "가상 체결 완료"
-            risk_message = (self.risk_manager.check_buy(symbol=request.symbol, amount=amount, fee=fee)
+            risk_message = (self.risk_manager.check_buy(symbol=request.symbol, amount=amount, fee=fee,
+                            ignore_min_cash_ratio=self.ignore_min_cash_ratio,
+                            ignore_daily_order_limit=self.ignore_daily_order_limit)
                             if request.side == OrderSide.BUY and self.risk_manager else None)
             if risk_message:
                 status, message = OrderStatus.REJECTED, "위험 한도: " + risk_message
@@ -137,6 +144,30 @@ class PaperBroker:
 
     def reset_practice(self):
         self._reset_memory()
+        if self.risk_manager:
+            self.risk_manager.reset_daily_baseline()
+        return self.account()
+
+    def load_snapshot(self, *, cash: Decimal, positions: list[dict]) -> Account:
+        """실제 계좌 값을 복사해 이후 실제 계좌와 분리된 PAPER 기준선을 만든다."""
+        if cash < 0:
+            raise ValueError("모의계좌 현금은 0원 이상이어야 합니다.")
+        seeded: dict[str, dict[str, Decimal | int]] = {}
+        market_value = Decimal(0)
+        for item in positions:
+            symbol = str(item["symbol"])
+            quantity = int(Decimal(str(item["quantity"])))
+            average = Decimal(str(item["average_price"]))
+            current = Decimal(str(item["current_price"]))
+            if quantity <= 0 or average < 0 or current <= 0:
+                continue
+            seeded[symbol] = {"quantity": quantity, "average_price": average}
+            market_value += current * quantity
+        with self._lock:
+            self._seed_cash = Decimal(cash)
+            self._seed_positions = seeded
+            self.initial_cash = self._seed_cash + market_value
+            self._reset_memory()
         if self.risk_manager:
             self.risk_manager.reset_daily_baseline()
         return self.account()

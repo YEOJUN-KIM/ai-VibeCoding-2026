@@ -46,6 +46,8 @@ class Settings:
     paper_fee_rate: Decimal
     paper_sell_tax_rate: Decimal
     paper_initial_cash: Decimal
+    paper_ignore_min_cash_ratio: bool
+    paper_ignore_daily_order_limit: bool
     watch_symbols: tuple[str, ...]
     strategy_interval_seconds: int
     strategy_short_period: int
@@ -105,6 +107,8 @@ def load_settings() -> Settings:
         paper_fee_rate=_decimal("PAPER_FEE_RATE", "0.00015"),
         paper_sell_tax_rate=_decimal("PAPER_SELL_TAX_RATE", "0.002"),
         paper_initial_cash=_decimal("PAPER_INITIAL_CASH", "10000000"),
+        paper_ignore_min_cash_ratio=_boolean("PAPER_IGNORE_MIN_CASH_RATIO", False),
+        paper_ignore_daily_order_limit=_boolean("PAPER_IGNORE_DAILY_ORDER_LIMIT", False),
         watch_symbols=watch_symbols,
         strategy_interval_seconds=_integer("STRATEGY_INTERVAL_SECONDS", 2),
         strategy_short_period=_integer("STRATEGY_SHORT_PERIOD", 5),

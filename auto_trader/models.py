@@ -74,6 +74,17 @@ class Account(BaseModel):
     positions: list[Position]
 
 
+class PaperWorkspaceStatus(BaseModel):
+    account: Account
+    snapshot_ready: bool = False
+    snapshot_at: datetime | None = None
+    source_account_label: str | None = None
+    selected_strategy_id: int | None = None
+    selected_strategy_name: str | None = None
+    selected_symbol: str | None = None
+    selected_symbols: list[str] = Field(default_factory=list)
+
+
 class StrategySnapshot(BaseModel):
     symbol: str
     name: str
@@ -382,6 +393,12 @@ class LiveStrategyWrite(BaseModel):
     trading_end: str = Field(default="15:20", pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
     daily_order_limit: int = Field(default=3, ge=1, le=100)
     cooldown_minutes: int = Field(default=30, ge=0, le=10080)
+    symbols: list[str] = Field(default_factory=list, max_length=20)
+
+
+class LiveStrategyTarget(BaseModel):
+    symbol: str
+    stock_name: str
 
 
 class LiveStrategy(LiveStrategyWrite):
@@ -389,6 +406,7 @@ class LiveStrategy(LiveStrategyWrite):
     stock_name: str
     created_at: datetime
     updated_at: datetime
+    targets: list[LiveStrategyTarget] = Field(default_factory=list)
 
 
 class FavoriteStockCreate(BaseModel):

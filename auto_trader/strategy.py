@@ -43,6 +43,7 @@ class MovingAverageEngine:
         self._previous_trend: dict[str, str] = {}
         self._snapshots: dict[str, StrategySnapshot] = {}
         self._signals: list[SignalEvent] = []
+        self.target_symbols: list[str] = []
 
     async def start(self) -> bool:
         if self.running:
@@ -84,7 +85,9 @@ class MovingAverageEngine:
 
     def step(self) -> None:
         self.tick_count += 1
-        for quote in self.market.quotes(move=True):
+        quotes = ([self.market.quote(symbol, move=True) for symbol in self.target_symbols]
+                  if self.target_symbols else self.market.quotes(move=True))
+        for quote in quotes:
             history = self._history[quote.symbol]
             history.append(quote.price)
             stock = next(item for item in self.market.stocks() if item.symbol == quote.symbol)
@@ -143,7 +146,8 @@ class MovingAverageEngine:
         self._signals = self._signals[-20:]
 
     def configure(self, *, interval_seconds: int, short_period: int, long_period: int,
-                  order_quantity: int) -> None:
+                  order_quantity: int, target_symbol: str | None = None,
+                  target_symbols: list[str] | None = None) -> None:
         if self.running:
             raise ValueError("자동매매를 중지한 뒤 전략을 변경하세요.")
         if short_period >= long_period:
@@ -152,6 +156,7 @@ class MovingAverageEngine:
         self.short_period = short_period
         self.long_period = long_period
         self.order_quantity = order_quantity
+        self.target_symbols = list(dict.fromkeys(target_symbols or ([target_symbol] if target_symbol else [])))
         self._history = {stock.symbol: deque(maxlen=long_period) for stock in self.market.stocks()}
         self._previous_trend.clear()
         self._snapshots.clear()
