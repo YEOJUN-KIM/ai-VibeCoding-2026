@@ -11,6 +11,7 @@ from auto_trader.models import (
     LiveDryRunConfirmRequest,
     LiveOrderPreview,
     LiveOrderPreviewCheck,
+    LiveRealOrderConfirmRequest,
     OrderSide,
 )
 
@@ -72,6 +73,24 @@ class LiveOrderStoreTests(unittest.TestCase):
             message="검토 통과",
         )
 
+    @staticmethod
+    def real_payload(client_order_id="live-order-001"):
+        return LiveRealOrderConfirmRequest(
+            client_order_id=client_order_id, confirmation="실제 주문", symbol="005930",
+            side=OrderSide.BUY, mode="STANDARD", order_type="LIMIT", quantity=Decimal("1"),
+            order_price=Decimal("70000"),
+        )
+
+    @staticmethod
+    def real_preview():
+        return LiveOrderPreview(
+            approved=True, dry_run=False, symbol="005930", name="삼성전자", side=OrderSide.BUY,
+            mode="STANDARD", order_type="LIMIT", quantity=Decimal("1"),
+            reference_price=Decimal("70000"), estimated_amount=Decimal("70000"),
+            checks=[LiveOrderPreviewCheck(name="LIVE PIN", passed=True, message="인증됨")],
+            message="실제 주문 검토 통과",
+        )
+
     def test_save_is_idempotent_and_scoped_to_user(self):
         account = {"accountSeq": 3}
         first, created = live_orders.save_dry_run_order(
@@ -105,3 +124,59 @@ class LiveOrderStoreTests(unittest.TestCase):
         self.assertEqual(live_orders.cancel_dry_run_order(self.user_id, order.id).status, "CANCELLED")
         self.assertEqual(live_orders.delete_today_dry_run_orders(self.user_id), 1)
         self.assertEqual(live_orders.list_dry_run_orders(self.user_id), [])
+
+    def test_real_order_reserves_id_and_tracks_broker_status(self):
+        order, created = live_orders.prepare_real_order(
+            self.user_id, {"accountSeq": 3}, "****1234",
+            self.real_payload(), self.real_preview(),
+        )
+        duplicate, duplicate_created = live_orders.prepare_real_order(
+            self.user_id, {"accountSeq": 3}, "****1234",
+            self.real_payload(), self.real_preview(),
+        )
+        self.assertTrue(created)
+        self.assertFalse(duplicate_created)
+        self.assertEqual(order.id, duplicate.id)
+        submitted = live_orders.update_real_order(
+            self.user_id, order.id, status="PENDING", external_order_id="toss-order-1",
+            broker_status="PENDING", message="접수", details={
+                "status": "PENDING", "execution": {
+                    "filledQuantity": "0", "averageFilledPrice": None,
+                    "filledAmount": None, "commission": None, "tax": None,
+                },
+            },
+        )
+        self.assertFalse(submitted.dry_run)
+        self.assertEqual(submitted.order_source, "MANUAL")
+        self.assertEqual(submitted.external_order_id, "toss-order-1")
+        self.assertEqual(live_orders.real_order_for_user(self.user_id, order.id).status, "PENDING")
+        self.assertEqual(len(live_orders.list_real_orders(self.user_id)), 1)
+        self.assertEqual(submitted.reconciliation_status, "MATCHED")
+        self.assertIsNotNone(submitted.last_synced_at)
+        self.assertEqual(submitted.filled_quantity, 0)
+        self.assertEqual(
+            len(live_orders.orders_for_reconciliation("3", active_only=True)), 1
+        )
+
+    def test_real_order_source_is_server_controlled(self):
+        auto_order, created = live_orders.prepare_real_order(
+            self.user_id, {"accountSeq": 3}, "****1234",
+            self.real_payload("live-auto-001"), self.real_preview(), order_source="AUTO",
+        )
+        self.assertTrue(created)
+        self.assertEqual(auto_order.order_source, "AUTO")
+        live_orders.update_real_order(
+            self.user_id, auto_order.id, status="FILLED", external_order_id="auto-toss-1",
+            broker_status="FILLED", message="자동 주문 체결", details={
+                "status": "FILLED", "execution": {
+                    "filledQuantity": "1", "averageFilledPrice": "70000",
+                    "filledAmount": "70000", "commission": "5", "tax": "0",
+                },
+            },
+        )
+        self.assertEqual(live_orders.auto_position_quantities(self.user_id)["005930"], 1)
+        with self.assertRaisesRegex(ValueError, "주문 출처"):
+            live_orders.prepare_real_order(
+                self.user_id, {"accountSeq": 3}, "****1234",
+                self.real_payload("live-invalid-001"), self.real_preview(), order_source="OTHER",
+            )

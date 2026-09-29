@@ -18,6 +18,7 @@ const detailRequests = new Map();
 let approvedOrderPayload = null;
 let approvedOrderPreview = null;
 let pendingClientOrderId = null;
+let liveTradingReady = false;
 const periodLabels = {
   "1D": ["1일", "1 DAY"], "1W": ["7일", "7 DAYS"], "1M": ["1개월", "1 MONTH"],
   "3M": ["3개월", "3 MONTHS"], "1Y": ["1년", "1 YEAR"],
@@ -807,6 +808,12 @@ function openDryRunConfirmModal() {
     return row;
   }));
   $("#dry-run-confirm-status").textContent = "확정 후에도 실제 자산에는 변화가 없습니다.";
+  const realEligible = liveTradingReady && approvedOrderPayload.mode === "STANDARD"
+    && approvedOrderPayload.order_type === "LIMIT" && Number.isInteger(Number(approvedOrderPayload.quantity));
+  $("#real-order-confirmation").classList.toggle("hidden", !realEligible);
+  $("#confirm-real-order").classList.toggle("hidden", !realEligible);
+  $("#real-order-confirm-checkbox").checked = false;
+  $("#confirm-real-order").disabled = true;
   $("#dry-run-confirm-modal").classList.remove("hidden");
 }
 
@@ -842,6 +849,39 @@ $("#confirm-dry-run-order").addEventListener("click", async () => {
     status.textContent = error.message;
   } finally {
     button.disabled = false;
+  }
+});
+$("#real-order-confirm-checkbox").addEventListener("change", (event) => {
+  $("#confirm-real-order").disabled = !event.target.checked;
+});
+$("#confirm-real-order").addEventListener("click", async () => {
+  if (!approvedOrderPayload || !pendingClientOrderId || !$("#real-order-confirm-checkbox").checked) return;
+  if (!window.confirm("실제 토스증권 계좌로 지정가 주문을 전송할까요? 전송 후 체결되면 자산이 변합니다.")) return;
+  const button = $("#confirm-real-order");
+  const status = $("#dry-run-confirm-status");
+  button.disabled = true;
+  $("#confirm-dry-run-order").disabled = true;
+  status.textContent = "안전 검사를 다시 실행하고 실제 주문을 한 번만 전송하고 있습니다.";
+  try {
+    const order = await api("/live/orders/real", {
+      method: "POST",
+      body: JSON.stringify({
+        ...approvedOrderPayload, client_order_id: pendingClientOrderId, confirmation: "실제 주문",
+      }),
+    });
+    closeDryRunConfirmModal();
+    const result = $("#order-preview-result");
+    result.hidden = false;
+    result.className = "order-preview-result approved";
+    result.textContent = `실제 주문 #${order.id} · 토스 상태 ${order.broker_status || order.status}`;
+    approvedOrderPayload = null;
+    approvedOrderPreview = null;
+    pendingClientOrderId = null;
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    button.disabled = !$("#real-order-confirm-checkbox").checked;
+    $("#confirm-dry-run-order").disabled = false;
   }
 });
 function closeDetailPinModal() {
@@ -911,6 +951,10 @@ async function initialize() {
     const risk = await api("/risk");
     $("#order-cash-policy").textContent = "현재 DRY RUN 투자 한도 테스트 모드";
     $("#order-cash-policy-detail").textContent = `검증을 위해 1회·종목별·전체 투자 한도와 최소 현금 비율만 임시로 적용하지 않습니다. 실제 주문 가능 현금과 매도 보유 수량은 항상 검사합니다. 원래 안전 기준은 주문 후 현금 ${Number(risk.settings.min_cash_ratio).toFixed(0)}% 이상입니다.`;
+    const readiness = await api("/live/orders/real/readiness");
+    liveTradingReady = readiness.configured && readiness.enabled;
+    $("#order-lock-badge").textContent = liveTradingReady ? "LIVE ENABLED" : "DRY RUN";
+    $("#live-order-notice").textContent = readiness.message;
     activeSymbol = decodeURIComponent(window.location.pathname.split("/").filter(Boolean).at(-1) || "");
     const requestedSection = window.location.hash.slice(1);
     if (["chart", "company", "market", "news"].includes(requestedSection)) selectDetailSection(requestedSection);

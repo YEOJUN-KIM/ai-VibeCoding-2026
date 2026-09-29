@@ -6,6 +6,7 @@
   <title>LIVE 자산 대시보드</title>
   <link rel="stylesheet" href="/static/styles.css">
   <script src="/static/live.js" defer></script>
+  <script src="/static/header-status.js" defer></script>
 </head>
 <body class="live-page">
   <div class="shell">
@@ -13,7 +14,7 @@
       <div><p class="eyebrow live-eyebrow">PRIVATE TRADING DESK · LIVE</p><h1>LIVE 자산 대시보드</h1>
         <p class="subtitle">실제 포트폴리오와 시장 탐색을 연결하는 개인 투자 데스크</p></div>
       <div class="header-actions">
-        <div class="mode-box live-mode-box"><span class="status-dot" id="server-dot"></span><div><span class="mode-label">현재 모드</span><strong>LIVE</strong></div></div>
+        <div class="mode-box"><span class="status-dot" id="server-dot" data-header-data-dot></span><div><span class="mode-label">데이터 연결</span><strong data-header-data-status>확인 중</strong></div></div>
         <button class="button danger" id="unlock-live-button" type="button">LIVE 주문 잠금 해제</button>
         <div class="user-box"><span class="mode-label">로그인 사용자</span><strong id="current-user">-</strong><button class="text-button" id="logout-button">로그아웃</button></div>
       </div>
@@ -26,7 +27,7 @@
         <a class="workspace-nav-link paper-link" href="/paper"><span class="nav-index">03</span><span><strong>모의매매</strong><small>PAPER 랩</small></span></a>
         <span class="workspace-nav-link is-disabled" aria-disabled="true"><span class="nav-index">04</span><span><strong>장기분석</strong><small>준비 중</small></span></span>
         <a class="workspace-nav-link news-link" href="/news"><span class="nav-index">05</span><span><strong>뉴스·리서치</strong><small>최근 보도 흐름</small></span></a>
-        <span class="workspace-nav-link is-disabled" aria-disabled="true"><span class="nav-index">06</span><span><strong>설정</strong><small>준비 중</small></span></span>
+        <a class="workspace-nav-link" href="/settings"><span class="nav-index">06</span><span><strong>설정</strong><small>전략·계정·한도</small></span></a>
       </div>
     </nav>
 
@@ -88,12 +89,12 @@
 
       <section class="panel live-orders-panel workspace-section-panel" data-live-panel="orders" hidden>
         <div class="panel-heading">
-          <div><p class="section-kicker">ORDER DESK · DRY RUN</p><h2>주문 관리</h2><p class="subtitle">현재 사용자가 확정한 연습 주문을 조회하고 취소·정리합니다. 실제 토스 주문은 포함되지 않습니다.</p></div>
+          <div><p class="section-kicker">ORDER DESK</p><h2>주문 관리</h2><p class="subtitle">연습 주문과 실제 토스 주문의 접수·체결·취소 상태를 함께 확인합니다.</p></div>
           <button class="button danger" id="delete-today-dry-runs" type="button">오늘 테스트 기록 삭제</button>
         </div>
         <div class="table-wrap"><table class="live-orders-table">
           <thead><tr><th>상태</th><th>종목</th><th>주문</th><th>조건·가격</th><th>예상 금액</th><th>생성 시각</th><th>관리</th></tr></thead>
-          <tbody id="live-orders-body"><tr><td class="empty" colspan="7">DRY RUN 주문 기록을 불러오는 중입니다.</td></tr></tbody>
+          <tbody id="live-orders-body"><tr><td class="empty" colspan="7">주문 기록을 불러오는 중입니다.</td></tr></tbody>
         </table></div>
         <p class="form-message" id="live-orders-message">주문 기록은 사용자와 연결 계좌별로 PostgreSQL에 저장됩니다.</p>
       </section>

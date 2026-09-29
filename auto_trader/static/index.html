@@ -6,6 +6,7 @@
   <title>PAPER 트레이딩 랩</title>
   <link rel="stylesheet" href="/static/styles.css">
   <script src="/static/app.js" defer></script>
+  <script src="/static/header-status.js" defer></script>
 </head>
 <body>
   <div class="shell">
@@ -16,13 +17,8 @@
         <p class="subtitle">가상자금으로 전략과 주문 흐름을 안전하게 검증하는 연습 공간</p>
       </div>
       <div class="header-actions">
-        <div class="mode-box">
-          <span class="status-dot" id="server-dot"></span>
-          <div>
-            <span class="mode-label">현재 모드</span>
-            <strong>PAPER</strong>
-          </div>
-        </div>
+        <div class="mode-box"><span class="status-dot" id="server-dot" data-header-data-dot></span><div><span class="mode-label">데이터 연결</span><strong data-header-data-status>확인 중</strong></div></div>
+        <button class="button danger header-live-button" type="button" data-header-live-link>LIVE 상태 확인</button>
         <div class="user-box">
           <span class="mode-label">로그인 사용자</span>
           <strong id="current-user">-</strong>
@@ -38,7 +34,7 @@
         <a class="workspace-nav-link active paper-link" href="/paper"><span class="nav-index">03</span><span><strong>모의매매</strong><small>PAPER 랩</small></span></a>
         <span class="workspace-nav-link is-disabled" aria-disabled="true"><span class="nav-index">04</span><span><strong>장기분석</strong><small>준비 중</small></span></span>
         <a class="workspace-nav-link news-link" href="/news"><span class="nav-index">05</span><span><strong>뉴스·리서치</strong><small>최근 보도 흐름</small></span></a>
-        <span class="workspace-nav-link is-disabled" aria-disabled="true"><span class="nav-index">06</span><span><strong>설정</strong><small>준비 중</small></span></span>
+        <a class="workspace-nav-link" href="/settings"><span class="nav-index">06</span><span><strong>설정</strong><small>전략·계정·한도</small></span></a>
       </div>
     </nav>
 

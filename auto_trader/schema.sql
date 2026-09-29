@@ -90,6 +90,30 @@ CREATE TABLE IF NOT EXISTS favorite_stocks (
 CREATE INDEX IF NOT EXISTS favorite_stocks_user_time
     ON favorite_stocks(user_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS live_strategies (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES admin_users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    stock_name TEXT NOT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT false,
+    execution_mode TEXT NOT NULL DEFAULT 'DRY_RUN' CHECK (execution_mode IN ('DRY_RUN','LIVE')),
+    short_period INTEGER NOT NULL CHECK (short_period >= 2),
+    long_period INTEGER NOT NULL CHECK (long_period > short_period),
+    order_quantity INTEGER NOT NULL CHECK (order_quantity > 0),
+    take_profit_rate NUMERIC NOT NULL CHECK (take_profit_rate > 0),
+    stop_loss_rate NUMERIC NOT NULL CHECK (stop_loss_rate > 0),
+    max_holding_days INTEGER NOT NULL CHECK (max_holding_days > 0),
+    trading_start TIME NOT NULL,
+    trading_end TIME NOT NULL,
+    daily_order_limit INTEGER NOT NULL CHECK (daily_order_limit > 0),
+    cooldown_minutes INTEGER NOT NULL CHECK (cooldown_minutes >= 0),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(user_id,name)
+);
+CREATE INDEX IF NOT EXISTS live_strategies_user ON live_strategies(user_id,updated_at DESC);
+
 CREATE TABLE IF NOT EXISTS risk_settings (
     account_id BIGINT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
     preset TEXT NOT NULL CHECK (preset IN ('CONSERVATIVE','DEFAULT','CUSTOM')),
@@ -136,9 +160,21 @@ CREATE TABLE IF NOT EXISTS live_orders (
     reference_price NUMERIC NOT NULL CHECK (reference_price > 0),
     estimated_amount NUMERIC NOT NULL CHECK (estimated_amount > 0),
     status TEXT NOT NULL CHECK (status IN ('DRY_RUN_CONFIRMED','CANCELLED')),
-    dry_run BOOLEAN NOT NULL DEFAULT true CHECK (dry_run),
+    dry_run BOOLEAN NOT NULL DEFAULT true,
+    external_order_id TEXT,
+    broker_status TEXT,
+    order_source TEXT NOT NULL DEFAULT 'MANUAL',
+    broker_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+    filled_quantity NUMERIC NOT NULL DEFAULT 0,
+    average_filled_price NUMERIC,
+    filled_amount NUMERIC,
+    commission NUMERIC,
+    tax NUMERIC,
+    reconciliation_status TEXT NOT NULL DEFAULT 'PENDING',
+    last_synced_at TIMESTAMPTZ,
     validation_snapshot JSONB NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (user_id, client_order_id)
 );
 CREATE TABLE IF NOT EXISTS live_order_events (
@@ -154,5 +190,27 @@ CREATE INDEX IF NOT EXISTS live_orders_user_time ON live_orders(user_id, created
 CREATE INDEX IF NOT EXISTS live_orders_account_time ON live_orders(broker_account_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS live_order_events_order_time ON live_order_events(live_order_id, created_at DESC);
 ALTER TABLE live_orders DROP CONSTRAINT IF EXISTS live_orders_status_check;
+ALTER TABLE live_orders DROP CONSTRAINT IF EXISTS live_orders_dry_run_check;
+ALTER TABLE live_orders ADD COLUMN IF NOT EXISTS external_order_id TEXT;
+ALTER TABLE live_orders ADD COLUMN IF NOT EXISTS broker_status TEXT;
+ALTER TABLE live_orders ADD COLUMN IF NOT EXISTS order_source TEXT NOT NULL DEFAULT 'MANUAL';
+ALTER TABLE live_orders ADD COLUMN IF NOT EXISTS broker_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE live_orders ADD COLUMN IF NOT EXISTS filled_quantity NUMERIC NOT NULL DEFAULT 0;
+ALTER TABLE live_orders ADD COLUMN IF NOT EXISTS average_filled_price NUMERIC;
+ALTER TABLE live_orders ADD COLUMN IF NOT EXISTS filled_amount NUMERIC;
+ALTER TABLE live_orders ADD COLUMN IF NOT EXISTS commission NUMERIC;
+ALTER TABLE live_orders ADD COLUMN IF NOT EXISTS tax NUMERIC;
+ALTER TABLE live_orders ADD COLUMN IF NOT EXISTS reconciliation_status TEXT NOT NULL DEFAULT 'PENDING';
+ALTER TABLE live_orders ADD COLUMN IF NOT EXISTS last_synced_at TIMESTAMPTZ;
+ALTER TABLE live_orders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
 ALTER TABLE live_orders ADD CONSTRAINT live_orders_status_check
-    CHECK (status IN ('DRY_RUN_CONFIRMED','CANCELLED'));
+    CHECK (status IN ('DRY_RUN_CONFIRMED','SUBMITTING','SUBMITTED','FILLED','PARTIAL_FILLED',
+                      'PENDING','PENDING_CANCEL','CANCELED','REJECTED','UNKNOWN','CANCELLED'));
+CREATE UNIQUE INDEX IF NOT EXISTS live_orders_external_order
+    ON live_orders(broker_account_id,external_order_id) WHERE external_order_id IS NOT NULL;
+ALTER TABLE live_orders DROP CONSTRAINT IF EXISTS live_orders_reconciliation_status_check;
+ALTER TABLE live_orders ADD CONSTRAINT live_orders_reconciliation_status_check
+    CHECK (reconciliation_status IN ('PENDING','MATCHED','NEEDS_REVIEW','ERROR'));
+ALTER TABLE live_orders DROP CONSTRAINT IF EXISTS live_orders_order_source_check;
+ALTER TABLE live_orders ADD CONSTRAINT live_orders_order_source_check
+    CHECK (order_source IN ('MANUAL','AUTO'));

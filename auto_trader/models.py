@@ -163,6 +163,7 @@ class LiveDryRunConfirmRequest(LiveOrderPreviewRequest):
 
 class LiveDryRunOrder(BaseModel):
     id: int
+    user_id: int = Field(exclude=True)
     client_order_id: str
     account_label: str
     symbol: str
@@ -178,8 +179,23 @@ class LiveDryRunOrder(BaseModel):
     estimated_amount: Decimal
     status: str
     dry_run: bool
+    external_order_id: str | None = None
+    broker_status: str | None = None
+    order_source: str = "MANUAL"
+    broker_snapshot: dict = Field(default_factory=dict)
+    filled_quantity: Decimal = Decimal(0)
+    average_filled_price: Decimal | None = None
+    filled_amount: Decimal | None = None
+    commission: Decimal | None = None
+    tax: Decimal | None = None
+    reconciliation_status: str = "PENDING"
+    last_synced_at: datetime | None = None
     validation_snapshot: dict = Field(default_factory=dict)
     created_at: datetime
+
+
+class LiveRealOrderConfirmRequest(LiveDryRunConfirmRequest):
+    confirmation: str = Field(pattern=r"^실제 주문$")
 
 
 class DeletedOrderCount(BaseModel):
@@ -206,6 +222,8 @@ class LiveHolding(BaseModel):
     profit_loss: Decimal
     profit_rate: Decimal
     daily_profit_loss: Decimal
+    auto_managed_quantity: Decimal = Decimal(0)
+    existing_quantity: Decimal = Decimal(0)
 
 
 class LivePortfolio(BaseModel):
@@ -340,6 +358,37 @@ class LiveCompanyProfile(BaseModel):
     financial_history: list[CompanyFinancialYear] = Field(default_factory=list)
     dividends: list[CompanyMetric] = Field(default_factory=list)
     disclosures: list[CompanyDisclosure] = Field(default_factory=list)
+
+
+class LiveTradingReadiness(BaseModel):
+    configured: bool
+    enabled: bool
+    supported_order: str
+    message: str
+
+
+class LiveStrategyWrite(BaseModel):
+    name: str = Field(min_length=2, max_length=50)
+    symbol: str = Field(pattern=r"^[A-Za-z0-9.\-]{1,12}$")
+    enabled: bool = False
+    execution_mode: str = Field(default="DRY_RUN", pattern=r"^(DRY_RUN|LIVE)$")
+    short_period: int = Field(default=5, ge=2, le=120)
+    long_period: int = Field(default=20, ge=3, le=240)
+    order_quantity: int = Field(default=1, ge=1, le=100000)
+    take_profit_rate: Decimal = Field(default=Decimal("5"), gt=0, le=100)
+    stop_loss_rate: Decimal = Field(default=Decimal("3"), gt=0, le=100)
+    max_holding_days: int = Field(default=20, ge=1, le=3650)
+    trading_start: str = Field(default="09:00", pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    trading_end: str = Field(default="15:20", pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    daily_order_limit: int = Field(default=3, ge=1, le=100)
+    cooldown_minutes: int = Field(default=30, ge=0, le=10080)
+
+
+class LiveStrategy(LiveStrategyWrite):
+    id: int
+    stock_name: str
+    created_at: datetime
+    updated_at: datetime
 
 
 class FavoriteStockCreate(BaseModel):

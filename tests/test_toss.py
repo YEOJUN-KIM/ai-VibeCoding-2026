@@ -39,6 +39,64 @@ class TossClientTests(unittest.TestCase):
         with self.assertRaises(TossApiError):
             TossClient(client_id="", client_secret="").access_token()
 
+    def test_live_order_is_blocked_by_default(self):
+        client = TossClient(client_id="id", client_secret="secret", live_trading_enabled=False)
+        with self.assertRaisesRegex(TossApiError, "안전 잠금"):
+            client.create_limit_order(
+                symbol="005930", side="BUY", quantity=Decimal("1"),
+                price=Decimal("70000"), client_order_id="live-order-001",
+            )
+
+    @patch("auto_trader.toss.urlopen")
+    def test_live_limit_order_uses_fixed_safe_shape(self, mocked):
+        mocked.side_effect = [
+            FakeResponse({"access_token": "token", "expires_in": 3600}),
+            FakeResponse({"result": [{"accountSeq": 7}]}),
+            FakeResponse({"result": {"orderId": "order-1", "clientOrderId": "live-order-001"}}),
+        ]
+        client = TossClient(
+            client_id="id", client_secret="secret", live_trading_enabled=True
+        )
+        result = client.create_limit_order(
+            symbol="005930", side="BUY", quantity=Decimal("1"),
+            price=Decimal("70000"), client_order_id="live-order-001",
+        )
+        self.assertEqual(result["orderId"], "order-1")
+        request = mocked.call_args_list[2].args[0]
+        self.assertEqual(request.get_method(), "POST")
+        self.assertEqual(request.get_header("X-tossinvest-account"), "7")
+        self.assertEqual(json.loads(request.data), {
+            "symbol": "005930", "side": "BUY", "orderType": "LIMIT",
+            "quantity": "1", "price": "70000", "timeInForce": "DAY",
+            "clientOrderId": "live-order-001", "confirmHighValueOrder": False,
+        })
+
+    @patch("auto_trader.toss.urlopen")
+    def test_order_detail_is_read_only_and_cancel_needs_unlock(self, mocked):
+        mocked.side_effect = [
+            FakeResponse({"access_token": "token", "expires_in": 3600}),
+            FakeResponse({"result": [{"accountSeq": 7}]}),
+            FakeResponse({"result": {"orderId": "order-1", "status": "OPEN"}}),
+        ]
+        client = TossClient(client_id="id", client_secret="secret", live_trading_enabled=False)
+        self.assertEqual(client.order_detail("order-1")["status"], "OPEN")
+        with self.assertRaisesRegex(TossApiError, "안전 잠금"):
+            client.cancel_order("order-1")
+
+    @patch("auto_trader.toss.urlopen")
+    def test_order_history_group_is_read_only(self, mocked):
+        mocked.side_effect = [
+            FakeResponse({"access_token": "token", "expires_in": 3600}),
+            FakeResponse({"result": [{"accountSeq": 7}]}),
+            FakeResponse({"result": {"orders": [{"orderId": "order-1", "status": "CANCELED"}]}}),
+        ]
+        client = TossClient(client_id="id", client_secret="secret")
+        orders = client.orders("CLOSED", from_date="2026-09-29", to_date="2026-09-29")
+        self.assertEqual(orders[0]["status"], "CANCELED")
+        request = mocked.call_args_list[2].args[0]
+        self.assertEqual(request.get_method(), "GET")
+        self.assertIn("status=CLOSED", request.full_url)
+
     @patch("auto_trader.toss.urlopen")
     def test_api_error_is_sanitized(self, mocked):
         mocked.side_effect = HTTPError("url", 403, "Forbidden", {},

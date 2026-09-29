@@ -2,7 +2,7 @@
 
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import date, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -27,7 +27,9 @@ from .models import (Account, DeletedOrderCount, FavoriteStockCreate, LiveBuying
                      LiveDryRunConfirmRequest, LiveDryRunOrder, LiveFavoriteStock,
                      LiveOrderPreview, LiveOrderPreviewCheck, LiveOrderPreviewRequest,
                      LivePinRequest, LivePinStatus, LivePortfolio,
-                     LiveCompanyProfile, LiveStockDetail, LiveStockSearchPage, LoginRequest, NewsDigest, Order, OrderRequest,
+                     LiveCompanyProfile, LiveRealOrderConfirmRequest, LiveStockDetail,
+                     LiveStockSearchPage, LiveStrategy, LiveStrategyWrite, LiveTradingReadiness,
+                     LoginRequest, NewsDigest, Order, OrderRequest,
                      Quote, RiskSettings, RiskSettingsUpdate, RiskStatus, SessionInfo, Stock,
                      StrategySettingsUpdate, StrategyStatus, TossConnectionStatus)
 from .paper import PaperBroker
@@ -41,8 +43,11 @@ from .favorites import add_favorite, favorite_symbols, list_favorites, remove_fa
 from .news import NewsFeedError, news_service
 from .ai_news import ai_news_service
 from .dart import dart_client
-from .live_orders import (cancel_dry_run_order, delete_today_dry_run_orders,
-                          list_dry_run_orders, save_dry_run_order)
+from .live_orders import (auto_position_quantities, cancel_dry_run_order, delete_today_dry_run_orders,
+                          list_dry_run_orders, list_real_orders, prepare_real_order,
+                          orders_for_reconciliation, real_order_for_user,
+                          save_dry_run_order, update_real_order)
+from .live_strategies import delete_strategy, list_strategies, save_strategy
 
 
 market = MarketSimulator(symbols=settings.watch_symbols)
@@ -62,6 +67,69 @@ watchlist_source = "fallback"
 static_dir = Path(__file__).parent / "static"
 
 
+def _local_order_status(broker_status: str, fallback: str) -> str:
+    supported = {"FILLED", "PARTIAL_FILLED", "PENDING", "PENDING_CANCEL", "CANCELED", "REJECTED"}
+    return broker_status if broker_status in supported else fallback
+
+
+def reconcile_saved_real_orders(*, active_only: bool = False) -> int:
+    account = toss_client.selected_account()
+    orders = orders_for_reconciliation(str(account["accountSeq"]), active_only=active_only)
+    reconciled = 0
+    history_cache: dict[str, dict[str, dict]] = {}
+    for order in orders:
+        if not order.external_order_id:
+            if order.reconciliation_status != "NEEDS_REVIEW":
+                update_real_order(
+                    order.user_id, order.id,
+                    status=order.status, message="토스 주문 ID가 없어 자동 대조할 수 없습니다.",
+                    details=order.broker_snapshot, reconciliation_status="NEEDS_REVIEW",
+                )
+            continue
+        try:
+            order_date = order.created_at.astimezone(timezone(timedelta(hours=9))).date().isoformat()
+            if order_date not in history_cache:
+                history = toss_client.orders("OPEN", from_date=order_date, to_date=order_date)
+                history += toss_client.orders("CLOSED", from_date=order_date, to_date=order_date)
+                history_cache[order_date] = {
+                    str(item.get("orderId")): item for item in history if item.get("orderId")
+                }
+            detail = history_cache[order_date].get(order.external_order_id)
+            if detail is None:
+                detail = toss_client.order_detail(order.external_order_id)
+        except TossApiError as exc:
+            update_real_order(
+                order.user_id, order.id,
+                status=order.status, broker_status=order.broker_status,
+                message="토스 주문 상태 대조에 실패했습니다.", details={"error": str(exc)},
+                reconciliation_status="ERROR",
+            )
+            continue
+        broker_status = str(detail.get("status") or order.broker_status or order.status)
+        execution = detail.get("execution") or {}
+        filled_quantity = Decimal(str(execution.get("filledQuantity") or 0))
+        def optional_decimal(value):
+            return None if value is None else Decimal(str(value))
+        average_filled_price = optional_decimal(execution.get("averageFilledPrice"))
+        filled_amount = optional_decimal(execution.get("filledAmount"))
+        commission = optional_decimal(execution.get("commission"))
+        tax = optional_decimal(execution.get("tax"))
+        status = _local_order_status(broker_status, order.status)
+        if (status != order.status or broker_status != order.broker_status
+                or filled_quantity != order.filled_quantity
+                or average_filled_price != order.average_filled_price
+                or filled_amount != order.filled_amount
+                or commission != order.commission or tax != order.tax
+                or order.reconciliation_status != "MATCHED"):
+            update_real_order(
+                order.user_id, order.id,
+                status=status, broker_status=broker_status,
+                message="서버 시작 시 토스 주문 상태와 DB를 대조했습니다.", details=detail,
+            )
+        reconciled += 1
+    return reconciled
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     global watchlist_source
@@ -76,6 +144,10 @@ async def lifespan(_: FastAPI):
             await asyncio.to_thread(toss_client.warm_domestic_stock_universe)
         except (TossApiError, KeyError, ValueError, ArithmeticError):
             watchlist_source = "fallback"
+        try:
+            await asyncio.to_thread(reconcile_saved_real_orders)
+        except (TossApiError, LookupError, ValueError, ArithmeticError):
+            pass
     broker.initialize()
     broker.set_risk_manager(risk_manager)
     with connect() as conn:
@@ -147,6 +219,13 @@ def news_page(request: Request) -> FileResponse | RedirectResponse:
     if not session_from_request(request):
         return RedirectResponse("/login", status_code=303)
     return FileResponse(static_dir / "news.html")
+
+
+@app.get("/settings", include_in_schema=False, response_model=None)
+def settings_page(request: Request) -> FileResponse | RedirectResponse:
+    if not session_from_request(request):
+        return RedirectResponse("/login", status_code=303)
+    return FileResponse(static_dir / "settings.html")
 
 
 @app.get("/stocks/{symbol}", include_in_schema=False, response_model=None)
@@ -257,10 +336,94 @@ def test_toss_connection(_: AuthenticatedUser = Depends(require_csrf)) -> TossCo
                                 account_count=result.account_count, message=result.message)
 
 
-@app.get("/live/portfolio", response_model=LivePortfolio)
-def live_portfolio(_: AuthenticatedUser = Depends(require_user)) -> LivePortfolio:
+@app.get("/live/orders/real/readiness", response_model=LiveTradingReadiness)
+def live_trading_readiness(_: AuthenticatedUser = Depends(require_user)) -> LiveTradingReadiness:
+    enabled = settings.live_trading_enabled
+    configured = toss_client.configured
+    if not configured:
+        message = "토스 API 인증 정보를 먼저 설정해야 합니다."
+    elif not enabled:
+        message = "실제 주문 연결부는 준비됐지만 안전 잠금으로 비활성화되어 있습니다."
+    else:
+        message = "실제 주문 전송이 활성화되어 있습니다. 주문 전 최종 확인이 필요합니다."
+    return LiveTradingReadiness(
+        configured=configured,
+        enabled=enabled,
+        supported_order="국내 주식 · 정수 수량 · DAY 지정가",
+        message=message,
+    )
+
+
+@app.get("/settings/strategies", response_model=list[LiveStrategy])
+def list_strategy_settings(user: AuthenticatedUser = Depends(require_user)) -> list[LiveStrategy]:
+    return list_strategies(user.id)
+
+
+def _strategy_stock_name(symbol: str) -> str:
     try:
-        return toss_client.portfolio()
+        stock = toss_client.domestic_stock(symbol.upper())
+    except TossApiError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if not stock:
+        raise HTTPException(status_code=404, detail="국내 상장 종목을 찾지 못했습니다.")
+    return str(stock.get("name") or symbol.upper())
+
+
+@app.post("/settings/strategies", response_model=LiveStrategy, status_code=201)
+def create_strategy_settings(
+    payload: LiveStrategyWrite, user: AuthenticatedUser = Depends(require_csrf),
+) -> LiveStrategy:
+    if payload.execution_mode == "LIVE" and payload.enabled:
+        raise HTTPException(status_code=409, detail="LIVE 자동매매 엔진이 준비될 때까지 실제 실행 전략은 활성화할 수 없습니다.")
+    try:
+        return save_strategy(user.id, payload, _strategy_stock_name(payload.symbol))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.put("/settings/strategies/{strategy_id}", response_model=LiveStrategy)
+def update_strategy_settings(
+    strategy_id: int, payload: LiveStrategyWrite,
+    user: AuthenticatedUser = Depends(require_csrf),
+) -> LiveStrategy:
+    if payload.execution_mode == "LIVE" and payload.enabled:
+        raise HTTPException(status_code=409, detail="LIVE 자동매매 엔진이 준비될 때까지 실제 실행 전략은 활성화할 수 없습니다.")
+    try:
+        return save_strategy(
+            user.id, payload, _strategy_stock_name(payload.symbol), strategy_id=strategy_id,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.delete("/settings/strategies/{strategy_id}", status_code=204)
+def delete_strategy_settings(
+    strategy_id: int, user: AuthenticatedUser = Depends(require_csrf),
+) -> Response:
+    try:
+        delete_strategy(user.id, strategy_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return Response(status_code=204)
+
+
+@app.get("/live/portfolio", response_model=LivePortfolio)
+def live_portfolio(user: AuthenticatedUser = Depends(require_user)) -> LivePortfolio:
+    try:
+        portfolio = toss_client.portfolio()
+        auto_positions = auto_position_quantities(user.id)
+        holdings = []
+        for holding in portfolio.holdings:
+            auto_quantity = max(Decimal(0), min(
+                holding.quantity, Decimal(str(auto_positions.get(holding.symbol, 0)))
+            ))
+            holdings.append(holding.model_copy(update={
+                "auto_managed_quantity": auto_quantity,
+                "existing_quantity": holding.quantity - auto_quantity,
+            }))
+        return portfolio.model_copy(update={"holdings": holdings})
     except TossApiError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -273,11 +436,11 @@ def live_buying_power(_: AuthenticatedUser = Depends(require_user)) -> LiveBuyin
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
-@app.post("/live/orders/preview", response_model=LiveOrderPreview)
-def preview_live_order(
+def _preview_live_order(
     payload: LiveOrderPreviewRequest,
     request: Request,
-    user: AuthenticatedUser = Depends(require_csrf),
+    user: AuthenticatedUser,
+    *, relax_financial_limits: bool,
 ) -> LiveOrderPreview:
     _, authorized_until = live_pin_status(request, user)
     if authorized_until is None:
@@ -304,7 +467,7 @@ def preview_live_order(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     checks: list[LiveOrderPreviewCheck] = []
-    relaxed_financial_limits = settings.live_dry_run_ignore_financial_limits
+    relaxed_financial_limits = relax_financial_limits
 
     def add_check(name: str, passed: bool, success: str, failure: str) -> None:
         checks.append(LiveOrderPreviewCheck(name=name, passed=passed, message=success if passed else failure))
@@ -358,13 +521,28 @@ def preview_live_order(
     )
 
 
+@app.post("/live/orders/preview", response_model=LiveOrderPreview)
+def preview_live_order(
+    payload: LiveOrderPreviewRequest,
+    request: Request,
+    user: AuthenticatedUser = Depends(require_csrf),
+) -> LiveOrderPreview:
+    return _preview_live_order(
+        payload, request, user,
+        relax_financial_limits=settings.live_dry_run_ignore_financial_limits,
+    )
+
+
 @app.post("/live/orders/dry-run", response_model=LiveDryRunOrder, status_code=201)
 def confirm_live_dry_run_order(
     payload: LiveDryRunConfirmRequest,
     request: Request,
     user: AuthenticatedUser = Depends(require_csrf),
 ) -> LiveDryRunOrder:
-    preview = preview_live_order(payload, request, user)
+    preview = _preview_live_order(
+        payload, request, user,
+        relax_financial_limits=settings.live_dry_run_ignore_financial_limits,
+    )
     if not preview.approved:
         failed = next((check.message for check in preview.checks if not check.passed), preview.message)
         raise HTTPException(status_code=409, detail=f"주문 검토를 통과하지 못했습니다: {failed}")
@@ -375,6 +553,100 @@ def confirm_live_dry_run_order(
         return order
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except TossApiError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post("/live/orders/real", response_model=LiveDryRunOrder, status_code=201)
+def submit_live_real_order(
+    payload: LiveRealOrderConfirmRequest,
+    request: Request,
+    user: AuthenticatedUser = Depends(require_csrf),
+) -> LiveDryRunOrder:
+    if not settings.live_trading_enabled:
+        raise HTTPException(status_code=423, detail="실제 주문 안전 잠금이 켜져 있습니다.")
+    if payload.mode != "STANDARD" or payload.order_type != "LIMIT":
+        raise HTTPException(status_code=422, detail="첫 실제 주문은 일반 DAY 지정가만 지원합니다.")
+    if payload.quantity != payload.quantity.to_integral_value():
+        raise HTTPException(status_code=422, detail="첫 실제 주문은 정수 수량만 지원합니다.")
+    preview = _preview_live_order(payload, request, user, relax_financial_limits=False)
+    if not preview.approved:
+        failed = next((check.message for check in preview.checks if not check.passed), preview.message)
+        raise HTTPException(status_code=409, detail=f"실제 주문 검토를 통과하지 못했습니다: {failed}")
+    try:
+        account = toss_client.selected_account()
+        account_label = toss_client.buying_power().account_label
+        order, created = prepare_real_order(user.id, account, account_label, payload, preview)
+        if not created:
+            return order
+        try:
+            submitted = toss_client.create_limit_order(
+                symbol=preview.symbol, side=payload.side.value, quantity=payload.quantity,
+                price=payload.order_price, client_order_id=payload.client_order_id,
+            )
+        except TossApiError as exc:
+            update_real_order(
+                user.id, order.id, status="UNKNOWN", message="실제 주문 전송 결과를 확정하지 못했습니다.",
+                details={"error": str(exc)}, reconciliation_status="NEEDS_REVIEW",
+            )
+            raise HTTPException(
+                status_code=502,
+                detail="주문 결과를 확정하지 못했습니다. 자동 재전송하지 말고 토스 주문 내역을 확인하세요.",
+            ) from exc
+        external_order_id = str(submitted["orderId"])
+        try:
+            detail = toss_client.order_detail(external_order_id)
+            broker_status = str(detail.get("status") or "SUBMITTED")
+            status = broker_status if broker_status in {
+                "FILLED", "PARTIAL_FILLED", "PENDING", "PENDING_CANCEL", "CANCELED", "REJECTED"
+            } else "SUBMITTED"
+        except TossApiError:
+            detail = submitted
+            broker_status = "SUBMITTED"
+            status = "SUBMITTED"
+        return update_real_order(
+            user.id, order.id, status=status, external_order_id=external_order_id,
+            broker_status=broker_status, message="토스증권이 실제 주문을 접수했습니다.", details=detail,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except TossApiError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.get("/live/orders/real", response_model=list[LiveDryRunOrder])
+def live_real_orders(user: AuthenticatedUser = Depends(require_user)) -> list[LiveDryRunOrder]:
+    try:
+        reconcile_saved_real_orders(active_only=True)
+    except (TossApiError, LookupError, ValueError, ArithmeticError):
+        pass
+    return list_real_orders(user.id)
+
+
+@app.post("/live/orders/real/{order_id}/cancel", response_model=LiveDryRunOrder)
+def cancel_live_real_order(
+    order_id: int, _: Request, user: AuthenticatedUser = Depends(require_csrf),
+) -> LiveDryRunOrder:
+    if not settings.live_trading_enabled:
+        raise HTTPException(status_code=423, detail="실제 주문 안전 잠금이 켜져 있습니다.")
+    try:
+        order = real_order_for_user(user.id, order_id)
+        if not order.external_order_id:
+            raise HTTPException(status_code=409, detail="토스 주문 ID가 없어 취소할 수 없습니다.")
+        result = toss_client.cancel_order(order.external_order_id)
+        try:
+            detail = toss_client.order_detail(order.external_order_id)
+            broker_status = str(detail.get("status") or "PENDING_CANCEL")
+        except TossApiError:
+            detail = result
+            broker_status = "PENDING_CANCEL"
+        status = broker_status if broker_status in {"CANCELED", "PENDING_CANCEL"} else "PENDING_CANCEL"
+        return update_real_order(
+            user.id, order.id, status=status, broker_status=broker_status,
+            message="토스증권에 실제 주문 취소를 요청했습니다.", details=detail,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except TossApiError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
