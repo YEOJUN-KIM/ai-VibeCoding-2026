@@ -7,6 +7,7 @@ let totalPages = 1;
 let loading = false;
 let searchTimer = null;
 let sparklineSequence = 0;
+const latestPrices = new Map();
 
 const escapeHtml = (value) => String(value).replace(/[&<>'"]/g, (character) => ({
   "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;",
@@ -116,7 +117,15 @@ async function loadSparklines(symbols) {
         if (sequence !== sparklineSequence) return;
         for (const symbol of chunk) {
           const container = document.querySelector(`[data-sparkline-symbol="${CSS.escape(symbol)}"]`);
-          if (container) container.innerHTML = sparklineSvg(data[symbol] || [], symbol, period);
+          if (container) {
+            const values = [...(data[symbol] || [])];
+            const latestPrice = latestPrices.get(symbol);
+            if (latestPrice != null) {
+              if (values.length) values[values.length - 1] = latestPrice;
+              else values.push(latestPrice);
+            }
+            container.innerHTML = sparklineSvg(values, symbol, period);
+          }
         }
       } catch (error) {
         if (sequence !== sparklineSequence) return;
@@ -131,6 +140,8 @@ async function loadSparklines(symbols) {
 }
 
 function renderRows(items) {
+  latestPrices.clear();
+  items.forEach((item) => { if (item.price != null) latestPrices.set(item.symbol, Number(item.price)); });
   $("#stock-list-body").innerHTML = items.length ? items.map((item) => {
     const rate = item.change_rate_percent == null ? null : Number(item.change_rate_percent);
     const rateClass = rate == null ? "neutral" : rate > 0 ? "positive" : rate < 0 ? "negative" : "neutral";

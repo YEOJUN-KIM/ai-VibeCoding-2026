@@ -72,6 +72,14 @@ class AuthTests(unittest.TestCase):
         self.assertIsNone(auth.session_from_request(self.request(token)))
         self.assertIsNone(auth.session_from_request(self.request('forged')))
 
+    def test_active_session_uses_sliding_expiry(self):
+        token, user = auth.authenticate('testadmin', self.password)
+        with self.connect() as conn:
+            conn.execute("UPDATE auth_sessions SET expires_at=now()+interval '1 minute'")
+        refreshed = auth.session_from_request(self.request(token))
+        self.assertIsNotNone(refreshed)
+        self.assertGreater(refreshed.expires_at, user.expires_at)
+
     def test_live_pin_hash_verify_and_session_expiry(self):
         auth.set_live_pin('123456')
         with self.connect() as conn:
@@ -93,3 +101,19 @@ class AuthTests(unittest.TestCase):
         for invalid in ('12345', '1234567', 'abcdef'):
             with self.assertRaises(ValueError):
                 auth.set_live_pin(invalid)
+
+    def test_manual_screen_lock_requires_pin_and_clears_live_authorization(self):
+        auth.set_live_pin('123456')
+        token, user = auth.authenticate('testadmin', self.password)
+        request = self.request(token, user.csrf_token)
+        auth.verify_live_pin(request, user, '123456')
+        auth.lock_session(request, user)
+        locked = auth.session_from_request(request)
+        self.assertTrue(locked.locked)
+        with self.assertRaises(HTTPException) as caught:
+            auth.require_user(request)
+        self.assertEqual(caught.exception.status_code, 423)
+        self.assertIsNone(auth.live_pin_status(request, locked)[1])
+        auth.unlock_session(request, locked, '123456')
+        self.assertFalse(auth.session_from_request(request).locked)
+        self.assertIsNone(auth.live_pin_status(request, locked)[1])

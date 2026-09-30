@@ -16,8 +16,8 @@ PRESETS = {
     },
     RiskPreset.DEFAULT: {
         "max_order_amount": Decimal("1000000"), "max_symbol_amount": Decimal("2000000"),
-        "max_total_investment": Decimal("7000000"), "min_cash_ratio": Decimal("30"),
-        "daily_loss_limit": Decimal("500000"), "daily_order_limit": 100,
+        "max_total_investment": Decimal("7000000"), "min_cash_ratio": Decimal("0"),
+        "daily_loss_limit": Decimal("500000"), "daily_order_limit": 0,
         "profit_target": Decimal("1000000"),
     },
 }
@@ -102,6 +102,8 @@ class RiskManager:
             ignore_daily_order_limit=bool(getattr(self.broker, "ignore_daily_order_limit", False)),
         )
         return RiskStatus(settings=config, invested_amount=invested,
+                          effective_min_cash_ratio=(Decimal(0) if self.broker.ignore_min_cash_ratio else config.min_cash_ratio),
+                          daily_order_limit_disabled=(self.broker.ignore_daily_order_limit or config.daily_order_limit == 0),
                           cash_ratio=(cash / total_asset * 100 if total_asset else Decimal(0)),
                           daily_profit=daily_profit, daily_orders=orders,
                           new_buys_allowed=reason is None, block_reason=reason)
@@ -112,7 +114,7 @@ class RiskManager:
             return "일일 손실 한도에 도달했습니다."
         if daily_profit >= config.profit_target:
             return "수익 목표에 도달했습니다."
-        if not ignore_daily_order_limit and orders >= config.daily_order_limit:
+        if not ignore_daily_order_limit and config.daily_order_limit > 0 and orders >= config.daily_order_limit:
             return "일일 주문 횟수 한도에 도달했습니다."
         return None
 

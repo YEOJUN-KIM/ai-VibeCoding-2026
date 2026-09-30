@@ -5,10 +5,10 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from threading import Lock
+from threading import Event, Lock
 from time import monotonic, sleep
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 from decimal import Decimal
 
@@ -46,6 +46,17 @@ class TossClient:
         self._access_token: str | None = None
         self._token_expires_at: datetime | None = None
         self._token_lock = Lock()
+        self._group_locks: dict[str, Lock] = {}
+        self._group_locks_lock = Lock()
+        self._request_waiter = Event()
+        self._group_last_request_at: dict[str, float] = {}
+        self._group_rate_limit_until: dict[str, float] = {}
+        self._group_intervals = {
+            "AUTH": 0.21, "ACCOUNT": 1.05, "ASSET": 0.21,
+            "STOCK": 0.21, "STOCK_ALL": 1.05, "MARKET_INFO": 0.35,
+            "MARKET_DATA": 0.08, "MARKET_DATA_CHART": 0.06, "RANKING": 0.21,
+            "ORDER": 0.11, "ORDER_HISTORY": 0.21, "ORDER_INFO": 0.18,
+        }
         self._accounts_cache: list[dict] | None = None
         self._accounts_expires_at = 0.0
         self._accounts_lock = Lock()
@@ -70,10 +81,10 @@ class TossClient:
         self._stock_info_cache: dict[str, tuple[float, dict]] = {}
         self._stock_info_lock = Lock()
         self._candle_cache: dict[
-            tuple[str, str], tuple[float, int, list[LiveStockCandle]]
+            tuple[str, str, int | None], tuple[float, int, list[LiveStockCandle]]
         ] = {}
         self._candle_lock = Lock()
-        self._candle_request_locks: dict[tuple[str, str], Lock] = {}
+        self._candle_request_locks: dict[tuple[str, str, int | None], Lock] = {}
 
     @property
     def configured(self) -> bool:
@@ -95,24 +106,96 @@ class TossClient:
         detail = payload.get("message") or payload.get("error_description")
         return code, detail
 
+    @staticmethod
+    def _request_group(request: Request) -> str:
+        path = urlparse(request.full_url).path
+        method = request.get_method()
+        if path == "/oauth2/token":
+            return "AUTH"
+        if path == "/api/v1/accounts":
+            return "ACCOUNT"
+        if path == "/api/v1/holdings":
+            return "ASSET"
+        if path in {"/api/v1/buying-power", "/api/v1/sellable-quantity", "/api/v1/commissions"}:
+            return "ORDER_INFO"
+        if path == "/api/v1/orders" and method == "GET" or (path.startswith("/api/v1/orders/") and method == "GET"):
+            return "ORDER_HISTORY"
+        if path.startswith("/api/v1/orders"):
+            return "ORDER"
+        if path == "/api/v1/stocks/all":
+            return "STOCK_ALL"
+        if path == "/api/v1/stocks" or path.startswith("/api/v1/stocks/"):
+            return "STOCK"
+        if path.startswith("/api/v1/market-calendar/") or path == "/api/v1/exchange-rate":
+            return "MARKET_INFO"
+        if path == "/api/v1/candles":
+            return "MARKET_DATA_CHART"
+        if path in {"/api/v1/prices", "/api/v1/orderbook", "/api/v1/trades", "/api/v1/price-limits"}:
+            return "MARKET_DATA"
+        if path == "/api/v1/rankings":
+            return "RANKING"
+        return "OTHER"
+
+    def _group_lock(self, group: str) -> Lock:
+        with self._group_locks_lock:
+            return self._group_locks.setdefault(group, Lock())
+
     def _json_request(self, request: Request) -> dict:
-        try:
-            with urlopen(request, timeout=self.timeout) as response:
-                return self._read_json(response)
-        except HTTPError as exc:
+        group = self._request_group(request)
+        with self._group_lock(group):
+            remaining = self._group_rate_limit_until.get(group, 0.0) - monotonic()
+            if remaining > 0:
+                raise TossApiError(
+                    f"토스 API {group} 그룹 요청 한도 대기 중입니다. 약 {max(1, round(remaining))}초 후 다시 시도해 주세요.",
+                    status_code=429, error_code="rate-limit-exceeded",
+                )
+            request_delay = self._group_intervals.get(group, 0.1) - (
+                monotonic() - self._group_last_request_at.get(group, 0.0)
+            )
+            if request_delay > 0:
+                self._request_waiter.wait(request_delay)
             try:
-                payload = self._read_json(exc)
-            except (OSError, ValueError, UnicodeDecodeError):
-                payload = {}
-            code, detail = self._error_details(payload)
-            message = f"토스 API 요청 실패({exc.code})"
-            if code:
-                message += f": {code}"
-            if detail:
-                message += f" - {detail}"
-            raise TossApiError(message, status_code=exc.code, error_code=code) from exc
-        except (URLError, TimeoutError, json.JSONDecodeError) as exc:
-            raise TossApiError("토스 API 서버에 연결하지 못했습니다.") from exc
+                with urlopen(request, timeout=self.timeout) as response:
+                    payload = self._read_json(response)
+                    headers = response.headers
+                self._group_last_request_at[group] = monotonic()
+                try:
+                    limit = float(headers.get("X-RateLimit-Limit", "0"))
+                    if limit > 0:
+                        self._group_intervals[group] = max(0.01, 1 / limit + 0.02)
+                except (TypeError, ValueError):
+                    pass
+                return payload
+            except HTTPError as exc:
+                self._group_last_request_at[group] = monotonic()
+                try:
+                    payload = self._read_json(exc)
+                except (OSError, ValueError, UnicodeDecodeError):
+                    payload = {}
+                code, detail = self._error_details(payload)
+                message = f"토스 API 요청 실패({exc.code})"
+                if code:
+                    message += f": {code}"
+                if detail:
+                    message += f" - {detail}"
+                if exc.code == 429:
+                    try:
+                        retry_after = float(exc.headers.get("Retry-After", "0"))
+                    except (TypeError, ValueError):
+                        retry_after = 0
+                    try:
+                        reset_after = float(exc.headers.get("X-RateLimit-Reset", "0"))
+                    except (TypeError, ValueError):
+                        reset_after = 0
+                    retry_after = max(1.0, retry_after, reset_after) + 0.1
+                    now = monotonic()
+                    self._group_rate_limit_until[group] = max(
+                        self._group_rate_limit_until.get(group, 0.0), now + retry_after
+                    )
+                raise TossApiError(message, status_code=exc.code, error_code=code) from exc
+            except (URLError, TimeoutError, json.JSONDecodeError) as exc:
+                self._last_request_at = monotonic()
+                raise TossApiError("토스 API 서버에 연결하지 못했습니다.") from exc
 
     def _invalidate_access_token(self, rejected_token: str) -> None:
         with self._token_lock:
@@ -397,7 +480,7 @@ class TossClient:
                 holdings=holdings,
             )
             self._portfolio_cache = portfolio
-            self._portfolio_expires_at = monotonic() + 1
+            self._portfolio_expires_at = monotonic() + 8
             return portfolio
 
     def buying_power(self) -> LiveBuyingPower:
@@ -429,7 +512,7 @@ class TossClient:
                 usd_cash_buying_power=amounts["USD"],
             )
             self._buying_power_cache = buying_power
-            self._buying_power_expires_at = monotonic() + 2
+            self._buying_power_expires_at = monotonic() + 8
             return buying_power
 
     def affordable_domestic_candidates(self, count: int = 5) -> LiveCandidateList:
@@ -546,6 +629,17 @@ class TossClient:
     def warm_domestic_stock_universe(self) -> int:
         """서버 시작 시 종목 목록을 미리 적재해 첫 화면 대기를 줄인다."""
         return len(self._domestic_stock_universe())
+
+    def warm_domestic_stock_directory(self) -> tuple[int, int]:
+        """국내주식 첫 화면의 장기 캐시와 인기순 정렬 캐시를 미리 준비한다."""
+        stock_count = len(self._domestic_stock_universe())
+        _, rankings = self._domestic_trading_amount_rankings()
+        popular_symbols = [
+            str(item.get("symbol", "")) for item in rankings[:20] if item.get("symbol")
+        ]
+        if popular_symbols:
+            self.domestic_sparklines(popular_symbols, period="1D")
+        return stock_count, len(rankings)
 
     def search_domestic_stocks(self, query: str, page: int = 1,
                                page_size: int = 8) -> LiveStockSearchPage:
@@ -675,9 +769,10 @@ class TossClient:
         }
         return periods.get(period.upper(), periods["1M"])
 
-    def _domestic_candles(self, symbol: str, interval: str, count: int) -> list[LiveStockCandle]:
+    def _domestic_candles(self, symbol: str, interval: str, count: int,
+                          *, cache_seconds: int | None = None) -> list[LiveStockCandle]:
         normalized = symbol.strip().upper()
-        cache_key = (normalized, interval)
+        cache_key = (normalized, interval, cache_seconds)
         now = monotonic()
         cached = self._candle_cache.get(cache_key)
         if cached is not None and now < cached[0] and cached[1] >= count:
@@ -721,7 +816,8 @@ class TossClient:
                 close_price=self._decimal(item.get("closePrice")),
                 volume=self._decimal(item.get("volume")),
             ) for item in reversed(raw_rows)]
-            cache_seconds = 1800 if interval == "1m" and count > 2000 else 300
+            if cache_seconds is None:
+                cache_seconds = 1800 if interval == "1m" and count > 2000 else 300
             with self._candle_lock:
                 self._candle_cache[cache_key] = (monotonic() + cache_seconds, count, candles)
             return candles[-count:]
@@ -805,6 +901,26 @@ class TossClient:
                                    if "nxtTradingSuspended" in korean_market_detail else None),
             candles=candles,
         )
+
+    def current_prices(self, symbols: list[str]) -> dict[str, Decimal]:
+        """여러 종목의 현재가만 한 번에 조회한다.
+
+        전략 선택처럼 차트·종목 상세·랭킹이 필요 없는 경로에서 상세 조회를
+        반복해 API 한도를 소모하지 않도록 분리한 경량 조회다.
+        """
+        normalized = list(dict.fromkeys(symbol.strip().upper() for symbol in symbols if symbol.strip()))
+        if not normalized:
+            return {}
+        query = urlencode({"symbols": ",".join(normalized)})
+        payload = self._authorized_json_request(f"{self.base_url}/api/v1/prices?{query}")
+        rows = payload.get("result")
+        if not isinstance(rows, list):
+            raise TossApiError("토스 API 현재가 응답 형식이 예상과 다릅니다.")
+        return {
+            str(item.get("symbol", "")).upper(): self._decimal(item.get("lastPrice"))
+            for item in rows
+            if item.get("symbol") and item.get("lastPrice") is not None
+        }
 
     def favorite_stock_snapshots(self, favorites: list[dict]) -> list[LiveFavoriteStock]:
         if not favorites:

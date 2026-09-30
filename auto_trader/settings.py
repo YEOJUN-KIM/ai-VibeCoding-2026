@@ -45,6 +45,7 @@ class Settings:
     login_lock_minutes: int
     paper_fee_rate: Decimal
     paper_sell_tax_rate: Decimal
+    paper_slippage_rate: Decimal
     paper_initial_cash: Decimal
     paper_ignore_min_cash_ratio: bool
     paper_ignore_daily_order_limit: bool
@@ -61,6 +62,8 @@ class Settings:
     toss_ws_url: str
     dart_api_key: str
     dart_api_base_url: str
+    long_term_scan_hour: int
+    long_term_scan_minute: int
     openai_api_key: str
     ai_news_enabled: bool
     live_dry_run_ignore_financial_limits: bool
@@ -101,11 +104,12 @@ def load_settings() -> Settings:
         app_port=_integer("APP_PORT", 8000),
         app_mode=mode,
         app_reload=_boolean("APP_RELOAD", False),
-        session_minutes=_integer("SESSION_MINUTES", 30),
+        session_minutes=_integer("SESSION_MINUTES", 720),
         login_max_failures=_integer("LOGIN_MAX_FAILURES", 5),
         login_lock_minutes=_integer("LOGIN_LOCK_MINUTES", 15),
         paper_fee_rate=_decimal("PAPER_FEE_RATE", "0.00015"),
         paper_sell_tax_rate=_decimal("PAPER_SELL_TAX_RATE", "0.002"),
+        paper_slippage_rate=_decimal("PAPER_SLIPPAGE_RATE", "0.0005"),
         paper_initial_cash=_decimal("PAPER_INITIAL_CASH", "10000000"),
         paper_ignore_min_cash_ratio=_boolean("PAPER_IGNORE_MIN_CASH_RATIO", False),
         paper_ignore_daily_order_limit=_boolean("PAPER_IGNORE_DAILY_ORDER_LIMIT", False),
@@ -122,6 +126,8 @@ def load_settings() -> Settings:
         toss_ws_url=os.getenv("TOSS_WS_URL", "wss://openapi-ws.tossinvest.com/ws/v1"),
         dart_api_key=os.getenv("DART_API_KEY", ""),
         dart_api_base_url=os.getenv("DART_API_BASE_URL", "https://opendart.fss.or.kr/api"),
+        long_term_scan_hour=_integer("LONG_TERM_SCAN_HOUR", 4),
+        long_term_scan_minute=_integer("LONG_TERM_SCAN_MINUTE", 30),
         openai_api_key=os.getenv("OPENAI_API_KEY", ""),
         ai_news_enabled=_boolean("AI_NEWS_ENABLED", False),
         live_dry_run_ignore_financial_limits=_boolean("LIVE_DRY_RUN_IGNORE_FINANCIAL_LIMITS", False),
@@ -136,6 +142,8 @@ def load_settings() -> Settings:
     )
     if settings.strategy_short_period >= settings.strategy_long_period:
         raise ValueError("STRATEGY_SHORT_PERIOD는 STRATEGY_LONG_PERIOD보다 작아야 합니다.")
+    if not 0 <= settings.long_term_scan_hour <= 23 or not 0 <= settings.long_term_scan_minute <= 59:
+        raise ValueError("장기분석 자동 갱신 시각은 00:00부터 23:59 사이여야 합니다.")
     return settings
 
 

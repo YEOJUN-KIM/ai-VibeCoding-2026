@@ -21,7 +21,7 @@
         <a class="workspace-nav-link live-link" href="/live"><span class="nav-index">01</span><span><strong>실제계좌</strong><small>LIVE 포트폴리오</small></span></a>
         <a class="workspace-nav-link active stocks-link" href="/stocks"><span class="nav-index">02</span><span><strong>국내주식</strong><small>마켓 탐색</small></span></a>
         <a class="workspace-nav-link paper-link" href="/paper"><span class="nav-index">03</span><span><strong>모의매매</strong><small>PAPER 랩</small></span></a>
-        <span class="workspace-nav-link is-disabled"><span class="nav-index">04</span><span><strong>장기분석</strong><small>준비 중</small></span></span>
+        <a class="workspace-nav-link long-term-link" href="/long-term"><span class="nav-index">04</span><span><strong>장기분석</strong><small>기업 체력 점검</small></span></a>
         <a class="workspace-nav-link news-link" href="/news"><span class="nav-index">05</span><span><strong>뉴스·리서치</strong><small>최근 보도 흐름</small></span></a>
         <a class="workspace-nav-link" href="/settings"><span class="nav-index">06</span><span><strong>설정</strong><small>전략·계정·한도</small></span></a>
       </div>
@@ -40,8 +40,9 @@
       <nav class="detail-section-tabs" id="detail-section-tabs" role="tablist" aria-label="종목 상세 구역">
         <button type="button" role="tab" aria-selected="true" data-detail-tab="chart" class="active"><span>01</span>차트</button>
         <button type="button" role="tab" aria-selected="false" data-detail-tab="company"><span>02</span>기업정보</button>
-        <button type="button" role="tab" aria-selected="false" data-detail-tab="market"><span>03</span>시장정보</button>
-        <button type="button" role="tab" aria-selected="false" data-detail-tab="news"><span>04</span>뉴스</button>
+        <button type="button" role="tab" aria-selected="false" data-detail-tab="long-term" data-long-term-only><span>03</span>장기분석</button>
+        <button type="button" role="tab" aria-selected="false" data-detail-tab="market"><span>04</span>시장정보</button>
+        <button type="button" role="tab" aria-selected="false" data-detail-tab="news"><span>05</span>뉴스</button>
       </nav>
       <section class="panel company-info-panel detail-section-panel" data-detail-panel="company" hidden>
         <div class="panel-heading"><div><p class="section-kicker">COMPANY PROFILE</p><h2>기업 기본정보</h2><p class="subtitle">토스증권 종목 기본정보를 기준으로 상장 정보와 거래 지원 상태를 확인합니다.</p></div><span class="market-badge" id="company-listing-status">-</span></div>
@@ -77,6 +78,26 @@
           <div class="company-disclosure-list" id="company-disclosure-list"></div>
         </div>
         <p class="company-info-note" id="company-info-note">토스 종목 기본정보를 불러왔습니다. 상세 기업정보는 OpenDART 연동 상태를 확인하고 있습니다.</p>
+      </section>
+      <section class="panel detail-section-panel long-term-detail-panel" data-detail-panel="long-term" hidden>
+        <div id="detail-long-term-loading" class="long-term-empty"><strong>기업의 장기 데이터를 분석하고 있습니다.</strong><span>최근 사업보고서와 1년 가격 흐름을 확인하는 중입니다.</span></div>
+        <div id="detail-long-term-content" hidden>
+          <div class="long-term-detail-heading">
+            <div><p class="section-kicker">LONG-TERM SCORECARD</p><h2>장기 관찰 리포트</h2><p class="long-term-summary" id="detail-long-term-summary"></p><div class="long-term-meta"><span id="detail-long-term-fiscal">-</span><span id="detail-long-term-industry">-</span><span id="detail-long-term-price-context">-</span></div><button class="button secondary long-term-watch-button" id="detail-long-term-watch-button" type="button">내 관찰 후보에 추가</button></div>
+            <div class="long-term-score"><span>관찰 랭크</span><strong id="detail-long-term-rank">-</strong><small><b id="detail-long-term-score">-</b>점 · <i id="detail-long-term-grade">-</i></small></div>
+          </div>
+          <div class="long-term-factor-grid" id="detail-long-term-factors"></div>
+          <div class="long-term-two-column">
+            <article class="long-term-points opportunity long-term-detail-surface"><div class="panel-heading"><div><p class="section-kicker">OPPORTUNITY</p><h2>긍정적으로 볼 근거</h2></div></div><ul id="detail-long-term-opportunities"></ul></article>
+            <article class="long-term-points risk long-term-detail-surface"><div class="panel-heading"><div><p class="section-kicker">RISK CHECK</p><h2>추가로 확인할 위험</h2></div></div><ul id="detail-long-term-risks"></ul></article>
+          </div>
+          <div class="long-term-two-column">
+            <article class="long-term-detail-surface"><div class="panel-heading"><div><p class="section-kicker">FINANCIAL HISTORY</p><h2>최근 연간 실적</h2><p class="subtitle" id="detail-long-term-data-message"></p></div></div><div class="table-wrap"><table><thead><tr><th>연도</th><th>매출</th><th>영업이익</th><th>순이익</th></tr></thead><tbody id="detail-long-term-financials"></tbody></table></div></article>
+            <article class="long-term-detail-surface"><div class="panel-heading"><div><p class="section-kicker">PRICE CONTEXT</p><h2>최근 1년 가격 흐름</h2><p class="subtitle" id="detail-long-term-price-caption"></p></div></div><div class="long-term-chart" id="detail-long-term-chart"></div></article>
+          </div>
+          <p class="long-term-disclaimer">이 점수는 공개 데이터를 단순 규칙으로 정리한 관찰 지표이며 매수·매도 추천이나 수익 보장이 아닙니다. 최신 공시와 사업 내용을 함께 확인하세요.</p>
+        </div>
+        <p class="form-message" id="detail-long-term-message"></p>
       </section>
       <section class="panel stock-chart-panel detail-section-panel" id="detail-chart-panel" data-detail-panel="chart" data-layout="chart-only">
         <div class="panel-heading"><div><p class="section-kicker" id="detail-period-kicker">1 DAY</p><h2>가격·거래량 차트</h2><p class="subtitle">기간별 캔들과 거래량, 이동평균선으로 시장 흐름을 살펴봅니다.</p></div><span class="market-badge" id="detail-type">-</span></div>
@@ -144,8 +165,8 @@
       <p class="eyebrow">LIVE AUTHORIZATION</p>
       <h2 id="detail-live-auth-title">주문 검토 PIN 인증</h2>
       <p class="subtitle">실계좌 주문 정보를 검토하기 전에 6자리 LIVE PIN을 확인합니다. 인증은 5분간 유효합니다.</p>
-      <form id="detail-live-pin-form">
-        <label>6자리 PIN<input id="detail-live-pin" type="password" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" required></label>
+      <form id="detail-live-pin-form" autocomplete="off">
+        <label>6자리 PIN<input class="pin-secret" id="detail-live-pin" name="order-authorization-code" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore required></label>
         <button class="button primary" type="submit">PIN 인증</button>
       </form>
       <p class="form-message" id="detail-live-pin-status">인증 후 주문 검토를 자동으로 다시 실행합니다.</p>

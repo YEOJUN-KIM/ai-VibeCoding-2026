@@ -46,6 +46,13 @@ class Order(BaseModel):
     status: OrderStatus
     message: str
     created_at: datetime
+    source: str = "MANUAL"
+    run_id: str | None = None
+    reason: str = ""
+    fee: Decimal = Decimal("0")
+    tax: Decimal = Decimal("0")
+    slippage: Decimal = Decimal("0")
+    realized_profit: Decimal | None = None
 
 
 class Position(BaseModel):
@@ -93,6 +100,7 @@ class StrategySnapshot(BaseModel):
     short_average: Decimal | None = None
     long_average: Decimal | None = None
     trend: str = "COLLECTING"
+    decision: str = "가격 수집 중"
 
 
 class SignalEvent(BaseModel):
@@ -110,6 +118,19 @@ class StrategyStatus(BaseModel):
     short_period: int
     long_period: int
     order_quantity: int
+    strategy_basis_amount: Decimal = Decimal("0")
+    strategy_profit: Decimal = Decimal("0")
+    strategy_return_percent: Decimal | None = None
+    data_source: str = "SIMULATED"
+    bar_interval: str = "1m"
+    last_data_at: datetime | None = None
+    data_message: str = "시세 수신 대기"
+    realized_profit: Decimal = Decimal("0")
+    trading_costs: Decimal = Decimal("0")
+    completed_trades: int = 0
+    winning_trades: int = 0
+    max_drawdown_percent: Decimal = Decimal("0")
+    run_id: str | None = None
     snapshots: list[StrategySnapshot]
     recent_signals: list[SignalEvent]
 
@@ -371,6 +392,55 @@ class LiveCompanyProfile(BaseModel):
     disclosures: list[CompanyDisclosure] = Field(default_factory=list)
 
 
+class LongTermFactor(BaseModel):
+    key: str
+    label: str
+    score: int | None = None
+    max_score: int
+    status: str
+    value: str
+    detail: str
+
+
+class LongTermAnalysis(BaseModel):
+    symbol: str
+    name: str
+    market: str
+    price: Decimal | None = None
+    market_cap: Decimal | None = None
+    industry_name: str | None = None
+    fiscal_year: str | None = None
+    overall_score: int | None = None
+    rank: str | None = None
+    grade: str
+    summary: str
+    factors: list[LongTermFactor] = Field(default_factory=list)
+    opportunities: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    financial_history: list[CompanyFinancialYear] = Field(default_factory=list)
+    per: Decimal | None = None
+    pbr: Decimal | None = None
+    revenue_growth_percent: Decimal | None = None
+    operating_margin_percent: Decimal | None = None
+    debt_ratio_percent: Decimal | None = None
+    dividend_yield_percent: Decimal | None = None
+    price_return_1y_percent: Decimal | None = None
+    max_drawdown_1y_percent: Decimal | None = None
+    candles: list[LiveStockCandle] = Field(default_factory=list)
+    data_message: str
+    generated_at: datetime
+
+
+class LongTermWatchCandidate(BaseModel):
+    symbol: str
+    name: str
+    market: str
+    is_favorite: bool = False
+    added_manually: bool = False
+    created_at: datetime
+    analysis: LongTermAnalysis | None = None
+
+
 class LiveTradingReadiness(BaseModel):
     configured: bool
     enabled: bool
@@ -385,13 +455,13 @@ class LiveStrategyWrite(BaseModel):
     execution_mode: str = Field(default="DRY_RUN", pattern=r"^(DRY_RUN|LIVE)$")
     short_period: int = Field(default=5, ge=2, le=120)
     long_period: int = Field(default=20, ge=3, le=240)
-    order_quantity: int = Field(default=1, ge=1, le=100000)
+    order_quantity: int = Field(default=1, ge=1, le=1000)
     take_profit_rate: Decimal = Field(default=Decimal("5"), gt=0, le=100)
     stop_loss_rate: Decimal = Field(default=Decimal("3"), gt=0, le=100)
     max_holding_days: int = Field(default=20, ge=1, le=3650)
     trading_start: str = Field(default="09:00", pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
     trading_end: str = Field(default="15:20", pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
-    daily_order_limit: int = Field(default=3, ge=1, le=100)
+    daily_order_limit: int = Field(default=0, ge=0, le=100)
     cooldown_minutes: int = Field(default=30, ge=0, le=10080)
     symbols: list[str] = Field(default_factory=list, max_length=20)
 
@@ -470,6 +540,7 @@ class SessionInfo(BaseModel):
     username: str
     csrf_token: str
     expires_at: datetime
+    locked: bool = False
 
 
 class RiskPreset(StrEnum):
@@ -485,7 +556,7 @@ class RiskSettings(BaseModel):
     max_total_investment: Decimal = Field(gt=0)
     min_cash_ratio: Decimal = Field(ge=0, le=100)
     daily_loss_limit: Decimal = Field(gt=0)
-    daily_order_limit: int = Field(gt=0, le=10000)
+    daily_order_limit: int = Field(ge=0, le=10000)
     profit_target: Decimal = Field(gt=0)
     updated_at: datetime | None = None
 
@@ -497,7 +568,7 @@ class RiskSettingsUpdate(BaseModel):
     max_total_investment: Decimal | None = Field(default=None, gt=0)
     min_cash_ratio: Decimal | None = Field(default=None, ge=0, le=100)
     daily_loss_limit: Decimal | None = Field(default=None, gt=0)
-    daily_order_limit: int | None = Field(default=None, gt=0, le=10000)
+    daily_order_limit: int | None = Field(default=None, ge=0, le=10000)
     profit_target: Decimal | None = Field(default=None, gt=0)
 
 
@@ -509,3 +580,5 @@ class RiskStatus(BaseModel):
     daily_orders: int
     new_buys_allowed: bool
     block_reason: str | None = None
+    effective_min_cash_ratio: Decimal = Decimal("0")
+    daily_order_limit_disabled: bool = False

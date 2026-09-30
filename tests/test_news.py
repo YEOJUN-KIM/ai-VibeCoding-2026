@@ -63,6 +63,13 @@ class NewsServiceTests(unittest.TestCase):
         right = service._title_tokens("삼전 성과급에 파격 보상")
         self.assertTrue(service._same_issue(left, right))
 
+    def test_market_theme_groups_kospi_articles_with_different_wording(self):
+        service = NewsService()
+        left = service._title_tokens("코스피 외국인 매도에 장중 약세")
+        right = service._title_tokens("금리 불안 속 유가증권시장 개인 순매수")
+        self.assertTrue(service._same_issue(left, right))
+        self.assertIn("__theme_코스피", left)
+
     def test_invalid_xml_has_readable_error(self):
         service = NewsService()
         with patch("auto_trader.news.urlopen", return_value=FakeResponse(b"not xml")):

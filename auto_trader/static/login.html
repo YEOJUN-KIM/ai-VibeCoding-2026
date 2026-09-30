@@ -24,6 +24,11 @@
         <h2>투자 데스크 로그인</h2>
         <p class="login-help">등록된 관리자 계정으로 개인 워크스페이스에 접속합니다.</p>
       </div>
+      <div class="login-readiness checking" id="login-readiness" aria-live="polite">
+        <span class="login-readiness-dot" aria-hidden="true"></span>
+        <div><strong id="readiness-title">서비스 연결 확인 중</strong><small id="readiness-detail">PostgreSQL과 토스 API 상태를 확인하고 있습니다.</small></div>
+        <button class="text-button" id="readiness-retry" type="button" hidden>다시 확인</button>
+      </div>
       <form id="login-form" autocomplete="on">
         <label>관리자 아이디
           <input id="username" name="username" type="text" minlength="3" maxlength="50" autocomplete="username" required autofocus>
@@ -31,7 +36,7 @@
         <label>비밀번호
           <input id="password" name="password" type="password" maxlength="128" autocomplete="current-password" required>
         </label>
-        <button class="button primary full" id="login-button" type="submit">로그인</button>
+        <button class="button primary full" id="login-button" type="submit" disabled>연결 확인 중...</button>
       </form>
       <p class="form-message" id="login-message" role="alert"></p>
       <p class="login-footnote">관리자 생성은 웹이 아닌 터미널에서만 가능합니다.</p>

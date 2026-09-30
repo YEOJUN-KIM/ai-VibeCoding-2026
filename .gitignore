@@ -217,5 +217,8 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# Local paper trading database
-.paper-postgres/
+# Local database migration backups
+backups/
+
+# Persistent local paper execution audit
+.paper-history/

@@ -1,8 +1,10 @@
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 from psycopg import sql
 from auto_trader import database, paper, risk
@@ -193,6 +195,96 @@ class PaperMemoryTests(unittest.TestCase):
         self.assertEqual(
             {item.symbol for item in engine.status().snapshots}, {"005930", "000660"},
         )
+
+    def test_strategy_return_excludes_stocks_outside_selected_targets(self):
+        self.broker.load_snapshot(cash=Decimal("100000"), positions=[
+            {"symbol": "005930", "quantity": 1, "average_price": Decimal("60000"),
+             "current_price": Decimal("70000")},
+            {"symbol": "005380", "quantity": 1, "average_price": Decimal("200000"),
+             "current_price": Decimal("240000")},
+        ])
+        engine = MovingAverageEngine(self.market, self.broker)
+        engine.configure(interval_seconds=2, short_period=2, long_period=3, order_quantity=1,
+                         target_symbol="005930")
+
+        self.market._prices["005380"] = Decimal("200000")
+        self.assertEqual(engine.status().strategy_profit, Decimal("0"))
+        self.market._prices["005930"] = Decimal("71000")
+        status = engine.status()
+        self.assertEqual(status.strategy_profit, Decimal("1000"))
+        self.assertEqual(status.strategy_return_percent, Decimal("1000") / Decimal("70000") * 100)
+
+    def test_strategy_applies_take_profit_and_stop_loss(self):
+        now = [datetime(2026, 9, 30, 10, 0, tzinfo=ZoneInfo("Asia/Seoul"))]
+        self.broker.load_snapshot(cash=Decimal("100000"), positions=[{
+            "symbol": "005930", "quantity": 1, "average_price": Decimal("70000"),
+            "current_price": Decimal("70000"),
+        }])
+        engine = MovingAverageEngine(self.market, self.broker, clock=lambda: now[0])
+        engine.configure(
+            interval_seconds=2, short_period=2, long_period=3, order_quantity=1,
+            target_symbol="005930", take_profit_rate=Decimal("5"),
+            stop_loss_rate=Decimal("3"), trading_start="00:00", trading_end="23:59",
+            cooldown_minutes=0,
+        )
+        self.market._prices["005930"] = Decimal("80000")
+        engine.step()
+        self.assertEqual(self.broker.holding_quantity("005930"), 0)
+        self.assertIn("익절률", engine.status().recent_signals[0].reason)
+
+        self.broker.load_snapshot(cash=Decimal("100000"), positions=[{
+            "symbol": "005930", "quantity": 1, "average_price": Decimal("70000"),
+            "current_price": Decimal("70000"),
+        }])
+        engine.configure(
+            interval_seconds=2, short_period=2, long_period=3, order_quantity=1,
+            target_symbol="005930", take_profit_rate=Decimal("5"),
+            stop_loss_rate=Decimal("3"), trading_start="00:00", trading_end="23:59",
+            cooldown_minutes=0,
+        )
+        self.market._prices["005930"] = Decimal("60000")
+        engine.step()
+        self.assertEqual(self.broker.holding_quantity("005930"), 0)
+        self.assertIn("손절률", engine.status().recent_signals[0].reason)
+
+    def test_strategy_applies_max_holding_days(self):
+        now = [datetime(2026, 9, 30, 10, 0, tzinfo=ZoneInfo("Asia/Seoul"))]
+        self.broker.load_snapshot(cash=Decimal("100000"), positions=[{
+            "symbol": "005930", "quantity": 1, "average_price": Decimal("70000"),
+            "current_price": Decimal("70000"),
+        }])
+        engine = MovingAverageEngine(self.market, self.broker, clock=lambda: now[0])
+        engine.configure(
+            interval_seconds=2, short_period=2, long_period=3, order_quantity=1,
+            target_symbol="005930", take_profit_rate=Decimal("100"),
+            stop_loss_rate=Decimal("100"), max_holding_days=2,
+            trading_start="00:00", trading_end="23:59", cooldown_minutes=0,
+        )
+        now[0] += timedelta(days=2)
+        engine.step()
+        self.assertEqual(self.broker.holding_quantity("005930"), 0)
+        self.assertIn("최대 보유일", engine.status().recent_signals[0].reason)
+
+    def test_strategy_applies_trading_hours_and_symbol_cooldown(self):
+        now = [datetime(2026, 9, 30, 8, 59, tzinfo=ZoneInfo("Asia/Seoul"))]
+        self.broker.load_snapshot(cash=Decimal("300000"), positions=[])
+        self.relax_risk()
+        engine = MovingAverageEngine(self.market, self.broker, clock=lambda: now[0])
+        engine.configure(
+            interval_seconds=2, short_period=2, long_period=3, order_quantity=1,
+            target_symbol="005930", trading_start="09:00", trading_end="15:20",
+            cooldown_minutes=30,
+        )
+        engine._buy("005930", Decimal("70000"))
+        self.assertEqual(self.broker.holding_quantity("005930"), 0)
+
+        now[0] = now[0].replace(hour=10)
+        engine._buy("005930", Decimal("70000"))
+        engine._buy("005930", Decimal("70000"))
+        self.assertEqual(self.broker.holding_quantity("005930"), 1)
+        now[0] += timedelta(minutes=30)
+        engine._buy("005930", Decimal("70000"))
+        self.assertEqual(self.broker.holding_quantity("005930"), 2)
 
     def test_rounding_and_zero_capital(self):
         self.relax_risk()

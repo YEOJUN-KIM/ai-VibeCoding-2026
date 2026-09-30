@@ -26,6 +26,46 @@ class FakeResponse:
 
 class TossClientTests(unittest.TestCase):
     @patch("auto_trader.toss.urlopen")
+    def test_rate_limit_blocks_follow_up_requests_during_backoff(self, mocked):
+        error = HTTPError("https://example.test", 429, "Too Many Requests", {"Retry-After": "20"}, None)
+        error.read = lambda: json.dumps({
+            "error": {"code": "rate-limit-exceeded", "message": "요청 한도 초과"}
+        }).encode()
+        mocked.side_effect = error
+        client = TossClient(client_id="id", client_secret="secret")
+
+        with self.assertRaisesRegex(TossApiError, "rate-limit-exceeded"):
+            client.access_token()
+        with self.assertRaisesRegex(TossApiError, "요청 한도 대기 중"):
+            client.access_token()
+
+        self.assertEqual(mocked.call_count, 1)
+
+    @patch("auto_trader.toss.urlopen")
+    def test_rate_limit_uses_server_reset_for_only_that_group(self, mocked):
+        def limited(*_args, **_kwargs):
+            error = HTTPError("https://example.test", 429, "Too Many Requests", {"X-RateLimit-Reset": "2"}, None)
+            error.read = lambda: b'{"error":{"code":"rate-limit-exceeded"}}'
+            raise error
+
+        mocked.side_effect = limited
+        client = TossClient(client_id="id", client_secret="secret")
+        with self.assertRaises(TossApiError):
+            client.access_token()
+        remaining = client._group_rate_limit_until["AUTH"] - __import__("time").monotonic()
+        self.assertGreater(remaining, 2)
+        self.assertLessEqual(remaining, 2.1)
+        self.assertNotIn("ACCOUNT", client._group_rate_limit_until)
+
+    def test_requests_are_classified_by_rate_limit_group(self):
+        from urllib.request import Request
+
+        self.assertEqual(TossClient._request_group(Request("https://x/api/v1/accounts")), "ACCOUNT")
+        self.assertEqual(TossClient._request_group(Request("https://x/api/v1/holdings")), "ASSET")
+        self.assertEqual(TossClient._request_group(Request("https://x/api/v1/buying-power")), "ORDER_INFO")
+        self.assertEqual(TossClient._request_group(Request("https://x/api/v1/prices")), "MARKET_DATA")
+
+    @patch("auto_trader.toss.urlopen")
     def test_token_is_cached_and_accounts_are_read(self, mocked):
         mocked.side_effect = [FakeResponse({"access_token": "secret-token", "expires_in": 3600}),
                               FakeResponse({"result": [{"accountSeq": 1}]})]
@@ -34,6 +74,31 @@ class TossClientTests(unittest.TestCase):
         self.assertEqual(client.accounts(), [{"accountSeq": 1}])
         self.assertEqual(client.access_token(), "secret-token")
         self.assertEqual(mocked.call_count, 2)
+
+    @patch("auto_trader.toss.urlopen")
+    def test_current_prices_batches_symbols_in_one_market_data_request(self, mocked):
+        mocked.side_effect = [
+            FakeResponse({"access_token": "token", "expires_in": 3600}),
+            FakeResponse({"result": [
+                {"symbol": "005930", "lastPrice": "71500", "currency": "KRW"},
+                {"symbol": "005380", "lastPrice": "211000", "currency": "KRW"},
+            ]}),
+        ]
+        client = TossClient(client_id="id", client_secret="secret")
+
+        prices = client.current_prices(["005930", "005380", "005930"])
+
+        self.assertEqual(prices, {"005930": Decimal("71500"), "005380": Decimal("211000")})
+        self.assertEqual(mocked.call_count, 2)
+        self.assertIn("symbols=005930%2C005380", mocked.call_args.args[0].full_url)
+
+    def test_stock_directory_warmup_populates_universe_and_rankings(self):
+        client = TossClient(client_id="id", client_secret="secret")
+        with patch.object(client, "_domestic_stock_universe", return_value=[{"symbol": "005930"}]), \
+             patch.object(client, "_domestic_trading_amount_rankings", return_value=(None, [{"rank": 1, "symbol": "005930"}])), \
+             patch.object(client, "domestic_sparklines", return_value={"005930": []}) as sparklines:
+            self.assertEqual(client.warm_domestic_stock_directory(), (1, 1))
+            sparklines.assert_called_once_with(["005930"], period="1D")
 
     def test_missing_configuration(self):
         with self.assertRaises(TossApiError):

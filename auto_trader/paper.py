@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from decimal import Decimal, ROUND_DOWN
+from pathlib import Path
 from threading import RLock
 from uuid import uuid4
 
@@ -14,14 +15,19 @@ class PaperBroker:
     def __init__(self, market: MarketSimulator, initial_cash=Decimal("10000000"),
                  account_name="paper-default", fee_rate=Decimal("0"),
                  sell_tax_rate=Decimal("0"), ignore_min_cash_ratio=False,
-                 ignore_daily_order_limit=False):
-        for rate in (fee_rate, sell_tax_rate):
+                 ignore_daily_order_limit=False, slippage_rate=Decimal("0"),
+                 journal_path: Path | None = None):
+        for rate in (fee_rate, sell_tax_rate, slippage_rate):
             if not rate.is_finite() or not Decimal(0) <= rate <= Decimal(1):
                 raise ValueError("비용률은 0부터 1 사이의 유한한 값이어야 합니다.")
         if fee_rate + sell_tax_rate > 1:
             raise ValueError("수수료와 매도 세금 비율의 합은 1 이하여야 합니다.")
+        if slippage_rate >= 1:
+            raise ValueError("슬리피지 비율은 1보다 작아야 합니다.")
         self.fee_rate = fee_rate
         self.sell_tax_rate = sell_tax_rate
+        self.slippage_rate = slippage_rate
+        self.journal_path = journal_path
         self.ignore_min_cash_ratio = bool(ignore_min_cash_ratio)
         self.ignore_daily_order_limit = bool(ignore_daily_order_limit)
         self.market = market
@@ -43,6 +49,8 @@ class PaperBroker:
             self._next_order_id = 1
             self._total_fees = Decimal(0)
             self._total_taxes = Decimal(0)
+            self._strategy_positions = {}
+            self.run_id = str(uuid4())
 
     def initialize(self):
         """영구 설정의 계좌 키만 보장하고 PAPER 자산은 항상 새로 시작한다."""
@@ -63,19 +71,66 @@ class PaperBroker:
         self.risk_manager = risk_manager
         risk_manager.initialize(self.account_id, self)
 
-    def submit(self, request: OrderRequest, *, signal_id=None) -> Order:
+    def begin_strategy(self, symbols: list[str]) -> Decimal:
+        """선택 시점의 보유분을 평가액으로 인수하고 이후 수동 거래와 분리한다."""
+        with self._lock:
+            run_id = str(uuid4())
+            positions = {
+                symbol: {"quantity": self.holding_quantity(symbol),
+                         "average_price": self.market.quote(symbol).price}
+                for symbol in symbols if self.holding_quantity(symbol)
+            }
+            baseline = sum((p["quantity"] * p["average_price"]
+                            for p in positions.values()), Decimal(0))
+            self._journal({"event": "STRATEGY_BASELINE", "run_id": run_id,
+                           "created_at": datetime.now().astimezone().isoformat(),
+                           "positions": {s: {"quantity": p["quantity"], "average_price": str(p["average_price"])}
+                                         for s, p in positions.items()},
+                           "baseline": str(baseline)})
+            self.run_id = run_id
+            self._strategy_positions = positions
+            return baseline
+
+    def _journal(self, payload: dict) -> None:
+        if self.journal_path is not None:
+            import json
+            self.journal_path.parent.mkdir(parents=True, exist_ok=True)
+            with self._lock, self.journal_path.open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+    def strategy_quantity(self, symbol: str) -> int:
+        with self._lock:
+            return int(self._strategy_positions.get(symbol, {}).get("quantity", 0))
+
+    def strategy_average(self, symbol: str) -> Decimal | None:
+        with self._lock:
+            return self._strategy_positions.get(symbol, {}).get("average_price")
+
+    def strategy_value(self) -> Decimal:
+        with self._lock:
+            return sum((self.market.quote(s).price * p["quantity"]
+                        for s, p in self._strategy_positions.items()), Decimal(0))
+
+    def exit_proceeds(self, symbol: str, quantity: int, price: Decimal) -> Decimal:
+        amount = price * (1 - self.slippage_rate) * quantity
+        return amount - (amount * self.fee_rate).quantize(Decimal("1"), rounding=ROUND_DOWN) - (
+            amount * self.sell_tax_rate).quantize(Decimal("1"), rounding=ROUND_DOWN)
+
+    def submit(self, request: OrderRequest, *, signal_id=None, source="MANUAL", reason="") -> Order:
         request_id = request.request_id or str(uuid4())
         with self._lock:
             prior = self._requests.get(request_id)
             if prior:
-                if (prior.symbol, prior.side, prior.quantity) != (request.symbol, request.side, request.quantity):
+                if (prior.symbol, prior.side, prior.quantity, prior.source) != (request.symbol, request.side, request.quantity, source):
                     raise ValueError("같은 request_id를 다른 주문에 사용할 수 없습니다.")
                 return prior
             quote = self.market.quote(request.symbol)
             holding = self._positions.get(request.symbol)
             quantity = int(holding["quantity"]) if holding else 0
             average = Decimal(holding["average_price"]) if holding else Decimal(0)
-            amount = quote.price * request.quantity
+            execution_price = quote.price * (1 + self.slippage_rate if request.side == OrderSide.BUY
+                                             else 1 - self.slippage_rate)
+            amount = execution_price * request.quantity
             fee = (amount * self.fee_rate).quantize(Decimal("1"), rounding=ROUND_DOWN)
             tax = ((amount * self.sell_tax_rate).quantize(Decimal("1"), rounding=ROUND_DOWN)
                    if request.side == OrderSide.SELL else Decimal(0))
@@ -90,9 +145,22 @@ class PaperBroker:
                 status, message = OrderStatus.REJECTED, "가상 계좌의 주문 가능 금액이 부족합니다."
             elif request.side == OrderSide.SELL and request.quantity > quantity:
                 status, message = OrderStatus.REJECTED, "가상 계좌의 보유 수량이 부족합니다."
+            if status == OrderStatus.FILLED and request.side == OrderSide.SELL and request.quantity > (
+                    self.strategy_quantity(request.symbol) if source == "STRATEGY"
+                    else quantity - self.strategy_quantity(request.symbol)):
+                status, message = OrderStatus.REJECTED, "전략 관리 보유분과 수동 보유분은 분리해서 매도합니다."
+            strategy_average = self.strategy_average(request.symbol) or Decimal(0)
+            realized = (amount - fee - tax - (strategy_average if source == "STRATEGY" else average) * request.quantity
+                        if request.side == OrderSide.SELL and status == OrderStatus.FILLED else None)
             order = Order(id=self._next_order_id, symbol=request.symbol, side=request.side,
-                          quantity=request.quantity, price=quote.price, status=status,
-                          message=message, created_at=datetime.now().astimezone())
+                          quantity=request.quantity, price=execution_price, status=status,
+                          message=message, created_at=datetime.now().astimezone(),
+                          source=source, run_id=self.run_id, reason=reason,
+                          fee=fee if status == OrderStatus.FILLED else Decimal(0),
+                          tax=tax if status == OrderStatus.FILLED else Decimal(0),
+                          slippage=abs(execution_price - quote.price) * request.quantity if status == OrderStatus.FILLED else Decimal(0),
+                          realized_profit=realized)
+            self._journal({"event": "ORDER", **order.model_dump(mode="json")})
             self._next_order_id += 1
             self._orders.append(order)
             self._requests[request_id] = order
@@ -107,6 +175,17 @@ class PaperBroker:
                     self._positions.pop(request.symbol, None)
                 self._total_fees += fee
                 self._total_taxes += tax
+                if source == "STRATEGY":
+                    strategy_quantity = self.strategy_quantity(request.symbol)
+                    strategy_remaining = strategy_quantity + request.quantity if buying else strategy_quantity - request.quantity
+                    if strategy_remaining:
+                        self._strategy_positions[request.symbol] = {
+                            "quantity": strategy_remaining,
+                            "average_price": ((strategy_average * strategy_quantity + amount + fee) / strategy_remaining
+                                              if buying else strategy_average),
+                        }
+                    else:
+                        self._strategy_positions.pop(request.symbol, None)
             return order
 
     def orders(self):
@@ -118,8 +197,17 @@ class PaperBroker:
             holding = self._positions.get(symbol)
             return int(holding["quantity"]) if holding else 0
 
+    def position_average_price(self, symbol):
+        with self._lock:
+            holding = self._positions.get(symbol)
+            return Decimal(holding["average_price"]) if holding else None
+
     def position_value(self, symbol):
         return self.market.quote(symbol).price * self.holding_quantity(symbol)
+
+    def cash_balance(self):
+        with self._lock:
+            return self._cash
 
     def account(self):
         with self._lock:
@@ -161,7 +249,8 @@ class PaperBroker:
             current = Decimal(str(item["current_price"]))
             if quantity <= 0 or average < 0 or current <= 0:
                 continue
-            seeded[symbol] = {"quantity": quantity, "average_price": average}
+            # 복사 이전의 실계좌 손익을 PAPER의 실현/평가손익에 섞지 않는다.
+            seeded[symbol] = {"quantity": quantity, "average_price": current}
             market_value += current * quantity
         with self._lock:
             self._seed_cash = Decimal(cash)

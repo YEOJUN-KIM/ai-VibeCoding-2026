@@ -1,216 +1,68 @@
-# 자동매매 프로젝트 파일 설명
+# 프로젝트 구조
 
-이 문서는 현재 프로젝트의 주요 파일과 역할을 정리한다. 자동 생성되는 `__pycache__`, `.pyc`, 테스트 캐시 등은 생략한다.
-
-## 전체 구조
+## 루트
 
 ```text
-auto_trader/
-├── __init__.py
-├── __main__.py
-├── main.py
-├── models.py
-├── settings.py
-├── database.py
-├── schema.sql
-├── auth.py
-├── create_admin.py
-├── set_live_pin.py
-├── toss.py
-├── dart.py
-├── industries.py
-├── favorites.py
-├── news.py
-├── ai_news.py
-├── simulator.py
-├── paper.py
-├── risk.py
-├── strategy.py
-├── static/
-│   ├── login.html
-│   ├── login.js
-│   ├── index.html
-│   ├── app.js
-│   ├── live.html
-│   ├── live.js
-│   ├── stocks.html
-│   ├── stocks.js
-│   ├── stock-detail.html
-│   ├── stock-detail.js
-│   ├── news.html
-│   ├── news.js
-│   └── styles.css
-└── README.md
-
-docs/
-├── INSTALL_WINDOWS.md
-├── DATABASE.md
-├── PRD.md
-├── PROJECT_STRUCTURE.md
-├── CHANGELOG.md
-└── ROADMAP.md
-
-tests/
-├── test_auth.py
-├── test_favorites.py
-├── test_news.py
-├── test_ai_news.py
-├── test_dart.py
-├── test_paper.py
-└── test_toss.py
+ai-VibeCoding-2026/
+├─ auto_trader/       애플리케이션 코드와 웹 자산
+├─ docs/              제품·운영 문서
+├─ tests/             자동 테스트
+├─ .env.example       환경 변수 예시
+├─ requirements.txt   Python 의존성
+└─ README.md          프로젝트 시작 안내
 ```
 
-## 서버와 공통 설정
+로컬 실행 중 생성되는 `.env`, `.paper-history/`, `backups/`와 로그는 소스가 아닙니다.
 
-### `__main__.py`
+## 서버와 공통 기능
 
-`python -m auto_trader` 명령의 진입점이다. Uvicorn으로 FastAPI 서버를 실행한다.
+- `main.py`: FastAPI 앱, 페이지·API 라우트, 시작 준비 상태와 예약 작업 조합
+- `settings.py`: `.env` 기반 설정
+- `models.py`: API 요청·응답 모델
+- `database.py`: PostgreSQL 연결과 스키마 초기화
+- `schema.sql`: 데이터베이스 스키마 기준
+- `auth.py`: PIN 로그인, 세션과 화면 잠금
 
-### `main.py`
+## 시장 데이터와 분석
 
-FastAPI 앱, 웹 페이지와 API 라우트를 연결한다. 인증, PAPER 계좌, 위험 설정, 토스 LIVE 계좌, 국내 종목·관심종목과 뉴스 API를 한곳에서 조합한다.
+- `toss.py`: 토스증권 인증, 계좌, 시세와 차트 API
+- `dart.py`: OpenDART 기업·공시·재무 데이터
+- `news.py`: 뉴스 수집과 유사 기사 그룹화
+- `ai_news.py`: 선택형 AI 뉴스 처리
+- `industries.py`: 종목 업종 분류 보조
+- `favorites.py`: 관심종목 저장
+- `long_term.py`: 장기 관찰 점수, 등급과 예약 분석
+- `long_term_repository.py`: 장기 분석·추천·내 후보 저장
 
-### `models.py`
+## PAPER와 전략
 
-계좌·주문·전략·LIVE 자산·종목 검색·관심종목·뉴스 이슈 등 요청과 응답 데이터의 형식을 Pydantic 모델로 정의한다.
+- `paper_feed.py`: PAPER용 실제 시세와 완료 봉 공급
+- `paper.py`: 모의 계좌, 체결, 비용, 기록과 손익
+- `strategy.py`: 이동평균 신호, 실행 제어와 청산 조건
+- `simulator.py`: 시뮬레이션 보조
+- `risk.py`: PAPER/LIVE 공통 위험 한도
 
-### `settings.py`
+상세 동작은 [PAPER_STRATEGY.md](PAPER_STRATEGY.md)를 기준으로 합니다.
 
-프로젝트 루트의 `.env`를 읽는다. 서버, PAPER, 전략, PostgreSQL, 토스증권과 선택 사항인 OpenDART 연결 설정을 코드와 분리한다.
+## LIVE 주문
 
-### `database.py`, `schema.sql`
+- `live_strategies.py`: 저장 전략과 대상 종목
+- `live_orders.py`: 실제 주문 검증, 멱등성, 저장과 브로커 대조
+- `set_live_pin.py`: LIVE 주문 PIN 설정 도구
 
-PostgreSQL 연결과 트랜잭션을 관리하고, 앱 시작 시 필요한 테이블과 인덱스를 생성한다.
+## 웹 자산
 
-## 보안과 인증
+`auto_trader/static/`에 페이지별 HTML과 JavaScript, 공통 `styles.css`, 헤더 상태를 관리하는 `header-status.js`가 있습니다.
 
-### `auth.py`
-
-관리자 비밀번호와 LIVE PIN의 scrypt 해시, 로그인 실패 잠금, 세션 쿠키와 CSRF 검사를 담당한다.
-
-### `create_admin.py`
-
-`python -m auto_trader.create_admin` 명령으로 단일 관리자 계정을 만든다.
-
-### `set_live_pin.py`
-
-`python -m auto_trader.set_live_pin` 명령으로 LIVE 잠금 해제용 숫자 6자리 PIN을 설정하거나 변경한다.
-
-## PAPER 모의매매
-
-### `simulator.py`
-
-실제 주문과 분리된 가상 주식시장이다. 실제 시세는 시작값으로만 사용할 수 있으며 이후 가격 변화는 시뮬레이션이다.
-
-### `paper.py`
-
-실제 자산에서 복사한 모의 현금·보유종목, 주문, 체결과 손익을 메모리에서 관리한다. 서버를 재시작하면 PAPER 거래 상태가 초기화된다.
-
-### `risk.py`
-
-보수적·기본·직접 설정 투자 한도를 관리하고 수동·자동 매수 전에 공통 위험 규칙을 검사한다. 선택한 설정은 PostgreSQL에 저장한다.
-
-### `strategy.py`
-
-이동평균 교차 전략, 자동매매 시작·중지와 긴급 정지를 담당한다. 현재 주문은 PAPER 계좌에만 반영된다.
-
-## 토스 LIVE 조회
-
-### `toss.py`
-
-토스증권 OAuth 토큰, REST 요청, 압축 응답 해제, 토큰 무효화 재시도와 짧은 조회 캐시를 담당한다. 실제 계좌 잔고, 보유종목, 매수 가능 금액, 거래대금 순위와 종목 검색 데이터를 읽는다.
-
-### `favorites.py`
-
-사용자별 관심종목을 PostgreSQL에 추가·조회·삭제한다. 한 사용자는 최대 20개를 저장할 수 있다.
-
-## 기업정보·공시
-
-### `dart.py`
-
-선택 설정인 OpenDART 인증키로 종목코드와 법인 고유번호를 연결하고 기업개황, 최근 3개년 재무, 배당과 최근 공시를 조회한다. 종목별 결과는 10분간 메모리에 캐시하며 키가 없어도 나머지 화면은 정상 작동한다.
-
-### `industries.py`
-
-OpenDART의 한국표준산업분류 코드를 사람이 읽을 수 있는 업종명으로 변환한다. 코드와 명칭은 향후 국내주식 업종 필터와 동종 기업 비교에 재사용할 수 있다.
-
-## 뉴스·리서치
-
-### `news.py`
-
-Google 뉴스 공개 RSS에서 제목·출처·게시 시각을 읽는다. 제목 토큰을 정리하고 유사도를 비교해 대표 기사와 관련 기사로 묶으며, 반복 키워드와 핵심 이슈 순서를 계산한다.
-
-### `ai_news.py`
-
-OpenAI Responses API를 이용하는 구조화 뉴스 브리핑 구현이다. 현재는 `AI_NEWS_ENABLED=false`가 기본이며 화면과 호출을 연결하지 않은 보류 기능이다.
-
-## 웹 화면
-
-### `static/login.html`, `static/login.js`
-
-`프라이빗 투자 데스크` 관리자 로그인 화면과 로그인 요청을 담당한다.
-
-### `static/index.html`, `static/app.js`
-
-PAPER 자동매매 검증 화면이다. 실제 자산 자동 복사, DRY RUN 전략 선택, 다중 종목 판단, 모의 주문·손익·주문 시각과 실행 제어를 표시한다.
-
-### `static/live.html`, `static/live.js`
-
-읽기 전용 LIVE 자산 화면이다. 다음 내용을 표시한다.
-
-- 총자산(보유주식 평가금액 + 원화 매수 가능 금액)
-- 보유종목과 원화·외화 매수 가능 금액
-- 현재 원화 예산으로 살 수 있는 거래대금 상위 국내 종목
-- 인기순 국내 종목 부분 검색과 8개 단위 페이지 이동
-- 종목 현재가, 오늘 등락률, 종목 유형과 인기 순위
-- PostgreSQL에 저장되는 관심종목 추가·삭제
-
-토스 공식 Open API 응답에 산업 분류 필드가 없어 산업/테마 표시는 아직 제공하지 않는다. 실제 주문 기능도 잠겨 있다.
-
-### `static/stocks.html`, `static/stocks.js`
-
-코스피·코스닥 종목 목록, 검색·필터·정렬·페이지 이동, 관심종목과 기간별 스파크라인을 담당한다.
-
-### `static/stock-detail.html`, `static/stock-detail.js`
-
-종목별 기간 차트, 거래량, 이동평균선, 마켓 스냅샷과 관련 뉴스를 표시한다. 일반 주식에는 OpenDART 기업개황·재무·배당·공시와 최근 3개년 실적 차트를 제공하며 ETF·ETN에서는 기업 전용 영역을 숨긴다.
-
-### `static/news.html`, `static/news.js`
-
-오늘의 핵심 이슈 카드, 뉴스 검색, 이슈별 대표·관련 기사와 키워드를 표시한다. 기사는 새 탭의 원문으로 연결한다.
-
-### `static/styles.css`
-
-로그인, PAPER, LIVE, 국내주식, 종목 상세와 뉴스 화면의 공통 바이올렛 테마, 간격, 카드, 표, 버튼과 반응형 레이아웃을 담당한다. 상승은 빨간색, 하락은 파란색, 관심종목은 금색으로 구분한다.
-
-## 프로젝트 루트
-
-- `requirements.txt`: FastAPI, Pydantic, Uvicorn, psycopg 등 고정된 Python 의존성
-- `.env.example`: 비밀값이 없는 환경 변수 예시
-- `.gitignore`: `.env`, 가상환경, 캐시 등 Git 제외 규칙
-- `README.md`: 프로젝트 입구와 문서 링크
-- `docs/INSTALL_WINDOWS.md`: 새 Windows PC 설치·실행 절차
-- `docs/ROADMAP.md`: 구현 현황과 다음 작업 순서
-- `docs/CHANGELOG.md`: 날짜별 사용자 화면과 기술 변경 기록
-- `docs/PRD.md`: 제품 목표와 요구사항
-- `docs/DATABASE.md`: 영구 저장 데이터와 메모리 데이터 구분
+- `login`: 로그인과 준비 상태
+- `index`: PAPER 트레이딩 랩
+- `live`: LIVE 계좌와 주문 기록
+- `stocks`: 국내주식 탐색
+- `stock-detail`: 종목 상세·장기 분석·수동 주문
+- `long-term`: 자동 추천과 내 장기 관찰 후보
+- `news`: 뉴스
+- `settings`: 전략과 위험 설정
 
 ## 테스트
 
-- `test_auth.py`: 관리자 로그인, 세션, PIN과 인증 보호
-- `test_favorites.py`: 관심종목 저장 제한과 사용자별 분리
-- `test_news.py`: RSS 해석, 키워드 정리, 이슈 그룹화와 캐시
-- `test_ai_news.py`: 비활성 상태, 구조화 응답, 캐시와 API 실패 대체 처리
-- `test_dart.py`: 재무 증감률 계산과 한국표준산업분류 업종명 변환
-- `test_paper.py`: PAPER 체결, 비용, 중복 요청, 동시성과 위험 한도
-- `test_toss.py`: 토스 응답 처리, 검색, 캐시와 토큰 재시도
-
-전체 테스트는 다음 명령으로 실행한다.
-
-```powershell
-python -m unittest discover -s tests -v
-```
-
-## 직접 수정하지 않는 파일
-
-`__pycache__`, `.pyc`, 테스트 캐시와 가상환경 내부 파일은 도구가 자동 생성한다. 프로그램 동작을 바꿀 때는 원본 소스와 문서를 수정한다.
+`tests/`에는 인증, 준비 상태, 토스·DART·뉴스, 관심종목, 장기 분석, PAPER, 전략, LIVE 주문·전략 테스트가 있습니다. 전체 확인은 `python -m unittest discover -s tests -v`로 실행합니다.

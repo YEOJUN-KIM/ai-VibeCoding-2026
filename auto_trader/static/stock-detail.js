@@ -10,6 +10,8 @@ let lastDetailData = null;
 let lastChartCandles = [];
 let loadedNewsSymbol = "";
 let loadedCompanySymbol = "";
+let loadedLongTermSymbol = "";
+let longTermWatchState = null;
 let activeDetailSection = "chart";
 let activeOrderSide = "BUY";
 let retryOrderPreviewAfterPin = false;
@@ -23,9 +25,22 @@ const periodLabels = {
   "1D": ["1일", "1 DAY"], "1W": ["7일", "7 DAYS"], "1M": ["1개월", "1 MONTH"],
   "3M": ["3개월", "3 MONTHS"], "1Y": ["1년", "1 YEAR"],
 };
+const escapeHtml = (value) => String(value ?? "").replace(/[&<>'"]/g, (character) => ({
+  "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;",
+})[character]);
 
 function isCorporateStock(data) {
   return String(data?.security_type || "").toUpperCase() === "STOCK";
+}
+
+function securityTypeLabel(data) {
+  return isCorporateStock(data) && data.is_common_share ? "보통주" : (data.security_type || "종목");
+}
+
+function renumberDetailTabs() {
+  [...document.querySelectorAll("[data-detail-tab]")]
+    .filter((button) => !button.hidden)
+    .forEach((button, index) => { button.querySelector("span").textContent = String(index + 1).padStart(2, "0"); });
 }
 
 async function api(path, options = {}) {
@@ -206,6 +221,93 @@ function formatNewsTime(value) {
   return date.toLocaleDateString("ko-KR", { month: "short", day: "numeric" });
 }
 
+function longTermFactorCard(factor) {
+  const ratio = factor.score == null ? 0 : Math.round(factor.score / factor.max_score * 100);
+  const tone = factor.score == null ? "unknown" : ratio >= 75 ? "good" : ratio >= 45 ? "normal" : "watch";
+  return `<article class="panel long-term-factor ${tone}"><div><span>${escapeHtml(factor.label)}</span><strong>${factor.score == null ? "-" : `${factor.score}/${factor.max_score}`}</strong></div><div class="factor-meter"><i style="width:${ratio}%"></i></div><b>${escapeHtml(factor.value)}</b><small>${escapeHtml(factor.detail)}</small><em>${escapeHtml(factor.status)}</em></article>`;
+}
+
+function longTermPriceChart(candles) {
+  const points = candles.map((item) => Number(item.close_price)).filter(Number.isFinite);
+  if (points.length < 2) return '<div class="empty">표시할 1년 가격 데이터가 없습니다.</div>';
+  const width = 620, height = 230, padding = 18;
+  const min = Math.min(...points), max = Math.max(...points), range = max - min || 1;
+  const coords = points.map((value, index) => [
+    padding + index / (points.length - 1) * (width - padding * 2),
+    height - padding - (value - min) / range * (height - padding * 2),
+  ]);
+  const path = coords.map(([x, y], index) => `${index ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+  const area = `${path} L${coords.at(-1)[0].toFixed(1)},${height - padding} L${padding},${height - padding} Z`;
+  const rising = points.at(-1) >= points[0];
+  const color = rising ? "#ff716b" : "#67a0ff";
+  return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="최근 1년 가격 흐름" class="${rising ? "up" : "down"}"><defs><linearGradient id="detail-long-term-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${color}" stop-opacity=".28"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></linearGradient></defs><path class="area" style="fill:url(#detail-long-term-fill)" d="${area}"/><path class="line" d="${path}"/></svg>`;
+}
+
+function renderLongTermAnalysis(data) {
+  $("#detail-long-term-loading").hidden = true;
+  $("#detail-long-term-content").hidden = false;
+  $("#detail-long-term-rank").textContent = data.rank || "-";
+  $("#detail-long-term-score").textContent = data.overall_score == null ? "-" : data.overall_score;
+  $("#detail-long-term-grade").textContent = data.grade;
+  $("#detail-long-term-summary").textContent = data.summary;
+  $("#detail-long-term-fiscal").textContent = data.fiscal_year ? `${data.fiscal_year}년 사업보고서 기준` : "공시 기준연도 없음";
+  $("#detail-long-term-industry").textContent = data.industry_name || "업종 정보 없음";
+  $("#detail-long-term-price-context").textContent = `${new Date(data.generated_at).toLocaleDateString("ko-KR")} 분석 기준`;
+  $("#detail-long-term-factors").innerHTML = data.factors.map(longTermFactorCard).join("");
+  $("#detail-long-term-opportunities").innerHTML = data.opportunities.map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+  $("#detail-long-term-risks").innerHTML = data.risks.map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+  $("#detail-long-term-data-message").textContent = data.data_message;
+  $("#detail-long-term-financials").innerHTML = data.financial_history.length
+    ? data.financial_history.map((item) => `<tr><td>${escapeHtml(item.year)}</td><td>${compactKrw(item.revenue)}</td><td class="${Number(item.operating_income) < 0 ? "negative" : ""}">${compactKrw(item.operating_income)}</td><td class="${Number(item.net_income) < 0 ? "negative" : ""}">${compactKrw(item.net_income)}</td></tr>`).join("")
+    : '<tr><td colspan="4" class="empty">표시할 연간 재무정보가 없습니다.</td></tr>';
+  const rate = data.price_return_1y_percent == null ? "-" : `${Number(data.price_return_1y_percent) >= 0 ? "+" : ""}${Number(data.price_return_1y_percent).toFixed(1)}%`;
+  const drawdown = data.max_drawdown_1y_percent == null ? "-" : `${Number(data.max_drawdown_1y_percent).toFixed(1)}%`;
+  $("#detail-long-term-price-caption").textContent = `기간 수익률 ${rate} · 관측 최대 낙폭 ${drawdown}`;
+  $("#detail-long-term-chart").innerHTML = longTermPriceChart(data.candles);
+  $("#detail-long-term-message").textContent = `점수는 하루 동안 저장해 재사용합니다 · ${new Date(data.generated_at).toLocaleString("ko-KR")} 기준`;
+}
+
+async function loadLongTermAnalysis(symbol) {
+  if (loadedLongTermSymbol === symbol) return;
+  loadedLongTermSymbol = symbol;
+  $("#detail-long-term-loading").hidden = false;
+  $("#detail-long-term-content").hidden = true;
+  $("#detail-long-term-message").textContent = "";
+  try {
+    renderLongTermAnalysis(await api(`/research/long-term/${encodeURIComponent(symbol)}`));
+    await loadLongTermWatchState(symbol);
+  } catch (error) {
+    loadedLongTermSymbol = "";
+    $("#detail-long-term-loading").hidden = true;
+    $("#detail-long-term-message").textContent = error.message;
+  }
+}
+
+function renderLongTermWatchButton() {
+  const button = $("#detail-long-term-watch-button");
+  if (!longTermWatchState) {
+    button.textContent = "내 관찰 후보에 추가";
+    button.classList.remove("active");
+    button.disabled = false;
+    return;
+  }
+  if (longTermWatchState.added_manually) {
+    button.textContent = "내 관찰 후보에서 제거";
+    button.classList.add("active");
+    button.disabled = false;
+  } else if (longTermWatchState.is_favorite) {
+    button.textContent = "♥ 관심종목으로 관찰 중";
+    button.classList.add("active");
+    button.disabled = true;
+  }
+}
+
+async function loadLongTermWatchState(symbol) {
+  const items = await api("/research/long-term/watchlist");
+  longTermWatchState = items.find((item) => item.symbol === symbol) || null;
+  renderLongTermWatchButton();
+}
+
 function updateOrderEstimate() {
   const quantity = Math.max(0, Number($("#order-quantity").value) || 0);
   const marketOrder = $("#order-type").value === "MARKET";
@@ -297,6 +399,7 @@ function selectDetailSection(section) {
   });
   if (section === "news" && lastDetailData) loadStockNews(lastDetailData.name, lastDetailData.symbol);
   if (section === "company" && lastDetailData && isCorporateStock(lastDetailData)) loadCompanyProfile(lastDetailData.symbol);
+  if (section === "long-term" && lastDetailData?.is_common_share && isCorporateStock(lastDetailData)) loadLongTermAnalysis(lastDetailData.symbol);
   const url = new URL(window.location.href);
   url.hash = section;
   window.history.replaceState(null, "", url);
@@ -577,7 +680,7 @@ function clearChartHover() {
 function renderDetail(data) {
   lastDetailData = data;
   document.title = `${data.name} · 종목 대시보드`;
-  $("#detail-market").textContent = `${data.market} · ${data.is_common_share ? "보통주" : data.security_type}`;
+  $("#detail-market").textContent = `${data.market} · ${securityTypeLabel(data)}`;
   $("#detail-name").textContent = data.name;
   $("#detail-symbol").textContent = data.symbol;
   $("#order-stock-name").textContent = data.name;
@@ -590,7 +693,7 @@ function renderDetail(data) {
   $("#detail-change").className = rate == null || rate === 0 ? "neutral" : rate > 0 ? "positive" : "negative";
   $("#detail-type").textContent = data.trading_amount_rank == null ? data.market : `거래대금 ${data.trading_amount_rank}위`;
   $("#company-english-name").textContent = data.english_name || "-";
-  $("#company-market-type").textContent = `${data.market} · ${data.is_common_share ? "보통주" : data.security_type}`;
+  $("#company-market-type").textContent = `${data.market} · ${securityTypeLabel(data)}`;
   $("#company-list-date").textContent = formatListDate(data.list_date);
   $("#company-market-cap").textContent = compactKrw(data.market_cap);
   $("#company-shares").textContent = data.shares_outstanding == null ? "-" : `${integer.format(Number(data.shares_outstanding))}주`;
@@ -603,6 +706,10 @@ function renderDetail(data) {
     ? "확인 불가" : data.nxt_supported ? (data.nxt_trading_suspended ? "지원 · 거래 정지" : "지원") : "미지원";
   const corporateStock = isCorporateStock(data);
   document.querySelectorAll("[data-corporate-only]").forEach((element) => { element.hidden = !corporateStock; });
+  const longTermEligible = corporateStock && data.is_common_share;
+  document.querySelectorAll("[data-long-term-only]").forEach((element) => { element.hidden = !longTermEligible; });
+  renumberDetailTabs();
+  if (!longTermEligible && activeDetailSection === "long-term") selectDetailSection("company");
   if (!corporateStock) {
     document.querySelectorAll("[data-company-tab]").forEach((item) => item.classList.toggle("active", item.dataset.companyTab === "overview"));
     document.querySelectorAll("[data-company-panel]").forEach((panel) => { panel.hidden = panel.dataset.companyPanel !== "overview"; });
@@ -638,6 +745,7 @@ function renderDetail(data) {
     : "일봉 종가 추세선이며 장중 가격과 차이가 날 수 있습니다.";
   if (activeDetailSection === "news") loadStockNews(data.name, data.symbol);
   if (activeDetailSection === "company" && corporateStock) loadCompanyProfile(data.symbol);
+  if (activeDetailSection === "long-term" && longTermEligible) loadLongTermAnalysis(data.symbol);
 }
 
 async function loadDetail(period) {
@@ -934,6 +1042,21 @@ $("#detail-section-tabs").addEventListener("click", (event) => {
   const button = event.target.closest("[data-detail-tab]");
   if (button) selectDetailSection(button.dataset.detailTab);
 });
+$("#detail-long-term-watch-button").addEventListener("click", async () => {
+  if (!lastDetailData || !lastDetailData.is_common_share || !isCorporateStock(lastDetailData)) return;
+  const button = $("#detail-long-term-watch-button");
+  button.disabled = true;
+  try {
+    const remove = Boolean(longTermWatchState?.added_manually);
+    await api(`/research/long-term/watchlist/${encodeURIComponent(lastDetailData.symbol)}`, { method: remove ? "DELETE" : "POST" });
+    await loadLongTermWatchState(lastDetailData.symbol);
+    $("#detail-long-term-message").textContent = remove
+      ? "내 관찰 후보에서 제거했습니다." : "내 관찰 후보에 추가했습니다.";
+  } catch (error) {
+    $("#detail-long-term-message").textContent = error.message;
+    button.disabled = false;
+  }
+});
 document.querySelector(".company-category-tabs").addEventListener("click", (event) => {
   const button = event.target.closest("[data-company-tab]");
   if (!button) return;
@@ -958,7 +1081,7 @@ async function initialize() {
     $("#live-order-notice").textContent = readiness.message;
     activeSymbol = decodeURIComponent(window.location.pathname.split("/").filter(Boolean).at(-1) || "");
     const requestedSection = window.location.hash.slice(1);
-    if (["chart", "company", "market", "news"].includes(requestedSection)) selectDetailSection(requestedSection);
+    if (["chart", "company", "long-term", "market", "news"].includes(requestedSection)) selectDetailSection(requestedSection);
     await loadDetail(activePeriod);
     prefetchNearbyPeriods();
   } catch (error) {

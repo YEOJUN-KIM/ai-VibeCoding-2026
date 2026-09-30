@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
     expires_at TIMESTAMPTZ NOT NULL
 );
 ALTER TABLE auth_sessions ADD COLUMN IF NOT EXISTS live_authorized_until TIMESTAMPTZ;
+ALTER TABLE auth_sessions ADD COLUMN IF NOT EXISTS locked_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS auth_sessions_token ON auth_sessions(token_hash);
 CREATE INDEX IF NOT EXISTS auth_sessions_expiry ON auth_sessions(expires_at);
 
@@ -136,6 +137,12 @@ CREATE TABLE IF NOT EXISTS risk_settings (
     profit_target NUMERIC NOT NULL CHECK (profit_target > 0),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- 0 means unlimited; preserve positive limits and all existing rows.
+ALTER TABLE risk_settings DROP CONSTRAINT IF EXISTS risk_settings_daily_order_limit_check;
+ALTER TABLE risk_settings ADD CONSTRAINT risk_settings_daily_order_limit_check CHECK (daily_order_limit >= 0);
+ALTER TABLE live_strategies DROP CONSTRAINT IF EXISTS live_strategies_daily_order_limit_check;
+ALTER TABLE live_strategies ADD CONSTRAINT live_strategies_daily_order_limit_check CHECK (daily_order_limit >= 0);
+
 CREATE TABLE IF NOT EXISTS risk_daily_snapshots (
     account_id BIGINT REFERENCES accounts(id) ON DELETE CASCADE,
     trade_date DATE NOT NULL,
@@ -224,3 +231,35 @@ ALTER TABLE live_orders ADD CONSTRAINT live_orders_reconciliation_status_check
 ALTER TABLE live_orders DROP CONSTRAINT IF EXISTS live_orders_order_source_check;
 ALTER TABLE live_orders ADD CONSTRAINT live_orders_order_source_check
     CHECK (order_source IN ('MANUAL','AUTO'));
+
+CREATE TABLE IF NOT EXISTS long_term_analyses (
+    symbol TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    market TEXT NOT NULL,
+    overall_score INTEGER CHECK (overall_score BETWEEN 0 AND 100),
+    rank TEXT CHECK (rank IN ('S','A','B','C','D')),
+    grade TEXT NOT NULL,
+    analysis JSONB NOT NULL,
+    analyzed_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS long_term_analyses_score
+    ON long_term_analyses(overall_score DESC, analyzed_at DESC);
+
+CREATE TABLE IF NOT EXISTS long_term_recommendations (
+    symbol TEXT PRIMARY KEY REFERENCES long_term_analyses(symbol) ON DELETE CASCADE,
+    source_rank INTEGER NOT NULL CHECK (source_rank > 0),
+    selected_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS long_term_recommendations_time
+    ON long_term_recommendations(selected_at DESC);
+
+CREATE TABLE IF NOT EXISTS long_term_watchlist (
+    user_id BIGINT NOT NULL REFERENCES admin_users(id) ON DELETE CASCADE,
+    symbol TEXT NOT NULL,
+    name TEXT NOT NULL,
+    market TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, symbol)
+);
+CREATE INDEX IF NOT EXISTS long_term_watchlist_user_time
+    ON long_term_watchlist(user_id, created_at DESC);

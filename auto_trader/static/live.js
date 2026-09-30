@@ -7,6 +7,7 @@ let portfolioLoading = false;
 let candidateLoading = false;
 let favoriteLoading = false;
 let orderLoading = false;
+let activeLiveSection = "portfolio";
 
 const escapeHtml = (value) => String(value).replace(/[&<>'"]/g, (character) => ({
   "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;",
@@ -215,6 +216,7 @@ $("#live-auth-modal").addEventListener("click", (event) => { if (event.target ==
 document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeAuthModal(); });
 
 function selectLiveSection(section) {
+  activeLiveSection = section;
   document.querySelectorAll("[data-live-tab]").forEach((button) => {
     const active = button.dataset.liveTab === section;
     button.classList.toggle("active", active);
@@ -224,7 +226,14 @@ function selectLiveSection(section) {
     panel.hidden = panel.dataset.livePanel !== section;
   });
   window.history.replaceState(null, "", `${window.location.pathname}#${section}`);
-  if (section === "orders") refreshDryRunOrders();
+}
+
+function refreshActiveLiveSection() {
+  if (activeLiveSection === "portfolio") return refreshPortfolio();
+  if (activeLiveSection === "favorites") return refreshFavorites();
+  if (activeLiveSection === "scanner") return refreshCandidates();
+  if (activeLiveSection === "orders") return refreshDryRunOrders();
+  return Promise.resolve();
 }
 
 function setLiveAuthButton(authorized) {
@@ -287,7 +296,10 @@ async function refreshDryRunOrders() {
 
 $("#live-section-tabs").addEventListener("click", (event) => {
   const button = event.target.closest("[data-live-tab]");
-  if (button) selectLiveSection(button.dataset.liveTab);
+  if (button) {
+    selectLiveSection(button.dataset.liveTab);
+    refreshActiveLiveSection();
+  }
 });
 
 $("#live-pin-form").addEventListener("submit", async (event) => {
@@ -322,15 +334,12 @@ async function initialize() {
       const remaining = new Date(pin.authorized_until).getTime() - Date.now();
       if (remaining > 0) setTimeout(() => setLiveAuthButton(false), remaining);
     }
-    await refreshPortfolio();
-    refreshFavorites();
-    refreshCandidates();
-    refreshDryRunOrders();
-    setInterval(refreshPortfolio, 5000);
-    setInterval(refreshFavorites, 30000);
-    setInterval(refreshCandidates, 30000);
+    await refreshActiveLiveSection();
+    setInterval(() => { if (activeLiveSection === "portfolio") refreshPortfolio(); }, 10000);
+    setInterval(() => { if (activeLiveSection === "favorites") refreshFavorites(); }, 60000);
+    setInterval(() => { if (activeLiveSection === "scanner") refreshCandidates(); }, 60000);
     document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) { refreshPortfolio(); refreshFavorites(); refreshCandidates(); }
+      if (!document.hidden) refreshActiveLiveSection();
     });
   } catch (_) { window.location.replace("/login"); }
 }

@@ -1,10 +1,13 @@
 """국내주식 모의 자동매매 FastAPI 애플리케이션."""
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
+from threading import Lock
+from time import monotonic
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.openapi.docs import get_swagger_ui_html
@@ -18,21 +21,27 @@ from .auth import (
     authenticate,
     delete_session,
     live_pin_status,
+    lock_session,
     require_csrf,
+    require_session,
+    require_session_csrf,
     require_user,
     session_from_request,
+    unlock_session,
     verify_live_pin,
 )
 from .models import (Account, DeletedOrderCount, FavoriteStockCreate, LiveBuyingPower, LiveCandidateList,
                      LiveDryRunConfirmRequest, LiveDryRunOrder, LiveFavoriteStock,
                      LiveOrderPreview, LiveOrderPreviewCheck, LiveOrderPreviewRequest,
                      LivePinRequest, LivePinStatus, LivePortfolio,
-                     LiveCompanyProfile, LiveRealOrderConfirmRequest, LiveStockDetail,
+                     LiveCompanyProfile, LiveRealOrderConfirmRequest, LiveStockDetail, LongTermAnalysis,
+                     LongTermWatchCandidate,
                      LiveStockSearchPage, LiveStrategy, LiveStrategyWrite, LiveTradingReadiness,
                      LoginRequest, NewsDigest, Order, OrderRequest, PaperWorkspaceStatus,
                      Quote, RiskSettings, RiskSettingsUpdate, RiskStatus, SessionInfo, Stock,
                      StrategySettingsUpdate, StrategyStatus, TossConnectionStatus)
 from .paper import PaperBroker
+from .paper_feed import PaperPriceFeed
 from .settings import settings
 from .simulator import MarketSimulator
 from .strategy import MovingAverageEngine
@@ -48,11 +57,21 @@ from .live_orders import (auto_position_quantities, cancel_dry_run_order, delete
                           orders_for_reconciliation, real_order_for_user,
                           save_dry_run_order, update_real_order)
 from .live_strategies import delete_strategy, list_strategies, save_strategy
+from .long_term import (analyze_long_term, long_term_recommendation_assessment,
+                        next_daily_scan_at)
+from .long_term_repository import (add_long_term_watch, fresh_long_term_analysis,
+                                   list_long_term_watch,
+                                   long_term_watched_symbols,
+                                   ranked_long_term_analyses, remove_long_term_watch,
+                                   replace_long_term_recommendations,
+                                   save_long_term_analysis)
 
 
 market = MarketSimulator(symbols=settings.watch_symbols)
 broker = PaperBroker(market, initial_cash=settings.paper_initial_cash,
                      fee_rate=settings.paper_fee_rate, sell_tax_rate=settings.paper_sell_tax_rate,
+                     slippage_rate=settings.paper_slippage_rate,
+                     journal_path=Path(__file__).parent.parent / ".paper-history" / "orders.jsonl",
                      ignore_min_cash_ratio=settings.paper_ignore_min_cash_ratio,
                      ignore_daily_order_limit=settings.paper_ignore_daily_order_limit)
 engine = MovingAverageEngine(
@@ -65,11 +84,67 @@ engine = MovingAverageEngine(
 )
 risk_manager = RiskManager(market)
 toss_client = TossClient()
+engine.price_feed = PaperPriceFeed(toss_client)
 watchlist_source = "fallback"
 paper_snapshot_at = None
 paper_source_account_label = None
 paper_selected_strategy: LiveStrategy | None = None
 static_dir = Path(__file__).parent / "static"
+logger = logging.getLogger(__name__)
+_readiness_lock = Lock()
+_readiness_cache: tuple[float, dict] | None = None
+_long_term_scan_status = {
+    "running": False, "completed": 0, "target": 0,
+    "selected": 0, "excluded": 0,
+    "last_started_at": None, "last_finished_at": None, "next_run_at": None,
+    "message": "분석 대기 중",
+}
+_long_term_scan_lock = asyncio.Lock()
+
+
+def _startup_readiness(*, force: bool = False) -> dict:
+    """로그인 전에 DB와 토스 계좌 연결을 한 번 확인하고 짧게 캐시한다."""
+    global _readiness_cache
+    now = monotonic()
+    with _readiness_lock:
+        if not force and _readiness_cache is not None and now < _readiness_cache[0]:
+            return _readiness_cache[1]
+
+        try:
+            with connect() as conn:
+                conn.execute("SELECT 1")
+            database_connected = True
+            database_message = "PostgreSQL 연결 완료"
+        except Exception as exc:
+            database_connected = False
+            database_message = "PostgreSQL에 연결하지 못했습니다."
+            logger.warning("Startup database readiness check failed: %s", exc)
+
+        toss_configured = toss_client.configured
+        toss_connected = False
+        if not toss_configured:
+            toss_message = "토스 API 인증 정보가 설정되지 않았습니다."
+        else:
+            try:
+                result = toss_client.test_connection()
+                toss_connected = result.connected
+                toss_message = result.message
+            except TossApiError as exc:
+                toss_message = str(exc)
+                logger.warning("Startup Toss API readiness check failed: %s", exc)
+
+        ready = database_connected and toss_connected
+        payload = {
+            "ready": ready,
+            "database": {"connected": database_connected, "message": database_message},
+            "toss_api": {
+                "configured": toss_configured,
+                "connected": toss_connected,
+                "message": toss_message,
+            },
+        }
+        _readiness_cache = (monotonic() + (30 if ready else 5), payload)
+        return payload
 
 
 def _local_order_status(broker_status: str, fallback: str) -> str:
@@ -135,31 +210,157 @@ def reconcile_saved_real_orders(*, active_only: bool = False) -> int:
     return reconciled
 
 
+async def refresh_long_term_candidates(
+    candidate_count: int = 20, target_count: int = 5, *, force: bool = False,
+) -> None:
+    """거래대금 상위 보통주를 검증해 품질 조건을 통과한 추천을 저장한다."""
+    status = _long_term_scan_status
+    if _long_term_scan_lock.locked():
+        return
+    async with _long_term_scan_lock:
+        status.update(
+            running=True, completed=0, target=0, selected=0, excluded=0,
+            last_started_at=datetime.now(timezone.utc),
+            message="거래대금 상위 보통주를 순차 분석하고 있습니다.",
+        )
+        try:
+            page = await asyncio.to_thread(
+                toss_client.list_domestic_stocks,
+                query="", market="ALL", security_type="COMMON", sort="POPULAR",
+                page=1, page_size=candidate_count,
+            )
+            candidates = [item for item in page.results if item.security_type == "STOCK" and item.is_common_share]
+            watched = await asyncio.to_thread(long_term_watched_symbols)
+            status["target"] = len(candidates)
+            eligible: list[LongTermAnalysis] = []
+            processed = 0
+            excluded = 0
+            for candidate in candidates:
+                if candidate.symbol in watched:
+                    excluded += 1
+                    continue
+                requested_external_data = False
+                analysis = None if force else fresh_long_term_analysis(candidate.symbol)
+                if analysis is None:
+                    requested_external_data = True
+                    try:
+                        detail, company = await asyncio.gather(
+                            asyncio.to_thread(toss_client.domestic_stock_detail, candidate.symbol, "1Y"),
+                            asyncio.to_thread(dart_client.company_profile, candidate.symbol),
+                        )
+                        analysis = analyze_long_term(detail, company)
+                        save_long_term_analysis(analysis)
+                    except (TossApiError, ValueError, TypeError, ArithmeticError) as exc:
+                        logger.warning("Long-term candidate analysis failed for %s: %s", candidate.symbol, exc)
+                processed += 1
+                if analysis is not None:
+                    recommended, _ = long_term_recommendation_assessment(analysis)
+                    if recommended:
+                        eligible.append(analysis)
+                    else:
+                        excluded += 1
+                status.update(completed=processed, selected=min(len(eligible), target_count), excluded=excluded)
+                status["message"] = (
+                    f"후보 {processed}개 검토 · 추천 기준 통과 {min(len(eligible), target_count)}개"
+                )
+                if processed >= 12 and len(eligible) >= target_count:
+                    break
+                if requested_external_data:
+                    await asyncio.sleep(15)
+            selected = sorted(
+                eligible,
+                key=lambda item: (item.overall_score or -1, item.generated_at),
+                reverse=True,
+            )[:target_count]
+            if selected:
+                await asyncio.to_thread(
+                    replace_long_term_recommendations, [item.symbol for item in selected]
+                )
+                message = f"{processed}개를 검토해 장기 관찰 후보 {len(selected)}개를 선별했습니다."
+            else:
+                message = "추천 기준을 통과한 새 후보가 없어 기존 목록을 유지했습니다."
+            status.update(
+                running=False, target=processed, selected=len(selected), excluded=excluded,
+                last_finished_at=datetime.now(timezone.utc), message=message,
+            )
+        except asyncio.CancelledError:
+            status.update(running=False, message="장기 관찰 후보 분석이 중지되었습니다.")
+            raise
+        except Exception as exc:
+            status.update(running=False, message="장기 관찰 후보 분석을 완료하지 못했습니다.")
+            logger.warning("Long-term candidate refresh failed: %s", exc)
+
+
+async def long_term_candidate_worker(stock_directory_task: asyncio.Task | None) -> None:
+    if stock_directory_task is not None:
+        try:
+            await stock_directory_task
+        except (asyncio.CancelledError, Exception):
+            if stock_directory_task.cancelled():
+                raise asyncio.CancelledError
+    while True:
+        next_run = next_daily_scan_at(
+            datetime.now(timezone.utc), settings.long_term_scan_hour, settings.long_term_scan_minute
+        )
+        _long_term_scan_status.update(
+            next_run_at=next_run,
+            message=f"다음 자동 분석은 {next_run.strftime('%m월 %d일 %H:%M')}입니다.",
+        )
+        await asyncio.sleep(max(1, (next_run - datetime.now(next_run.tzinfo)).total_seconds()))
+        await refresh_long_term_candidates()
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     global watchlist_source
+    stock_directory_warm_task: asyncio.Task | None = None
+    long_term_candidate_task: asyncio.Task | None = None
     initialize()
     if toss_client.configured:
+        readiness = await asyncio.to_thread(_startup_readiness, force=True)
         try:
-            popular_stocks, popular_prices = await asyncio.to_thread(toss_client.domestic_trading_amount_top, 10)
-            market.replace_stocks(popular_stocks, popular_prices)
-            engine.configure(interval_seconds=engine.interval_seconds, short_period=engine.short_period,
-                             long_period=engine.long_period, order_quantity=engine.order_quantity)
-            watchlist_source = "toss_daily_trading_amount"
-            await asyncio.to_thread(toss_client.warm_domestic_stock_universe)
-        except (TossApiError, KeyError, ValueError, ArithmeticError):
+            if readiness["ready"]:
+                popular_stocks, popular_prices = await asyncio.to_thread(toss_client.domestic_trading_amount_top, 10)
+                market.replace_stocks(popular_stocks, popular_prices)
+                engine.configure(interval_seconds=engine.interval_seconds, short_period=engine.short_period,
+                                 long_period=engine.long_period, order_quantity=engine.order_quantity)
+                watchlist_source = "toss_daily_trading_amount"
+        except (TossApiError, KeyError, ValueError, ArithmeticError) as exc:
+            logger.warning("Startup Toss market warm-up failed: %s", exc)
             watchlist_source = "fallback"
         try:
             await asyncio.to_thread(reconcile_saved_real_orders)
-        except (TossApiError, LookupError, ValueError, ArithmeticError):
-            pass
+        except (TossApiError, LookupError, ValueError, ArithmeticError) as exc:
+            logger.warning("Startup real-order reconciliation failed: %s", exc)
     broker.initialize()
     broker.set_risk_manager(risk_manager)
-    with connect() as conn:
-        conn.execute("DELETE FROM auth_sessions")
+    if toss_client.configured:
+        async def warm_stock_directory() -> None:
+            try:
+                stock_count, ranking_count = await asyncio.to_thread(
+                    toss_client.warm_domestic_stock_directory
+                )
+                logger.info(
+                    "Domestic stock directory cache ready: %s stocks, %s rankings",
+                    stock_count, ranking_count,
+                )
+            except (TossApiError, ValueError, TypeError) as exc:
+                logger.warning("Domestic stock directory warm-up failed: %s", exc)
+
+        stock_directory_warm_task = asyncio.create_task(warm_stock_directory())
+        long_term_candidate_task = asyncio.create_task(
+            long_term_candidate_worker(stock_directory_warm_task)
+        )
     try:
         yield
     finally:
+        if stock_directory_warm_task is not None and not stock_directory_warm_task.done():
+            stock_directory_warm_task.cancel()
+        if long_term_candidate_task is not None and not long_term_candidate_task.done():
+            long_term_candidate_task.cancel()
+        manual_refresh_task = getattr(app.state, "long_term_manual_refresh_task", None)
+        if manual_refresh_task is not None and not manual_refresh_task.done():
+            manual_refresh_task.cancel()
         await engine.stop()
 
 
@@ -226,6 +427,13 @@ def news_page(request: Request) -> FileResponse | RedirectResponse:
     return FileResponse(static_dir / "news.html")
 
 
+@app.get("/long-term", include_in_schema=False, response_model=None)
+def long_term_page(request: Request) -> FileResponse | RedirectResponse:
+    if not session_from_request(request):
+        return RedirectResponse("/login", status_code=303)
+    return FileResponse(static_dir / "long-term.html")
+
+
 @app.get("/settings", include_in_schema=False, response_model=None)
 def settings_page(request: Request) -> FileResponse | RedirectResponse:
     if not session_from_request(request):
@@ -266,8 +474,50 @@ def login(payload: LoginRequest, response: Response) -> SessionInfo:
 
 
 @app.get("/auth/me", response_model=SessionInfo)
-def current_session(user: AuthenticatedUser = Depends(require_user)) -> SessionInfo:
-    return SessionInfo(username=user.username, csrf_token=user.csrf_token, expires_at=user.expires_at)
+def current_session(
+    request: Request, response: Response, user: AuthenticatedUser = Depends(require_session)
+) -> SessionInfo:
+    raw_token = request.cookies.get(SESSION_COOKIE)
+    if raw_token:
+        response.set_cookie(
+            SESSION_COOKIE, raw_token, max_age=settings.session_minutes * 60,
+            httponly=True, secure=False, samesite="strict", path="/",
+        )
+    return SessionInfo(
+        username=user.username, csrf_token=user.csrf_token,
+        expires_at=user.expires_at, locked=user.locked,
+    )
+
+
+@app.post("/auth/lock", response_model=SessionInfo)
+def lock_current_session(
+    request: Request, user: AuthenticatedUser = Depends(require_csrf),
+) -> SessionInfo:
+    try:
+        lock_session(request, user)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return SessionInfo(
+        username=user.username, csrf_token=user.csrf_token,
+        expires_at=user.expires_at, locked=True,
+    )
+
+
+@app.post("/auth/unlock", response_model=SessionInfo)
+def unlock_current_session(
+    payload: LivePinRequest, request: Request,
+    user: AuthenticatedUser = Depends(require_session_csrf),
+) -> SessionInfo:
+    try:
+        unlock_session(request, user, payload.pin)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return SessionInfo(
+        username=user.username, csrf_token=user.csrf_token,
+        expires_at=user.expires_at, locked=False,
+    )
 
 
 @app.get("/auth/live-pin", response_model=LivePinStatus)
@@ -326,6 +576,11 @@ def health(_: AuthenticatedUser = Depends(require_user)) -> dict[str, str]:
         "postgres": "connected",
         "paper_watchlist": watchlist_source,
     }
+
+
+@app.get("/startup/readiness")
+def startup_readiness() -> dict:
+    return _startup_readiness()
 
 
 @app.post("/toss/test-connection", response_model=TossConnectionStatus)
@@ -778,6 +1033,86 @@ def live_stock_company(
     return dart_client.company_profile(symbol)
 
 
+@app.get("/research/long-term/candidates", response_model=list[LongTermAnalysis])
+def long_term_candidates(
+    limit: int = Query(default=5, ge=1, le=12),
+    user: AuthenticatedUser = Depends(require_user),
+) -> list[LongTermAnalysis]:
+    return ranked_long_term_analyses(limit, user.id)
+
+
+@app.get("/research/long-term/candidate-status")
+def long_term_candidate_status(_: AuthenticatedUser = Depends(require_user)) -> dict:
+    return dict(_long_term_scan_status)
+
+
+@app.post("/research/long-term/candidate-refresh", status_code=202)
+async def start_long_term_candidate_refresh(
+    _: AuthenticatedUser = Depends(require_csrf),
+) -> dict:
+    if _long_term_scan_status["running"] or _long_term_scan_lock.locked():
+        raise HTTPException(status_code=409, detail="장기 관찰 후보를 이미 분석하고 있습니다.")
+    if not toss_client.configured:
+        raise HTTPException(status_code=409, detail="토스 API 연결 후 후보 분석을 시작할 수 있습니다.")
+    _long_term_scan_status.update(
+        running=True, completed=0, target=0, selected=0, excluded=0,
+        message="수동 후보 분석을 준비하고 있습니다.",
+    )
+    task = asyncio.create_task(refresh_long_term_candidates(force=True))
+    app.state.long_term_manual_refresh_task = task
+    return dict(_long_term_scan_status)
+
+
+@app.get("/research/long-term/watchlist", response_model=list[LongTermWatchCandidate])
+def long_term_watchlist(user: AuthenticatedUser = Depends(require_user)) -> list[LongTermWatchCandidate]:
+    return list_long_term_watch(user.id)
+
+
+@app.post("/research/long-term/watchlist/{symbol}")
+def add_long_term_watchlist_symbol(
+    symbol: str, user: AuthenticatedUser = Depends(require_csrf),
+) -> dict[str, bool]:
+    stock = toss_client.domestic_stock(symbol)
+    if stock is None:
+        raise HTTPException(status_code=404, detail="국내 종목을 찾지 못했습니다.")
+    if str(stock.get("securityType", "")) != "STOCK" or not bool(stock.get("isCommonShare", False)):
+        raise HTTPException(status_code=409, detail="장기 관찰 후보에는 국내 보통주만 추가할 수 있습니다.")
+    add_long_term_watch(
+        user.id, str(stock.get("symbol", symbol)), str(stock.get("name", symbol)),
+        str(stock.get("market", "KRX")),
+    )
+    return {"added": True}
+
+
+@app.delete("/research/long-term/watchlist/{symbol}")
+def remove_long_term_watchlist_symbol(
+    symbol: str, user: AuthenticatedUser = Depends(require_csrf),
+) -> dict[str, bool]:
+    remove_long_term_watch(user.id, symbol.strip().zfill(6))
+    return {"removed": True}
+
+
+@app.get("/research/long-term/{symbol}", response_model=LongTermAnalysis)
+async def long_term_analysis(
+    symbol: str, _: AuthenticatedUser = Depends(require_user),
+) -> LongTermAnalysis:
+    try:
+        cached = fresh_long_term_analysis(symbol)
+        if cached is not None:
+            return cached
+        detail, company = await asyncio.gather(
+            asyncio.to_thread(toss_client.domestic_stock_detail, symbol, "1Y"),
+            asyncio.to_thread(dart_client.company_profile, symbol),
+        )
+        if not detail.is_common_share or detail.security_type != "STOCK":
+            raise HTTPException(status_code=409, detail="장기 재무분석은 국내 보통주를 대상으로 합니다.")
+        analysis = analyze_long_term(detail, company)
+        save_long_term_analysis(analysis)
+        return analysis
+    except TossApiError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
 @app.get("/research/news", response_model=NewsDigest)
 def research_news(
     q: str | None = Query(default=None, min_length=1, max_length=60),
@@ -872,6 +1207,7 @@ async def snapshot_live_account(_: AuthenticatedUser = Depends(require_csrf)) ->
             "average_price": holding.average_purchase_price, "current_price": holding.last_price,
         })
     broker.load_snapshot(cash=buying_power.krw_cash_buying_power, positions=positions)
+    engine.reset_performance_baseline()
     paper_snapshot_at = datetime.now().astimezone()
     paper_source_account_label = portfolio.account_label
     return paper_workspace(_)
@@ -888,20 +1224,27 @@ async def select_paper_strategy(
         raise HTTPException(status_code=404, detail="저장된 전략을 찾지 못했습니다.")
     if strategy.execution_mode != "DRY_RUN":
         raise HTTPException(status_code=409, detail="PAPER에서는 DRY RUN 전략만 선택할 수 있습니다.")
-    target_symbols = []
+    target_symbols = [target.symbol for target in strategy.targets]
     try:
+        prices = await asyncio.to_thread(toss_client.current_prices, target_symbols)
         for target in strategy.targets:
-            detail = await asyncio.to_thread(toss_client.domestic_stock_detail, target.symbol, "1D")
-            if detail.price is None:
+            price = prices.get(target.symbol.upper())
+            if price is None:
                 raise HTTPException(status_code=409, detail=f"{target.stock_name}의 현재가를 확인할 수 없습니다.")
-            market.upsert_stock(Stock(symbol=target.symbol, name=target.stock_name, market="KRX"), detail.price)
-            target_symbols.append(target.symbol)
+            market.upsert_stock(Stock(symbol=target.symbol, name=target.stock_name, market="KRX"), price)
     except TossApiError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     engine.configure(
-        interval_seconds=max(2, min(strategy.cooldown_minutes * 60 or 2, 60)),
+        interval_seconds=max(10, settings.strategy_interval_seconds),
         short_period=strategy.short_period, long_period=strategy.long_period,
         order_quantity=strategy.order_quantity, target_symbols=target_symbols,
+        take_profit_rate=strategy.take_profit_rate,
+        stop_loss_rate=strategy.stop_loss_rate,
+        max_holding_days=strategy.max_holding_days,
+        trading_start=strategy.trading_start,
+        trading_end=strategy.trading_end,
+        cooldown_minutes=strategy.cooldown_minutes,
+        daily_order_limit=strategy.daily_order_limit,
     )
     paper_selected_strategy = strategy
     return paper_workspace(user)
@@ -912,6 +1255,13 @@ def quotes(move: bool = False, _: AuthenticatedUser = Depends(require_user)) -> 
     if move:
         raise HTTPException(status_code=400, detail="시세 갱신은 자동매매 실행 중에만 가능합니다.")
     return market.quotes(move=move)
+
+
+@app.get("/paper/journal", response_class=FileResponse)
+def paper_journal(_: AuthenticatedUser = Depends(require_user)):
+    if broker.journal_path is None or not broker.journal_path.exists():
+        raise HTTPException(status_code=404, detail="저장된 모의 거래 기록이 없습니다.")
+    return FileResponse(broker.journal_path, media_type="application/x-ndjson", filename="paper-orders.jsonl")
 
 
 @app.get("/account", response_model=Account)
@@ -944,7 +1294,9 @@ def update_risk_settings(
 @app.delete("/paper/reset", response_model=Account)
 async def reset_paper_practice(_: AuthenticatedUser = Depends(require_csrf)) -> Account:
     await engine.stop()
-    return broker.reset_practice()
+    account = broker.reset_practice()
+    engine.reset_performance_baseline()
+    return account
 
 
 @app.post("/orders", response_model=Order)

@@ -25,6 +25,7 @@ class AuthenticatedUser:
     username: str
     csrf_token: str
     expires_at: datetime
+    locked: bool = False
 
 
 def hash_password(password: str) -> str:
@@ -185,7 +186,7 @@ def authenticate(username: str, password: str) -> tuple[str, AuthenticatedUser] 
             "INSERT INTO auth_sessions(user_id, token_hash, csrf_token, expires_at) VALUES (%s,%s,%s,%s)",
             (user["id"], token_hash, csrf_token, expires_at),
         )
-        return raw_token, AuthenticatedUser(user["id"], user["username"], csrf_token, expires_at)
+        return raw_token, AuthenticatedUser(user["id"], user["username"], csrf_token, expires_at, False)
 
 
 def session_from_request(request: Request) -> AuthenticatedUser | None:
@@ -195,31 +196,83 @@ def session_from_request(request: Request) -> AuthenticatedUser | None:
     token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
     with connect() as conn:
         row = conn.execute(
-            """SELECT u.id, u.username, s.csrf_token, s.expires_at
+            """SELECT u.id, u.username, s.csrf_token, s.expires_at, s.locked_at
                FROM auth_sessions s JOIN admin_users u ON u.id=s.user_id
                WHERE s.token_hash=%s AND s.expires_at > now()""",
             (token_hash,),
         ).fetchone()
         if not row:
             return None
-        conn.execute("UPDATE auth_sessions SET last_seen_at=now() WHERE token_hash=%s", (token_hash,))
-        return AuthenticatedUser(row["id"], row["username"], row["csrf_token"], row["expires_at"])
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.session_minutes)
+        conn.execute(
+            "UPDATE auth_sessions SET last_seen_at=now(),expires_at=%s WHERE token_hash=%s",
+            (expires_at, token_hash),
+        )
+        return AuthenticatedUser(
+            row["id"], row["username"], row["csrf_token"], expires_at,
+            row["locked_at"] is not None,
+        )
 
 
-def require_user(request: Request) -> AuthenticatedUser:
+def require_session(request: Request) -> AuthenticatedUser:
     user = session_from_request(request)
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="로그인이 필요합니다.")
     return user
 
 
-def require_csrf(
-    request: Request, user: AuthenticatedUser = Depends(require_user)
-) -> AuthenticatedUser:
+def require_user(request: Request) -> AuthenticatedUser:
+    user = require_session(request)
+    if user.locked:
+        raise HTTPException(status_code=423, detail="화면이 잠겨 있습니다. PIN으로 잠금을 해제하세요.")
+    return user
+
+
+def _require_csrf_token(request: Request, user: AuthenticatedUser) -> None:
     supplied = request.headers.get("X-CSRF-Token", "")
     if not supplied or not hmac.compare_digest(supplied, user.csrf_token):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="보안 토큰이 올바르지 않습니다.")
+
+
+def require_csrf(
+    request: Request, user: AuthenticatedUser = Depends(require_user)
+) -> AuthenticatedUser:
+    _require_csrf_token(request, user)
     return user
+
+
+def require_session_csrf(
+    request: Request, user: AuthenticatedUser = Depends(require_session)
+) -> AuthenticatedUser:
+    _require_csrf_token(request, user)
+    return user
+
+
+def lock_session(request: Request, user: AuthenticatedUser) -> None:
+    raw_token = request.cookies.get(SESSION_COOKIE, "")
+    token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+    with connect() as conn:
+        pin = conn.execute("SELECT live_pin_hash FROM admin_users WHERE id=%s", (user.id,)).fetchone()
+        if not pin or not pin["live_pin_hash"]:
+            raise ValueError("화면 잠금을 사용하려면 설정에서 6자리 PIN을 먼저 등록하세요.")
+        conn.execute(
+            """UPDATE auth_sessions SET locked_at=now(),live_authorized_until=NULL
+               WHERE token_hash=%s AND user_id=%s""",
+            (token_hash, user.id),
+        )
+
+
+def unlock_session(request: Request, user: AuthenticatedUser, pin: str) -> None:
+    # 기존 PIN 실패 횟수·잠금 정책을 그대로 적용하되 화면 해제는 LIVE 주문 권한을 부여하지 않는다.
+    verify_live_pin(request, user, pin)
+    raw_token = request.cookies.get(SESSION_COOKIE, "")
+    token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+    with connect() as conn:
+        conn.execute(
+            """UPDATE auth_sessions SET locked_at=NULL,live_authorized_until=NULL
+               WHERE token_hash=%s AND user_id=%s""",
+            (token_hash, user.id),
+        )
 
 
 def delete_session(request: Request) -> None:

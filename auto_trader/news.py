@@ -38,6 +38,13 @@ class NewsService:
     }
     _meaningful_number_terms = {"2차전지", "3d", "5g", "6g"}
     _suffixes = ("으로", "에서", "에게", "까지", "부터", "에는", "에도", "보다", "처럼", "은", "는", "이", "가", "을", "를", "의", "와", "과", "에", "도")
+    _themes = {
+        "코스피": ("코스피", "유가증권시장"),
+        "코스닥": ("코스닥",),
+        "환율": ("환율", "원달러", "달러원"),
+        "반도체": ("반도체", "hbm"),
+        "2차전지": ("2차전지", "이차전지", "배터리"),
+    }
 
     def __init__(self, *, cache_seconds: int = 600, timeout_seconds: float = 5.0):
         self.cache_seconds = cache_seconds
@@ -73,6 +80,10 @@ class NewsService:
 
     def _title_tokens(self, title: str) -> set[str]:
         tokens: set[str] = set()
+        compact_title = re.sub(r"\s+", "", title).casefold()
+        for theme, aliases in self._themes.items():
+            if any(alias.casefold() in compact_title for alias in aliases):
+                tokens.add(f"__theme_{theme}")
         for word in re.findall(r"[가-힣A-Za-z0-9]{2,}", title):
             normalized = self._normalize_word(word)
             if (normalized in self._stop_words or normalized == "vs"
@@ -88,14 +99,21 @@ class NewsService:
         words: Counter[str] = Counter()
         for article in articles:
             words.update(self._title_tokens(article.title) - query_words)
-        repeated = [word for word, count in words.most_common(8) if count >= 2]
-        return repeated[:5] or [word for word, _ in words.most_common(3)]
+        def display(word: str) -> str:
+            return word.removeprefix("__theme_")
+
+        repeated = [display(word) for word, count in words.most_common(12) if count >= 2]
+        fallback = [display(word) for word, _ in words.most_common(6)]
+        return list(dict.fromkeys(repeated))[:5] or list(dict.fromkeys(fallback))[:3]
 
     @staticmethod
     def _same_issue(left: set[str], right: set[str]) -> bool:
         if not left or not right:
             return False
-        common = len(left & right)
+        shared = left & right
+        if any(word.startswith("__theme_") for word in shared):
+            return True
+        common = len(shared)
         if common < 2:
             return False
         overlap = common / min(len(left), len(right))

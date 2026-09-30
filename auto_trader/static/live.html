@@ -25,7 +25,7 @@
         <a class="workspace-nav-link active live-link" href="/live"><span class="nav-index">01</span><span><strong>실제계좌</strong><small>LIVE 포트폴리오</small></span></a>
         <a class="workspace-nav-link" href="/stocks"><span class="nav-index">02</span><span><strong>국내주식</strong><small>마켓 탐색</small></span></a>
         <a class="workspace-nav-link paper-link" href="/paper"><span class="nav-index">03</span><span><strong>모의매매</strong><small>PAPER 랩</small></span></a>
-        <span class="workspace-nav-link is-disabled" aria-disabled="true"><span class="nav-index">04</span><span><strong>장기분석</strong><small>준비 중</small></span></span>
+        <a class="workspace-nav-link long-term-link" href="/long-term"><span class="nav-index">04</span><span><strong>장기분석</strong><small>기업 체력 점검</small></span></a>
         <a class="workspace-nav-link news-link" href="/news"><span class="nav-index">05</span><span><strong>뉴스·리서치</strong><small>최근 보도 흐름</small></span></a>
         <a class="workspace-nav-link" href="/settings"><span class="nav-index">06</span><span><strong>설정</strong><small>전략·계정·한도</small></span></a>
       </div>
@@ -109,8 +109,8 @@
       <h2 id="live-auth-title">LIVE 기능 잠금 해제</h2>
       <p class="subtitle">실제 주문 기능을 사용하기 전에 6자리 PIN으로 본인임을 다시 확인합니다.</p>
       <div class="preflight-box" id="toss-status">토스 API 연결을 확인하는 중...</div>
-      <form id="live-pin-form">
-        <label>6자리 PIN<input id="live-pin" type="password" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" required autofocus></label>
+      <form id="live-pin-form" autocomplete="off">
+        <label>6자리 PIN<input class="pin-secret" id="live-pin" name="live-authorization-code" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore required autofocus></label>
         <button class="button danger full" type="submit">인증하고 잠금 해제</button>
       </form>
       <p class="form-message" id="live-pin-status">인증은 현재 로그인 세션에서 5분간 유효합니다.</p>
