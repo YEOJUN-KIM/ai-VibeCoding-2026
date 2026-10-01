@@ -1,0 +1,15 @@
+const fs=require('fs'),vm=require('vm'),assert=require('node:assert/strict');
+const tooltip={hidden:true,style:{},offsetWidth:218,offsetHeight:180};
+const crosshair={setAttribute(){},querySelector:()=>({setAttribute(){}})};
+const svg={dataset:{plotLeft:0,plotWidth:500,priceMin:90,priceMax:110,priceTop:10,priceBottom:290},querySelector:()=>crosshair,createSVGPoint:()=>({matrixTransform(){return {x:this.x,y:this.y}}}),getScreenCTM:()=>({inverse(){return {}}})};
+const chart={querySelector:()=>svg,getBoundingClientRect:()=>({left:0,top:0,width:500,height:400}),classList:{contains:()=>false}};
+const scope={window:{},chartViewport:{hover:{clientX:10,clientY:150}},lastChartCandles:[{timestamp:'2026-01-01',open_price:100,high_price:105,low_price:95,close_price:102,volume:10}],$:s=>s==='#detail-chart'?chart:s==='#chart-tooltip'?tooltip:crosshair,won:{format:String},integer:{format:String},formatTooltipTimestamp:String,Number,Math};
+vm.createContext(scope);
+const source=fs.readFileSync('auto_trader/static/stock-detail.js','utf8');
+vm.runInContext(source.slice(source.indexOf('function updateChartHover(event)'),source.indexOf('function renderDetail(')),scope);
+vm.runInContext('updateChartHover({clientX:10,clientY:150})',scope);
+assert.equal(tooltip.hidden,false);assert.match(tooltip.innerHTML,/종가/);assert.equal(parseFloat(tooltip.style.left)>=0,true);
+tooltip.hidden=true;scope.window.restoreChartHover();assert.equal(tooltip.hidden,false,'stationary cursor tooltip restored after redraw');
+vm.runInContext('updateChartHover({clientX:499,clientY:399})',scope);
+assert.equal(parseFloat(tooltip.style.left)+218<=500,true);assert.equal(parseFloat(tooltip.style.top)+180<=400,true);
+console.log('Single candle hover, stationary redraw restore and edge placement passed');

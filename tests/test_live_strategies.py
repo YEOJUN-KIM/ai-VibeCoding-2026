@@ -46,9 +46,11 @@ class LiveStrategyStoreTests(unittest.TestCase):
         self.assertEqual(created.execution_mode, "DRY_RUN")
         self.assertEqual(created.trading_start, "09:00")
         updated = live_strategies.save_strategy(
-            self.user_id, self.payload(order_quantity=2), "삼성전자", strategy_id=created.id
+            self.user_id, self.payload(order_quantity=2, sizing_mode="AMOUNT", order_amount=300000), "삼성전자", strategy_id=created.id
         )
         self.assertEqual(updated.order_quantity, 2)
+        self.assertEqual(live_strategies.list_strategies(self.user_id)[0].sizing_mode, "AMOUNT")
+        self.assertEqual(updated.order_amount, 300000)
         self.assertEqual(len(live_strategies.list_strategies(self.user_id)), 1)
         live_strategies.delete_strategy(self.user_id, created.id)
         self.assertEqual(live_strategies.list_strategies(self.user_id), [])

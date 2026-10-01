@@ -11,15 +11,14 @@ class PaperPriceFeed:
     def __init__(self, client: TossClient):
         self.client = client
         self._bars_cache = {}
+        self.unavailable = {}
 
     def read(self, symbols: list[str], valuation_symbols: list[str], period: int, now: datetime):
         prices = self.client.current_prices(list(dict.fromkeys(symbols + valuation_symbols)))
-        for symbol in symbols:
+        def read_bars(symbol):
             price = prices.get(symbol)
             if price is None or not price.is_finite() or price <= 0:
-                raise TossApiError(f"{symbol}: 유효한 현재가가 없습니다. 이번 판단을 건너뜁니다.")
-
-        def read_bars(symbol):
+                raise TossApiError(f"{symbol}: 유효한 현재가가 없습니다.")
             cached = self._bars_cache.get(symbol, [])
             latest_completed = now.replace(second=0, microsecond=0) - timedelta(minutes=1)
             if len(cached) >= period and cached[-1].timestamp >= latest_completed:
@@ -44,5 +43,13 @@ class PaperPriceFeed:
             return symbol, bars[-period:]
 
         with ThreadPoolExecutor(max_workers=min(4, max(1, len(symbols)))) as executor:
-            candles = dict(executor.map(read_bars, symbols))
+            futures = {symbol: executor.submit(read_bars, symbol) for symbol in symbols}
+            candles, unavailable = {}, {}
+            for symbol, future in futures.items():
+                try:
+                    _, bars = future.result()
+                    candles[symbol] = bars
+                except TossApiError as exc:
+                    unavailable[symbol] = str(exc)
+            self.unavailable = unavailable
         return prices, candles

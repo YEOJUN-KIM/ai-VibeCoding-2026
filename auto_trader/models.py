@@ -3,6 +3,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -81,11 +82,20 @@ class Account(BaseModel):
     positions: list[Position]
 
 
+class PaperManagementUpdate(BaseModel):
+    scope: Literal["CURRENT", "AUTO", "ALL"]
+
+
 class PaperWorkspaceStatus(BaseModel):
+    account_mode: str = "LIVE_COPY"
     account: Account
     snapshot_ready: bool = False
     snapshot_at: datetime | None = None
     source_account_label: str | None = None
+    management_scope: str = "AUTO"
+    managed_holdings: list[dict] = Field(default_factory=list)
+    holding_management: list[dict] = Field(default_factory=list)
+    background_runs: list[dict] = Field(default_factory=list)
     selected_strategy_id: int | None = None
     selected_strategy_name: str | None = None
     selected_symbol: str | None = None
@@ -97,6 +107,7 @@ class StrategySnapshot(BaseModel):
     name: str
     price: Decimal
     collected_prices: int
+    data_at: datetime | None = None
     short_average: Decimal | None = None
     long_average: Decimal | None = None
     trend: str = "COLLECTING"
@@ -118,6 +129,8 @@ class StrategyStatus(BaseModel):
     short_period: int
     long_period: int
     order_quantity: int
+    sizing_mode: str = "QUANTITY"
+    order_amount: Decimal = Decimal("100000")
     strategy_basis_amount: Decimal = Decimal("0")
     strategy_profit: Decimal = Decimal("0")
     strategy_return_percent: Decimal | None = None
@@ -169,6 +182,7 @@ class LiveOrderPreviewRequest(BaseModel):
 
 
 class LiveOrderPreviewCheck(BaseModel):
+    warning: bool = False
     name: str
     passed: bool
     message: str
@@ -190,6 +204,7 @@ class LiveOrderPreview(BaseModel):
 
 
 class LiveDryRunConfirmRequest(LiveOrderPreviewRequest):
+    accept_financial_warnings: bool = False
     client_order_id: str = Field(min_length=8, max_length=36, pattern=r"^[a-zA-Z0-9\-_]+$")
 
 
@@ -296,6 +311,7 @@ class LiveCandidateList(BaseModel):
 
 
 class LiveStockSearchResult(BaseModel):
+    previous_close: Decimal | None = None
     symbol: str
     name: str
     market: str
@@ -329,6 +345,8 @@ class LiveStockCandle(BaseModel):
 
 
 class LiveStockDetail(BaseModel):
+    candle_interval: str | None = None
+    previous_close: Decimal | None = None
     symbol: str
     name: str
     market: str
@@ -456,6 +474,8 @@ class LiveStrategyWrite(BaseModel):
     short_period: int = Field(default=5, ge=2, le=120)
     long_period: int = Field(default=20, ge=3, le=240)
     order_quantity: int = Field(default=1, ge=1, le=1000)
+    sizing_mode: str = Field(default="QUANTITY", pattern=r"^(QUANTITY|AMOUNT)$")
+    order_amount: Decimal = Field(default=Decimal("100000"), gt=0, le=1000000000)
     take_profit_rate: Decimal = Field(default=Decimal("5"), gt=0, le=100)
     stop_loss_rate: Decimal = Field(default=Decimal("3"), gt=0, le=100)
     max_holding_days: int = Field(default=20, ge=1, le=3650)

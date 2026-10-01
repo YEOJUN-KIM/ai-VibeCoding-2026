@@ -35,6 +35,39 @@ class StrategyEngineTests(unittest.TestCase):
                                open_price=D(p), high_price=D(p), low_price=D(p),
                                close_price=D(p), volume=D(1)) for i, p in enumerate(prices)]
 
+    def test_amount_sizing_includes_fee_slippage_and_cash(self):
+        self.market._prices["005930"] = D(10000)
+        self.configure(sizing_mode="AMOUNT", order_amount=D(300000))
+        self.assertEqual(self.engine._buy_quantity("005930"), 29)
+        self.broker.slippage_rate = D("0.01")
+        self.assertEqual(self.engine._buy_quantity("005930"), 29)
+        self.broker._cash = D(25000)
+        self.assertEqual(self.engine._buy_quantity("005930"), 2)
+        self.broker._cash = D(9999)
+        self.assertFalse(self.engine._buy("005930", D(10000)))
+        self.assertEqual(len(self.broker.orders()), 0)
+
+    def test_amount_sizing_respects_risk_limit_and_sells_all(self):
+        self.market._prices["005930"] = D(10000)
+        self.configure(sizing_mode="AMOUNT", order_amount=D(300000))
+        self.broker.risk_manager = Mock()
+        self.broker.risk_manager.check_buy.side_effect = lambda **kw: "limit" if kw["amount"] + kw["fee"] > D(85000) else None
+        self.assertTrue(self.engine._buy("005930", D(10000)))
+        self.assertEqual(self.broker.strategy_quantity("005930"), 8)
+        self.engine._sell("005930", "exit")
+        self.assertEqual(self.broker.strategy_quantity("005930"), 0)
+
+    def test_rate_limit_waits_without_trading_or_stopping(self):
+        self.engine.price_feed = Mock()
+        self.engine.price_feed.read.side_effect = TossApiError("limited", status_code=429)
+        self.engine.running = True
+        with patch("auto_trader.strategy.logging.getLogger") as logger:
+            asyncio.run(self.engine.poll_market())
+        self.assertTrue(self.engine.running)
+        self.assertEqual(self.engine.tick_count, 0)
+        self.assertIn("요청 한도 대기", self.engine.data_message)
+        self.assertNotIn("exc_info", logger.return_value.warning.call_args.kwargs)
+
     def test_stop_loss_bypasses_cooldown_and_exits_all(self):
         self.engine.order_quantity = 10
         self.engine._buy("005930", D(70000))
@@ -171,6 +204,15 @@ class StrategyEngineTests(unittest.TestCase):
         self.assertEqual(self.broker.strategy_quantity("005930"), 0)
         self.assertEqual(len(self.broker.orders()), 2)
 
+    def test_strategy_change_clears_old_data_status(self):
+        self.engine.last_data_at = self.now
+        self.engine.data_message = "1/10종목 판단 가능 · 이전 전략 대기"
+        self.engine.step(candles={"005930": self.bars([70000, 71000, 71234])})
+        self.configure()
+        self.assertIsNone(self.engine.last_data_at)
+        self.assertEqual(self.engine.status().snapshots, [])
+        self.assertNotIn("1/10", self.engine.data_message)
+
     def test_poll_uses_real_prices_and_failure_cannot_generate_random_prices(self):
         feed = Mock()
         feed.read.return_value = ({"005930": D(71234)}, {"005930": self.bars([70000, 71000, 71234])})
@@ -207,11 +249,11 @@ class StrategyEngineTests(unittest.TestCase):
         _, bars = feed.read(["005930"], [], 3, self.now)
         self.assertEqual(bars["005930"][-1].close_price, D(70010))
         client._domestic_candles.return_value = self.bars([70000], self.now-timedelta(days=1))
-        with self.assertRaises(TossApiError):
-            feed.read(["005930"], [], 3, self.now)
+        self.assertEqual(feed.read(["005930"], [], 3, self.now)[1], {})
+        self.assertIn("005930", feed.unavailable)
         client.current_prices.return_value = {}
-        with self.assertRaises(TossApiError):
-            feed.read(["005930"], [], 3, self.now)
+        self.assertEqual(feed.read(["005930"], [], 3, self.now)[1], {})
+        self.assertIn("005930", feed.unavailable)
 
     def test_weekend_and_out_of_hours_cannot_trade(self):
         for now in (self.now.replace(hour=8), self.now+timedelta(days=3)):

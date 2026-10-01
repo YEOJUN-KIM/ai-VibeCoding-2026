@@ -66,7 +66,7 @@ function renderPortfolio(data) {
     <td>${won.format(Number(item.average_purchase_price))}</td><td>${won.format(Number(item.last_price))}</td>
     <td>${won.format(Number(item.market_value))}</td>
     <td class="${Number(item.profit_loss) > 0 ? "positive" : Number(item.profit_loss) < 0 ? "negative" : "neutral"}">${won.format(Number(item.profit_loss))} (${Number(item.profit_rate).toFixed(2)}%)</td>
-  </tr>`).join("") : `<tr><td class="empty" colspan="6">실제 보유 종목이 없습니다.</td></tr>`;
+  </tr>`).join("") : `<tr><td class="empty" colspan="6">보유종목이 없습니다.</td></tr>`;
 }
 
 function renderBuyingPower(data) {
@@ -118,7 +118,7 @@ async function refreshFavorites() {
     renderFavorites(items);
     $("#favorite-message").textContent = items.length
       ? `관심 종목 ${items.length}개 · 30초마다 현재가 갱신`
-      : "관심 종목은 이 컴퓨터의 PostgreSQL에 저장됩니다.";
+      : "관심종목은 최대 20개까지 저장할 수 있습니다.";
   } catch (error) {
     $("#favorite-message").textContent = error.message;
   } finally {
@@ -183,7 +183,7 @@ async function refreshPortfolio() {
     $("#live-connection-status").textContent = `토스 연결됨 · ${time}`;
     $("#account-dot").classList.add("online");
     $("#server-dot").classList.add("online");
-    $("#live-portfolio-message").textContent = `마지막 자동 갱신 ${time} · 실제 주문은 잠겨 있습니다.`;
+    $("#live-portfolio-message").textContent = `최근 갱신 ${time}`;
   } catch (error) {
     $("#account-dot").classList.remove("online");
     $("#live-connection-status").textContent = "연결 오류";
@@ -196,10 +196,10 @@ async function refreshPortfolio() {
 async function openAuthModal() {
   $("#live-auth-modal").classList.remove("hidden");
   $("#live-pin").focus();
-  $("#toss-status").textContent = "토스 API 연결을 확인하는 중...";
+  $("#toss-status").textContent = "증권사 연결을 확인하는 중...";
   try {
     const result = await api("/toss/test-connection", { method: "POST" });
-    $("#toss-status").textContent = `API 정상 · 연결 계좌 ${result.account_count}개`;
+    $("#toss-status").textContent = `연결 완료 · 계좌 ${result.account_count}개`;
   } catch (error) {
     $("#toss-status").textContent = error.message;
   }
@@ -238,7 +238,7 @@ function refreshActiveLiveSection() {
 
 function setLiveAuthButton(authorized) {
   const button = $("#unlock-live-button");
-  button.textContent = authorized ? "LIVE 인증 완료" : "LIVE 주문 잠금 해제";
+  button.textContent = authorized ? "주문 인증 완료" : "주문 잠금 해제";
   button.classList.toggle("success", authorized);
   button.classList.toggle("danger", !authorized);
 }
@@ -260,7 +260,7 @@ function renderOrders(orders) {
     const management = isCancelled
       ? `<span class="cancelled-order-message">취소되었습니다</span>`
       : `<details class="order-check-details"><summary>검사 결과</summary><ul>${checks || "<li>저장된 검사 결과가 없습니다.</li>"}</ul></details>${order.dry_run ? `<button class="text-button cancel-dry-run-button" type="button" data-cancel-order-id="${order.id}">취소</button>` : (canCancelReal ? `<button class="text-button cancel-dry-run-button" type="button" data-real-cancel-order-id="${order.id}">실제 주문 취소</button>` : "")}`;
-    const statusText = order.dry_run ? (isCancelled ? "취소됨" : "DRY RUN") : (order.broker_status || order.status);
+    const statusText = order.dry_run ? (isCancelled ? "취소됨" : "연습 주문") : (order.broker_status || order.status);
     const syncText = !order.dry_run
       ? `<small class="reconciliation-status ${order.reconciliation_status === "MATCHED" ? "matched" : "warning"}">${order.reconciliation_status === "MATCHED" ? "토스 대조 완료" : `대조 ${escapeHtml(order.reconciliation_status)}`}</small>`
       : "";
@@ -275,7 +275,7 @@ function renderOrders(orders) {
       <td>${new Date(order.created_at).toLocaleString("ko-KR")}</td>
       <td>${management}</td>
     </tr>`;
-  }).join("") : `<tr><td class="empty" colspan="7">저장된 DRY RUN 주문이 없습니다.</td></tr>`;
+  }).join("") : `<tr><td class="empty" colspan="7">저장된 연습 주문이 없습니다.</td></tr>`;
 }
 
 async function refreshDryRunOrders() {
@@ -286,7 +286,7 @@ async function refreshDryRunOrders() {
       api("/live/orders/dry-run"), api("/live/orders/real"),
     ]);
     renderOrders([...realOrders, ...dryOrders].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)));
-    $("#live-orders-message").textContent = `실제 주문 ${realOrders.length}건 · DRY RUN ${dryOrders.length}건`;
+    $("#live-orders-message").textContent = `실제 주문 ${realOrders.length}건 · 연습 주문 ${dryOrders.length}건`;
   } catch (error) {
     $("#live-orders-message").textContent = error.message;
   } finally {
@@ -370,7 +370,7 @@ $("#live-orders-body").addEventListener("click", async (event) => {
   try {
     await api(`/live/orders/dry-run/${encodeURIComponent(button.dataset.cancelOrderId)}/cancel`, { method: "POST" });
     await refreshDryRunOrders();
-    $("#live-orders-message").textContent = "DRY RUN 주문을 취소했습니다. 실제 자산에는 변화가 없습니다.";
+    $("#live-orders-message").textContent = "연습 주문을 취소했습니다.";
   } catch (error) {
     $("#live-orders-message").textContent = error.message;
     button.disabled = false;
@@ -378,13 +378,13 @@ $("#live-orders-body").addEventListener("click", async (event) => {
 });
 
 $("#delete-today-dry-runs").addEventListener("click", async () => {
-  if (!window.confirm("오늘 생성한 DRY RUN 주문과 관련 이벤트 기록을 모두 삭제할까요? 사용자 계정과 설정은 유지됩니다.")) return;
+  if (!window.confirm("오늘 생성한 연습 주문을 모두 삭제할까요?")) return;
   const button = $("#delete-today-dry-runs");
   button.disabled = true;
   try {
     const result = await api("/live/orders/dry-run/today", { method: "DELETE" });
     await refreshDryRunOrders();
-    $("#live-orders-message").textContent = `오늘 테스트 기록 ${result.deleted}건을 삭제했습니다.`;
+    $("#live-orders-message").textContent = `오늘 연습 주문 ${result.deleted}건을 삭제했습니다.`;
   } catch (error) {
     $("#live-orders-message").textContent = error.message;
   } finally {

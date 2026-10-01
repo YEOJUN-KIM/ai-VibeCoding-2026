@@ -110,7 +110,7 @@ function coreIssueElement(issue, rank) {
 function renderCoreIssues(data) {
   const coreIssues = data.issues.slice(0, 5);
   $("#news-core-title").textContent = data.query === "오늘의 주요 증시 이슈"
-    ? "오늘의 핵심 이슈"
+    ? "주요 이슈"
     : `‘${data.query}’ 핵심 이슈`;
   $("#news-core-count").textContent = `${coreIssues.length}개 선정`;
   const grid = $("#news-core-grid");

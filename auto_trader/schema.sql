@@ -263,3 +263,12 @@ CREATE TABLE IF NOT EXISTS long_term_watchlist (
 );
 CREATE INDEX IF NOT EXISTS long_term_watchlist_user_time
     ON long_term_watchlist(user_id, created_at DESC);
+
+ALTER TABLE live_strategies ADD COLUMN IF NOT EXISTS sizing_mode TEXT NOT NULL DEFAULT 'QUANTITY' CHECK (sizing_mode IN ('QUANTITY','AMOUNT'));
+ALTER TABLE live_strategies ADD COLUMN IF NOT EXISTS order_amount NUMERIC NOT NULL DEFAULT 100000 CHECK (order_amount > 0);
+
+CREATE TABLE IF NOT EXISTS paper_account_state (
+    account_id BIGINT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+    state JSONB NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

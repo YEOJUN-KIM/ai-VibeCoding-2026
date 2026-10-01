@@ -2,6 +2,8 @@
 
 import asyncio
 import logging
+import json
+from functools import wraps
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -11,7 +13,7 @@ from time import monotonic
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.openapi.docs import get_swagger_ui_html
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -37,7 +39,7 @@ from .models import (Account, DeletedOrderCount, FavoriteStockCreate, LiveBuying
                      LiveCompanyProfile, LiveRealOrderConfirmRequest, LiveStockDetail, LongTermAnalysis,
                      LongTermWatchCandidate,
                      LiveStockSearchPage, LiveStrategy, LiveStrategyWrite, LiveTradingReadiness,
-                     LoginRequest, NewsDigest, Order, OrderRequest, PaperWorkspaceStatus,
+                     LoginRequest, NewsDigest, Order, OrderRequest, PaperWorkspaceStatus, PaperManagementUpdate,
                      Quote, RiskSettings, RiskSettingsUpdate, RiskStatus, SessionInfo, Stock,
                      StrategySettingsUpdate, StrategyStatus, TossConnectionStatus)
 from .paper import PaperBroker
@@ -45,6 +47,7 @@ from .paper_feed import PaperPriceFeed
 from .settings import settings
 from .simulator import MarketSimulator
 from .strategy import MovingAverageEngine
+from .quote_stream import QuoteStream
 from .risk import RiskManager
 from .toss import TossApiError, TossClient
 from .database import connect, initialize
@@ -84,18 +87,38 @@ engine = MovingAverageEngine(
 )
 risk_manager = RiskManager(market)
 toss_client = TossClient()
+quote_stream = QuoteStream(toss_client, settings.toss_ws_url)
 engine.price_feed = PaperPriceFeed(toss_client)
 watchlist_source = "fallback"
 paper_snapshot_at = None
 paper_source_account_label = None
 paper_selected_strategy: LiveStrategy | None = None
+paper_account_mode = "LIVE_COPY"
+_paper_sessions = {}
+_paper_change_lock = asyncio.Lock()
+
+
+def _serialize_paper_change(function):
+    @wraps(function)
+    async def serialized(*args, **kwargs):
+        async with _paper_change_lock:
+            return await function(*args, **kwargs)
+    return serialized
+
+
+async def _stop_all_paper_engines():
+    workers = {engine, *(session[1] for session in _paper_sessions.values())}
+    await asyncio.gather(*(worker.stop() for worker in workers))
+
+
 static_dir = Path(__file__).parent / "static"
 logger = logging.getLogger(__name__)
 _readiness_lock = Lock()
 _readiness_cache: tuple[float, dict] | None = None
 _long_term_scan_status = {
     "running": False, "completed": 0, "target": 0,
-    "selected": 0, "excluded": 0,
+    "selected": 0, "excluded": 0, "failed": 0, "skipped": 0,
+    "phase": "idle", "current_name": None,
     "last_started_at": None, "last_finished_at": None, "next_run_at": None,
     "message": "분석 대기 중",
 }
@@ -219,9 +242,10 @@ async def refresh_long_term_candidates(
         return
     async with _long_term_scan_lock:
         status.update(
-            running=True, completed=0, target=0, selected=0, excluded=0,
+            running=True, completed=0, target=0, selected=0, excluded=0, failed=0,
+            skipped=0, phase="running", current_name=None, last_finished_at=None,
             last_started_at=datetime.now(timezone.utc),
-            message="거래대금 상위 보통주를 순차 분석하고 있습니다.",
+            message="거래대금 상위 보통주를 분석하고 있습니다.",
         )
         try:
             page = await asyncio.to_thread(
@@ -235,23 +259,38 @@ async def refresh_long_term_candidates(
             eligible: list[LongTermAnalysis] = []
             processed = 0
             excluded = 0
+            failed = 0
+            skipped = 0
             for candidate in candidates:
+                status.update(current_name=candidate.name, phase="running")
                 if candidate.symbol in watched:
-                    excluded += 1
+                    skipped += 1
+                    processed += 1
+                    status.update(completed=processed, skipped=skipped)
                     continue
-                requested_external_data = False
-                analysis = None if force else fresh_long_term_analysis(candidate.symbol)
+                analysis = None if force else await asyncio.to_thread(fresh_long_term_analysis, candidate.symbol)
                 if analysis is None:
-                    requested_external_data = True
-                    try:
-                        detail, company = await asyncio.gather(
-                            asyncio.to_thread(toss_client.domestic_stock_detail, candidate.symbol, "1Y"),
-                            asyncio.to_thread(dart_client.company_profile, candidate.symbol),
-                        )
-                        analysis = analyze_long_term(detail, company)
-                        save_long_term_analysis(analysis)
-                    except (TossApiError, ValueError, TypeError, ArithmeticError) as exc:
-                        logger.warning("Long-term candidate analysis failed for %s: %s", candidate.symbol, exc)
+                    for attempt in range(3):
+                        try:
+                            detail, company = await asyncio.gather(
+                                asyncio.to_thread(toss_client.domestic_stock_detail, candidate.symbol, "1Y"),
+                                asyncio.to_thread(dart_client.company_profile, candidate.symbol),
+                            )
+                            analysis = analyze_long_term(detail, company)
+                            await asyncio.to_thread(save_long_term_analysis, analysis)
+                            break
+                        except TossApiError as exc:
+                            if exc.status_code == 429 and attempt < 2:
+                                status.update(phase="waiting", message=f"{candidate.name}: API 요청 한도 대기 · 잠시 후 이어서 분석합니다.")
+                                await asyncio.sleep(15)
+                                continue
+                            failed += 1
+                            logger.warning("Long-term candidate analysis failed for %s: %s", candidate.symbol, exc)
+                            break
+                        except (ValueError, TypeError, ArithmeticError) as exc:
+                            failed += 1
+                            logger.warning("Long-term candidate analysis failed for %s: %s", candidate.symbol, exc)
+                            break
                 processed += 1
                 if analysis is not None:
                     recommended, _ = long_term_recommendation_assessment(analysis)
@@ -259,14 +298,10 @@ async def refresh_long_term_candidates(
                         eligible.append(analysis)
                     else:
                         excluded += 1
-                status.update(completed=processed, selected=min(len(eligible), target_count), excluded=excluded)
+                status.update(completed=processed, selected=min(len(eligible), target_count), excluded=excluded, failed=failed, phase="running")
                 status["message"] = (
                     f"후보 {processed}개 검토 · 추천 기준 통과 {min(len(eligible), target_count)}개"
                 )
-                if processed >= 12 and len(eligible) >= target_count:
-                    break
-                if requested_external_data:
-                    await asyncio.sleep(15)
             selected = sorted(
                 eligible,
                 key=lambda item: (item.overall_score or -1, item.generated_at),
@@ -279,16 +314,68 @@ async def refresh_long_term_candidates(
                 message = f"{processed}개를 검토해 장기 관찰 후보 {len(selected)}개를 선별했습니다."
             else:
                 message = "추천 기준을 통과한 새 후보가 없어 기존 목록을 유지했습니다."
+            if failed:
+                message += f" 조회 실패 {failed}개는 이번 선별에서 제외되었습니다. 다시 분석해 주세요."
             status.update(
-                running=False, target=processed, selected=len(selected), excluded=excluded,
+                running=False, selected=len(selected), excluded=excluded,
+                phase="partial" if failed else "complete", current_name=None,
                 last_finished_at=datetime.now(timezone.utc), message=message,
             )
+            logger.info("Long-term scan finished: reviewed=%s/%s excluded=%s skipped=%s failed=%s selected=%s",
+                        processed, status["target"], excluded, skipped, failed, len(selected))
         except asyncio.CancelledError:
-            status.update(running=False, message="장기 관찰 후보 분석이 중지되었습니다.")
+            status.update(running=False, phase="cancelled", current_name=None,
+                          last_finished_at=datetime.now(timezone.utc), message="장기 관찰 후보 분석이 중지되었습니다.")
             raise
         except Exception as exc:
-            status.update(running=False, message="장기 관찰 후보 분석을 완료하지 못했습니다.")
+            status.update(running=False, phase="failed", current_name=None, last_finished_at=datetime.now(timezone.utc), message="장기 관찰 후보 분석을 완료하지 못했습니다. 다시 분석해 주세요.")
             logger.warning("Long-term candidate refresh failed: %s", exc)
+
+
+_long_term_watch_status = {
+    "running": False, "completed": 0, "target": 0, "failed": 0,
+    "last_finished_at": None, "message": "내 후보 자동 분석 대기",
+}
+
+
+async def refresh_long_term_watch_candidates() -> None:
+    status = _long_term_watch_status
+    status.update(running=True, completed=0, target=0, failed=0, message="내 후보 자동 분석 중")
+    try:
+        symbols = sorted(await asyncio.to_thread(long_term_watched_symbols))
+        status["target"] = len(symbols)
+        for symbol in symbols:
+            status["message"] = f"내 후보 자동 분석 중 · {status['completed']}/{len(symbols)}개 · {symbol}"
+            for attempt in range(3):
+                try:
+                    await build_and_save_long_term_analysis(symbol)
+                    break
+                except TossApiError as exc:
+                    if exc.status_code == 429 and attempt < 2:
+                        status["message"] = f"내 후보 자동 분석 · {symbol} 요청 한도 대기"
+                        await asyncio.sleep(15)
+                        continue
+                    status["failed"] += 1
+                    logger.warning("Long-term watch analysis failed for %s: %s", symbol, exc)
+                    break
+                except Exception as exc:
+                    status["failed"] += 1
+                    logger.warning("Long-term watch analysis failed for %s: %s", symbol, exc)
+                    break
+            status["completed"] += 1
+        status["message"] = (
+            f"내 후보 자동 분석 {'종료 · 일부 조회 실패' if status['failed'] else '완료'} · "
+            f"{status['completed']}/{status['target']}개 검토 · "
+            f"갱신 {status['completed'] - status['failed']}개 · 실패 {status['failed']}개"
+        )
+    except asyncio.CancelledError:
+        status["message"] = "내 후보 자동 분석이 중단되었습니다."
+        raise
+    except Exception as exc:
+        status["message"] = "내 후보 자동 분석을 완료하지 못했습니다."
+        logger.warning("Long-term watch refresh failed: %s", exc)
+    finally:
+        status.update(running=False, last_finished_at=datetime.now(timezone.utc))
 
 
 async def long_term_candidate_worker(stock_directory_task: asyncio.Task | None) -> None:
@@ -302,17 +389,15 @@ async def long_term_candidate_worker(stock_directory_task: asyncio.Task | None) 
         next_run = next_daily_scan_at(
             datetime.now(timezone.utc), settings.long_term_scan_hour, settings.long_term_scan_minute
         )
-        _long_term_scan_status.update(
-            next_run_at=next_run,
-            message=f"다음 자동 분석은 {next_run.strftime('%m월 %d일 %H:%M')}입니다.",
-        )
+        _long_term_scan_status["next_run_at"] = next_run
         await asyncio.sleep(max(1, (next_run - datetime.now(next_run.tzinfo)).total_seconds()))
-        await refresh_long_term_candidates()
+        await refresh_long_term_watch_candidates()
+        await refresh_long_term_candidates(force=True)
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    global watchlist_source
+    global watchlist_source, paper_snapshot_at, paper_source_account_label
     stock_directory_warm_task: asyncio.Task | None = None
     long_term_candidate_task: asyncio.Task | None = None
     initialize()
@@ -333,6 +418,9 @@ async def lifespan(_: FastAPI):
         except (TossApiError, LookupError, ValueError, ArithmeticError) as exc:
             logger.warning("Startup real-order reconciliation failed: %s", exc)
     broker.initialize()
+    if broker.snapshot_metadata:
+        paper_snapshot_at = datetime.fromisoformat(broker.snapshot_metadata['snapshot_at'])
+        paper_source_account_label = broker.snapshot_metadata.get('source_label')
     broker.set_risk_manager(risk_manager)
     if toss_client.configured:
         async def warm_stock_directory() -> None:
@@ -361,7 +449,8 @@ async def lifespan(_: FastAPI):
         manual_refresh_task = getattr(app.state, "long_term_manual_refresh_task", None)
         if manual_refresh_task is not None and not manual_refresh_task.done():
             manual_refresh_task.cancel()
-        await engine.stop()
+        await _stop_all_paper_engines()
+        await quote_stream.close()
 
 
 app = FastAPI(
@@ -749,7 +838,7 @@ def _preview_live_order(
             message = success if passed else f"테스트 모드에서 한도 적용을 생략했습니다: {failure}"
             checks.append(LiveOrderPreviewCheck(name=name, passed=True, message=message))
         else:
-            add_check(name, passed, success, failure)
+            checks.append(LiveOrderPreviewCheck(name=name, passed=passed, warning=not passed, message=success if passed else failure))
 
     add_check("LIVE PIN", True, "LIVE PIN 인증이 유효합니다.", "LIVE PIN 인증이 필요합니다.")
     if relaxed_financial_limits:
@@ -776,7 +865,7 @@ def _preview_live_order(
         available_quantity = holding.quantity if holding else Decimal(0)
         add_check("보유 수량", payload.quantity <= available_quantity,
                   "현재 보유 수량 이내입니다.", "매도할 보유 수량이 부족합니다.")
-    approved = all(check.passed for check in checks)
+    approved = all(check.passed or check.warning for check in checks)
     return LiveOrderPreview(
         approved=approved,
         symbol=payload.symbol.upper(),
@@ -788,7 +877,8 @@ def _preview_live_order(
         reference_price=reference_price,
         estimated_amount=estimated_amount,
         checks=checks,
-        message=("모든 사전 검사를 통과했습니다. 실제 주문은 전송되지 않았습니다."
+        message=("투자 한도 초과 경고가 있습니다. 확인 후 계속할 수 있습니다. 실제 주문은 전송되지 않았습니다."
+                 if approved and any(check.warning for check in checks) else "모든 사전 검사를 통과했습니다. 실제 주문은 전송되지 않았습니다."
                  if approved else "통과하지 못한 항목이 있습니다. 실제 주문은 전송되지 않았습니다."),
     )
 
@@ -845,6 +935,8 @@ def submit_live_real_order(
     if not preview.approved:
         failed = next((check.message for check in preview.checks if not check.passed), preview.message)
         raise HTTPException(status_code=409, detail=f"실제 주문 검토를 통과하지 못했습니다: {failed}")
+    if any(check.warning for check in preview.checks) and not payload.accept_financial_warnings:
+        raise HTTPException(status_code=409, detail="투자 한도 초과 경고를 확인하고 계속 주문에 동의해야 합니다.")
     try:
         account = toss_client.selected_account()
         account_label = toss_client.buying_power().account_label
@@ -1012,14 +1104,97 @@ def live_stock_sparklines(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
+@app.get("/live/stocks/stream")
+async def live_market_stream(request: Request, symbols: str = Query(max_length=139),
+                             _: AuthenticatedUser = Depends(require_user)):
+    codes = list(dict.fromkeys(symbols.split(",")))
+    if not 1 <= len(codes) <= 20 or any(len(code) != 6 or not code.isalnum() for code in codes):
+        raise HTTPException(status_code=422, detail="국내 종목 코드를 최대 20개까지 지정하세요.")
+
+    async def events():
+        subscriptions = []
+        try:
+            for code in codes:
+                try:
+                    subscriptions.append((code, quote_stream.subscribe(code)))
+                except ValueError:
+                    yield 'data: {"type":"status","state":"rejected"}\n\n'
+                    return
+            last_auth = 0
+            last_send = monotonic()
+            while not await request.is_disconnected():
+                if monotonic() - last_auth >= 15:
+                    try:
+                        await asyncio.to_thread(require_user, request)
+                    except HTTPException:
+                        yield 'data: {"type":"status","state":"unauthorized"}\n\n'
+                        return
+                    last_auth = monotonic()
+                # Each symbol retains its own latest frame, so a busy stock
+                # cannot crowd quieter stocks out of this batch.
+                frames = []
+                for code, queue in subscriptions:
+                    if not queue.empty():
+                        frame = dict(queue.get_nowait())
+                        frame["symbol"] = code
+                        frames.append(frame)
+                if frames:
+                    yield "data: " + json.dumps({"type": "batch", "frames": frames}) + "\n\n"
+                    last_send = monotonic()
+                elif monotonic() - last_send >= 5:
+                    yield ": keepalive\n\n"
+                    last_send = monotonic()
+                await asyncio.sleep(.15)
+        finally:
+            for code, queue in subscriptions:
+                await quote_stream.unsubscribe(code, queue)
+    return StreamingResponse(events(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.get("/live/stocks/{symbol}/stream")
+async def live_quote_stream(symbol: str, request: Request, _: AuthenticatedUser = Depends(require_user)):
+    if len(symbol) != 6 or not symbol.isalnum():
+        raise HTTPException(status_code=422, detail="국내 종목 코드를 확인하세요.")
+    async def events():
+        try:
+            queue = quote_stream.subscribe(symbol)
+        except ValueError:
+            yield 'data: {"type":"status","state":"rejected"}\n\n'
+            return
+        try:
+            last_auth = 0
+            while not await request.is_disconnected():
+                if monotonic() - last_auth >= 15:
+                    try:
+                        await asyncio.to_thread(require_user, request)
+                    except HTTPException:
+                        yield 'data: {"type":"status","state":"unauthorized"}\n\n'
+                        return
+                    last_auth = monotonic()
+                try:
+                    frame = await asyncio.wait_for(queue.get(), 5)
+                    yield "data: " + json.dumps(frame) + "\n\n"
+                    # Coalesce very busy tick streams for the browser, never claim
+                    # these lossy ticks reconstruct exact candle volume.
+                    await asyncio.sleep(.15)
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+        finally:
+            await quote_stream.unsubscribe(symbol, queue)
+    return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control":"no-cache", "X-Accel-Buffering":"no"})
+
+
 @app.get("/live/stocks/{symbol}/detail", response_model=LiveStockDetail)
 def live_stock_detail(
     symbol: str,
-    period: str = Query(default="1D", pattern="^(1D|1W|1M|3M|1Y)$"),
+    refresh: bool = False,
+    period: str = Query(default="1D", pattern="^(1D|1W|1M|3M|1Y|3Y|5Y|10Y)$"),
+    candle_interval: str | None = Query(default=None, pattern="^(1m|1h|1d|1w|1mo|1y)$"),
     _: AuthenticatedUser = Depends(require_user),
 ) -> LiveStockDetail:
     try:
-        return toss_client.domestic_stock_detail(symbol, period=period)
+        return toss_client.domestic_stock_detail(symbol, period=period, refresh=refresh, candle_interval=candle_interval)
     except TossApiError as exc:
         status_code = 404 if exc.status_code == 404 else 502
         raise HTTPException(status_code=status_code, detail=str(exc)) from exc
@@ -1055,12 +1230,18 @@ async def start_long_term_candidate_refresh(
     if not toss_client.configured:
         raise HTTPException(status_code=409, detail="토스 API 연결 후 후보 분석을 시작할 수 있습니다.")
     _long_term_scan_status.update(
-        running=True, completed=0, target=0, selected=0, excluded=0,
+        running=True, completed=0, target=0, selected=0, excluded=0, failed=0,
+            skipped=0, phase="running", current_name=None, last_finished_at=None,
         message="수동 후보 분석을 준비하고 있습니다.",
     )
     task = asyncio.create_task(refresh_long_term_candidates(force=True))
     app.state.long_term_manual_refresh_task = task
     return dict(_long_term_scan_status)
+
+
+@app.get("/research/long-term/watchlist-status")
+def long_term_watchlist_status(_: AuthenticatedUser = Depends(require_user)) -> dict:
+    return {**_long_term_watch_status, "next_run_at": _long_term_scan_status["next_run_at"]}
 
 
 @app.get("/research/long-term/watchlist", response_model=list[LongTermWatchCandidate])
@@ -1092,23 +1273,28 @@ def remove_long_term_watchlist_symbol(
     return {"removed": True}
 
 
+async def build_and_save_long_term_analysis(symbol: str) -> LongTermAnalysis:
+    detail, company = await asyncio.gather(
+        asyncio.to_thread(toss_client.domestic_stock_detail, symbol, "1Y"),
+        asyncio.to_thread(dart_client.company_profile, symbol),
+    )
+    if not detail.is_common_share or detail.security_type != "STOCK":
+        raise HTTPException(status_code=409, detail="장기 재무분석은 국내 보통주를 대상으로 합니다.")
+    analysis = analyze_long_term(detail, company)
+    await asyncio.to_thread(save_long_term_analysis, analysis)
+    return analysis
+
+
 @app.get("/research/long-term/{symbol}", response_model=LongTermAnalysis)
 async def long_term_analysis(
     symbol: str, _: AuthenticatedUser = Depends(require_user),
+    refresh: bool = False,
 ) -> LongTermAnalysis:
     try:
-        cached = fresh_long_term_analysis(symbol)
+        cached = None if refresh else await asyncio.to_thread(fresh_long_term_analysis, symbol)
         if cached is not None:
             return cached
-        detail, company = await asyncio.gather(
-            asyncio.to_thread(toss_client.domestic_stock_detail, symbol, "1Y"),
-            asyncio.to_thread(dart_client.company_profile, symbol),
-        )
-        if not detail.is_common_share or detail.security_type != "STOCK":
-            raise HTTPException(status_code=409, detail="장기 재무분석은 국내 보통주를 대상으로 합니다.")
-        analysis = analyze_long_term(detail, company)
-        save_long_term_analysis(analysis)
-        return analysis
+        return await build_and_save_long_term_analysis(symbol)
     except TossApiError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -1149,7 +1335,7 @@ def create_live_favorite(
         if not stock:
             raise HTTPException(status_code=404, detail="국내 상장 종목을 찾지 못했습니다.")
         saved = add_favorite(user.id, stock)
-        return toss_client.favorite_stock_snapshots([saved])[0]
+        return LiveFavoriteStock(**saved)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except TossApiError as exc:
@@ -1173,7 +1359,15 @@ def stocks(_: AuthenticatedUser = Depends(require_user)) -> list[Stock]:
 @app.get("/paper/workspace", response_model=PaperWorkspaceStatus)
 def paper_workspace(_: AuthenticatedUser = Depends(require_user)) -> PaperWorkspaceStatus:
     return PaperWorkspaceStatus(
-        account=broker.account(), snapshot_ready=paper_snapshot_at is not None,
+        account=broker.account(), account_mode=paper_account_mode,
+        management_scope=broker.management_scope,
+        background_runs=[dict(account_mode=mode, strategy_name=session[4].name if session[4] else None,
+                              tick_count=session[1].tick_count, data_message=session[1].data_message)
+                         for mode, session in _paper_sessions.items()
+                         if mode != paper_account_mode and session[1].running],
+        managed_holdings=broker.managed_lots(),
+        holding_management=broker.holding_management(),
+        snapshot_ready=paper_snapshot_at is not None,
         snapshot_at=paper_snapshot_at, source_account_label=paper_source_account_label,
         selected_strategy_id=paper_selected_strategy.id if paper_selected_strategy else None,
         selected_strategy_name=paper_selected_strategy.name if paper_selected_strategy else None,
@@ -1182,9 +1376,56 @@ def paper_workspace(_: AuthenticatedUser = Depends(require_user)) -> PaperWorksp
     )
 
 
+@app.put('/paper/management', response_model=PaperWorkspaceStatus)
+@_serialize_paper_change
+async def paper_management(payload: PaperManagementUpdate, user: AuthenticatedUser = Depends(require_csrf)):
+    try:
+        engine.set_management_scope(payload.scope)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return paper_workspace(user)
+
+
+@app.post("/paper/accounts/{mode}/select", response_model=PaperWorkspaceStatus)
+@_serialize_paper_change
+async def select_paper_account(mode: str, user: AuthenticatedUser = Depends(require_csrf)) -> PaperWorkspaceStatus:
+    global broker, engine, paper_account_mode, paper_snapshot_at
+    global paper_source_account_label, paper_selected_strategy
+    if mode not in {"EXPERIMENT", "LIVE_COPY"}:
+        raise HTTPException(status_code=422, detail="지원하지 않는 모의계좌입니다.")
+    if mode == paper_account_mode:
+        return paper_workspace(user)
+    # Switching the displayed account does not interrupt either account worker.
+    # Preserve both portfolios and their separate strategy performance in memory.
+    current = (broker, engine, paper_snapshot_at, paper_source_account_label, paper_selected_strategy)
+    target = _paper_sessions.get(mode)
+    if target is None:
+        if mode != "EXPERIMENT":
+            raise HTTPException(status_code=409, detail="기존 모의계좌가 준비되지 않았습니다.")
+        new_broker = PaperBroker(
+            market, initial_cash=Decimal("10000000"), account_name="paper-experiment",
+            fee_rate=settings.paper_fee_rate, sell_tax_rate=settings.paper_sell_tax_rate,
+            slippage_rate=settings.paper_slippage_rate,
+            ignore_min_cash_ratio=settings.paper_ignore_min_cash_ratio,
+            ignore_daily_order_limit=settings.paper_ignore_daily_order_limit,
+            journal_path=broker.journal_path,
+        )
+        await asyncio.to_thread(new_broker.initialize)
+        await asyncio.to_thread(new_broker.set_risk_manager, RiskManager(market))
+        new_engine = MovingAverageEngine(market, new_broker, price_feed=PaperPriceFeed(toss_client))
+        target = (new_broker, new_engine, datetime.now().astimezone(), "실험계좌", None)
+    _paper_sessions[paper_account_mode] = current
+    broker, engine, paper_snapshot_at, paper_source_account_label, paper_selected_strategy = target
+    paper_account_mode = mode
+    return paper_workspace(user)
+
+
 @app.post("/paper/snapshot/live", response_model=PaperWorkspaceStatus)
+@_serialize_paper_change
 async def snapshot_live_account(_: AuthenticatedUser = Depends(require_csrf)) -> PaperWorkspaceStatus:
     global paper_snapshot_at, paper_source_account_label
+    if paper_account_mode == "EXPERIMENT":
+        raise HTTPException(status_code=409, detail="기존 모의계좌로 돌아간 뒤 실제 자산을 복사하세요.")
     await engine.stop()
     try:
         portfolio, buying_power = await asyncio.gather(
@@ -1206,14 +1447,17 @@ async def snapshot_live_account(_: AuthenticatedUser = Depends(require_csrf)) ->
             "symbol": holding.symbol, "quantity": quantity,
             "average_price": holding.average_purchase_price, "current_price": holding.last_price,
         })
-    broker.load_snapshot(cash=buying_power.krw_cash_buying_power, positions=positions)
+    snapshot_at = datetime.now().astimezone()
+    broker.load_snapshot(cash=buying_power.krw_cash_buying_power, positions=positions,
+                         metadata={'snapshot_at': snapshot_at.isoformat(), 'source_label': portfolio.account_label})
     engine.reset_performance_baseline()
-    paper_snapshot_at = datetime.now().astimezone()
+    paper_snapshot_at = snapshot_at
     paper_source_account_label = portfolio.account_label
     return paper_workspace(_)
 
 
 @app.post("/paper/strategies/{strategy_id}/select", response_model=PaperWorkspaceStatus)
+@_serialize_paper_change
 async def select_paper_strategy(
     strategy_id: int, user: AuthenticatedUser = Depends(require_csrf),
 ) -> PaperWorkspaceStatus:
@@ -1238,6 +1482,7 @@ async def select_paper_strategy(
         interval_seconds=max(10, settings.strategy_interval_seconds),
         short_period=strategy.short_period, long_period=strategy.long_period,
         order_quantity=strategy.order_quantity, target_symbols=target_symbols,
+        sizing_mode=strategy.sizing_mode, order_amount=strategy.order_amount,
         take_profit_rate=strategy.take_profit_rate,
         stop_loss_rate=strategy.stop_loss_rate,
         max_holding_days=strategy.max_holding_days,
@@ -1245,6 +1490,7 @@ async def select_paper_strategy(
         trading_end=strategy.trading_end,
         cooldown_minutes=strategy.cooldown_minutes,
         daily_order_limit=strategy.daily_order_limit,
+        strategy_id=strategy.id, strategy_name=strategy.name,
     )
     paper_selected_strategy = strategy
     return paper_workspace(user)
@@ -1276,7 +1522,7 @@ def orders(_: AuthenticatedUser = Depends(require_user)) -> list[Order]:
 
 @app.get("/risk", response_model=RiskStatus)
 def risk_status(_: AuthenticatedUser = Depends(require_user)) -> RiskStatus:
-    return risk_manager.status()
+    return broker.risk_manager.status()
 
 
 @app.put("/risk/settings", response_model=RiskSettings)
@@ -1286,12 +1532,13 @@ def update_risk_settings(
     if engine.running:
         raise HTTPException(status_code=409, detail="자동매매를 중지한 뒤 한도를 변경하세요.")
     try:
-        return risk_manager.update(payload)
+        return broker.risk_manager.update(payload)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.delete("/paper/reset", response_model=Account)
+@_serialize_paper_change
 async def reset_paper_practice(_: AuthenticatedUser = Depends(require_csrf)) -> Account:
     await engine.stop()
     account = broker.reset_practice()
@@ -1331,6 +1578,7 @@ def strategy_settings(
 
 
 @app.post("/strategy/start", response_model=StrategyStatus)
+@_serialize_paper_change
 async def strategy_start(_: AuthenticatedUser = Depends(require_csrf)) -> StrategyStatus:
     if paper_snapshot_at is None:
         raise HTTPException(status_code=409, detail="먼저 현재 실제 자산을 모의계좌에 복사하세요.")
@@ -1341,12 +1589,14 @@ async def strategy_start(_: AuthenticatedUser = Depends(require_csrf)) -> Strate
 
 
 @app.post("/strategy/stop", response_model=StrategyStatus)
+@_serialize_paper_change
 async def strategy_stop(_: AuthenticatedUser = Depends(require_csrf)) -> StrategyStatus:
     await engine.stop()
     return engine.status()
 
 
 @app.post("/strategy/emergency-stop", response_model=StrategyStatus)
+@_serialize_paper_change
 async def strategy_emergency_stop(_: AuthenticatedUser = Depends(require_csrf)) -> StrategyStatus:
     await engine.stop(emergency=True)
     return engine.status()

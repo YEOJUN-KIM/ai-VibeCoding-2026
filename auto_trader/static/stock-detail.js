@@ -3,6 +3,11 @@ const integer = new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 0 });
 const $ = (selector) => document.querySelector(selector);
 let csrfToken = "";
 let activePeriod = "1D";
+let activeCandleInterval = "1m";
+const chartCacheKey = (period, interval = activeCandleInterval) => `${interval}:${period}`;
+const candleLabels = {"1m":"1분봉", "1h":"1시간봉", "1d":"일봉", "1w":"주봉", "1mo":"월봉", "1y":"연봉"};
+const candleRanges = {"1m":["1D"], "1h":["1D","1W"], "1d":["1M","3M","1Y","3Y"], "1w":["1Y","3Y","5Y"], "1mo":["1Y","3Y","5Y","10Y"], "1y":["5Y","10Y"]};
+const candleDefaultRanges = {"1m":"1D", "1h":"1W", "1d":"1Y", "1w":"3Y", "1mo":"5Y", "1y":"10Y"};
 let activeSymbol = "";
 let detailSequence = 0;
 let activeChartMode = "candle";
@@ -22,8 +27,9 @@ let approvedOrderPreview = null;
 let pendingClientOrderId = null;
 let liveTradingReady = false;
 const periodLabels = {
-  "1D": ["1일", "1 DAY"], "1W": ["7일", "7 DAYS"], "1M": ["1개월", "1 MONTH"],
+  "1D": ["오늘", "TODAY"], "1W": ["7일", "7 DAYS"], "1M": ["1개월", "1 MONTH"],
   "3M": ["3개월", "3 MONTHS"], "1Y": ["1년", "1 YEAR"],
+  "3Y":["3년","3 YEARS"], "5Y":["5년","5 YEARS"], "10Y":["10년","10 YEARS"],
 };
 const escapeHtml = (value) => String(value ?? "").replace(/[&<>'"]/g, (character) => ({
   "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;",
@@ -97,14 +103,11 @@ function movingAveragePath(candles, period, xAt, priceY) {
 }
 
 function chartSvg(candles) {
-  const candleLimits = { "1D": 60, "1W": 65, "1M": 68, "3M": 80, "1Y": 120 };
-  const chartCandles = activeChartMode === "candle"
-    ? aggregateCandles(candles, candleLimits[activePeriod] || 90)
-    : candles;
+  const chartCandles = chartVisibleCandles(candles);
   lastChartCandles = chartCandles;
   const closes = chartCandles.map((item) => Number(item.close_price));
-  if (closes.length < 2) return `<div class="empty">표시할 일봉 데이터가 부족합니다.</div>`;
-  const width = 1100;
+  if (!closes.length) return `<div class="empty">표시할 봉 데이터가 부족합니다.</div>`;
+  const width = Math.max(300, Math.min(1100, $("#detail-chart").clientWidth || 1100));
   const height = 400;
   const paddingLeft = 18;
   const paddingRight = 82;
@@ -200,17 +203,18 @@ function chartSvg(candles) {
 }
 
 function formatTimestamp(value) {
-  const options = activePeriod === "1D"
-    ? { hour: "2-digit", minute: "2-digit" }
-    : { year: "numeric", month: "2-digit", day: "2-digit" };
-  return new Date(value).toLocaleString("ko-KR", options);
+  const intraday = ["1m", "1h"].includes(activeCandleInterval);
+  const options = intraday && activePeriod === "1D"
+    ? {hour:"2-digit",minute:"2-digit"}
+    : {year:"numeric",month:"2-digit",day:"2-digit",...(intraday?{hour:"2-digit",minute:"2-digit"}:{})};
+  return new Date(value).toLocaleString("ko-KR", {...options,timeZone:"Asia/Seoul"});
 }
 
 function formatTooltipTimestamp(value) {
-  const intraday = ["1D", "1W", "1M"].includes(activePeriod);
-  return new Date(value).toLocaleString("ko-KR", intraday
-    ? { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }
-    : { year: "numeric", month: "2-digit", day: "2-digit" });
+  const options = activeCandleInterval === "1y" ? {year:"numeric"}
+    : activeCandleInterval === "1mo" ? {year:"numeric",month:"2-digit"}
+    : {year:"numeric",month:"2-digit",day:"2-digit",...(["1m","1h"].includes(activeCandleInterval)?{hour:"2-digit",minute:"2-digit"}:{})};
+  return new Date(value).toLocaleString("ko-KR", {...options,timeZone:"Asia/Seoul"});
 }
 
 function formatNewsTime(value) {
@@ -264,7 +268,7 @@ function renderLongTermAnalysis(data) {
   const drawdown = data.max_drawdown_1y_percent == null ? "-" : `${Number(data.max_drawdown_1y_percent).toFixed(1)}%`;
   $("#detail-long-term-price-caption").textContent = `기간 수익률 ${rate} · 관측 최대 낙폭 ${drawdown}`;
   $("#detail-long-term-chart").innerHTML = longTermPriceChart(data.candles);
-  $("#detail-long-term-message").textContent = `점수는 하루 동안 저장해 재사용합니다 · ${new Date(data.generated_at).toLocaleString("ko-KR")} 기준`;
+  $("#detail-long-term-message").textContent = `분석 기준 · ${new Date(data.generated_at).toLocaleString("ko-KR")} 기준`;
 }
 
 async function loadLongTermAnalysis(symbol) {
@@ -358,7 +362,7 @@ async function loadDryRunHistory() {
     list.replaceChildren();
     if (!orders.length) {
       const empty = document.createElement("span");
-      empty.textContent = "아직 저장된 DRY RUN 주문이 없습니다.";
+      empty.textContent = "아직 저장된 연습 주문이 없습니다.";
       list.append(empty);
       return;
     }
@@ -508,9 +512,9 @@ function renderCompanyProfile(data) {
   $("#company-industry-code").textContent = data.industry_code ? `한국표준산업분류 ${data.industry_code}` : "OpenDART 분류 기준";
   $("#company-established").textContent = formatCompactDate(data.established_date);
   $("#company-fiscal-month").textContent = data.fiscal_month ? `${data.fiscal_month}월` : "-";
-  renderMetricGrid("#company-financial-grid", data.financials, data.configured ? "표시할 연간 재무 주요계정이 없습니다." : "OpenDART API 키를 설정하면 재무정보가 표시됩니다.", true);
+  renderMetricGrid("#company-financial-grid", data.financials, data.configured ? "표시할 연간 재무 주요계정이 없습니다." : "재무정보가 아직 연결되지 않았습니다.", true);
   renderFinancialHistory(data.financial_history || []);
-  renderMetricGrid("#company-dividend-grid", data.dividends, data.configured ? "최근 사업보고서에서 배당정보를 찾지 못했습니다." : "OpenDART API 키를 설정하면 배당정보가 표시됩니다.");
+  renderMetricGrid("#company-dividend-grid", data.dividends, data.configured ? "최근 사업보고서에서 배당정보를 찾지 못했습니다." : "배당정보가 아직 연결되지 않았습니다.");
   const profile = $("#company-profile-detail");
   profile.replaceChildren();
   [["법인명", data.corporation_name], ["주소", data.address]].forEach(([labelText, valueText]) => {
@@ -539,7 +543,7 @@ function renderCompanyProfile(data) {
   if (!data.disclosures.length) {
     const empty = document.createElement("div");
     empty.className = "empty";
-    empty.textContent = data.configured ? "최근 공시가 없습니다." : "OpenDART API 키를 설정하면 최근 공시가 표시됩니다.";
+    empty.textContent = data.configured ? "최근 공시가 없습니다." : "공시 정보가 아직 연결되지 않았습니다.";
     disclosures.append(empty);
   } else {
     data.disclosures.forEach((item) => {
@@ -660,8 +664,11 @@ function updateChartHover(event) {
   const pointerX = event.clientX - chartRect.left;
   const pointerY = event.clientY - chartRect.top;
   const tooltipWidth = 218;
-  tooltip.style.left = `${pointerX + tooltipWidth + 24 > chartRect.width ? pointerX - tooltipWidth - 12 : pointerX + 14}px`;
-  tooltip.style.top = `${Math.max(8, Math.min(chartRect.height - 156, pointerY - 30))}px`;
+  const actualWidth = tooltip.offsetWidth || tooltipWidth;
+  const actualHeight = tooltip.offsetHeight || 180;
+  const left = pointerX + actualWidth + 24 > chartRect.width ? pointerX - actualWidth - 12 : pointerX + 14;
+  tooltip.style.left = `${Math.max(4, Math.min(chartRect.width - actualWidth - 4, left))}px`;
+  tooltip.style.top = `${Math.max(8, Math.min(chartRect.height - actualHeight - 8, pointerY - 30))}px`;
   crosshair.setAttribute("visibility", "visible");
   crosshair.querySelector(".crosshair-x").setAttribute("x1", x);
   crosshair.querySelector(".crosshair-x").setAttribute("x2", x);
@@ -671,6 +678,10 @@ function updateChartHover(event) {
   crosshair.querySelector(".crosshair-point").setAttribute("cy", y);
 }
 
+window.restoreChartHover = () => {
+  if (chartViewport.hover && !chartViewport.drag && !$("#detail-chart").classList.contains('loading')) updateChartHover(chartViewport.hover);
+};
+
 function clearChartHover() {
   const tooltip = $("#chart-tooltip");
   if (tooltip) tooltip.hidden = true;
@@ -679,17 +690,21 @@ function clearChartHover() {
 
 function renderDetail(data) {
   lastDetailData = data;
-  document.title = `${data.name} · 종목 대시보드`;
+  document.title = `${data.name} · FOLIO`;
   $("#detail-market").textContent = `${data.market} · ${securityTypeLabel(data)}`;
   $("#detail-name").textContent = data.name;
   $("#detail-symbol").textContent = data.symbol;
   $("#order-stock-name").textContent = data.name;
   $("#order-stock-symbol").textContent = data.symbol;
   $("#detail-price").textContent = data.price == null ? "-" : won.format(Number(data.price));
-  if (data.price != null && !$("#order-price").dataset.edited) $("#order-price").value = Math.round(Number(data.price));
+  if (data.price != null && !$("#order-price").dataset.edited && !$("#order-price").dataset.initialized) {$("#order-price").value = Math.round(Number(data.price));$("#order-price").dataset.initialized="true";}
   updateOrderEstimate();
   const rate = data.change_rate_percent == null ? null : Number(data.change_rate_percent);
-  $("#detail-change").textContent = rate == null ? "-" : `${rate > 0 ? "+" : ""}${rate.toFixed(2)}%`;
+  const previous = data.previous_close == null ? null : Number(data.previous_close);
+  const difference = previous == null || data.price == null ? null : Number(data.price) - previous;
+  const rateText = rate == null ? "-" : `${rate > 0 ? "+" : ""}${rate.toFixed(2)}%`;
+  $("#detail-change").textContent = difference == null ? rateText : `${difference > 0 ? "+" : difference < 0 ? "−" : ""}${won.format(Math.abs(difference))} (${rateText})`;
+  $("#detail-previous-close").textContent = `전일 종가 ${previous == null ? "-" : won.format(previous)}`;
   $("#detail-change").className = rate == null || rate === 0 ? "neutral" : rate > 0 ? "positive" : "negative";
   $("#detail-type").textContent = data.trading_amount_rank == null ? data.market : `거래대금 ${data.trading_amount_rank}위`;
   $("#company-english-name").textContent = data.english_name || "-";
@@ -718,12 +733,13 @@ function renderDetail(data) {
   const [periodLabel, periodKicker] = periodLabels[activePeriod];
   $("#detail-high-label").textContent = `${periodLabel} 최고가`;
   $("#detail-low-label").textContent = `${periodLabel} 최저가`;
-  $("#detail-period-kicker").textContent = periodKicker;
+  $("#detail-period-kicker").textContent = `${candleLabels[activeCandleInterval]} · ${periodKicker}`;
   const highs = data.candles.map((item) => Number(item.high_price));
   const lows = data.candles.map((item) => Number(item.low_price));
   $("#detail-high").textContent = highs.length ? won.format(Math.max(...highs)) : "-";
   $("#detail-low").textContent = lows.length ? won.format(Math.min(...lows)) : "-";
   $("#detail-chart").innerHTML = chartSvg(data.candles);
+  window.restoreChartHover();
   if (data.candles.length) {
     const first = data.candles[0];
     const last = data.candles.at(-1);
@@ -740,27 +756,30 @@ function renderDetail(data) {
   $("#metric-trading-amount").textContent = compactKrw(data.trading_amount);
   $("#metric-volume").textContent = data.trading_volume == null ? "-" : `${integer.format(Number(data.trading_volume))}주`;
   $("#metric-shares").textContent = data.shares_outstanding == null ? "-" : `${integer.format(Number(data.shares_outstanding))}주`;
-  $("#detail-message").textContent = activePeriod === "1D"
-    ? "1분봉 추세선이며 체결 시점에 따라 실제 가격과 차이가 날 수 있습니다."
-    : "일봉 종가 추세선이며 장중 가격과 차이가 날 수 있습니다.";
+  $("#detail-message").textContent = `${candleLabels[activeCandleInterval]} · 최근 ${periodLabel} · 이동평균은 선택한 봉의 종가 기준입니다.`;
+  window.reapplyDetailStream?.();
   if (activeDetailSection === "news") loadStockNews(data.name, data.symbol);
   if (activeDetailSection === "company" && corporateStock) loadCompanyProfile(data.symbol);
   if (activeDetailSection === "long-term" && longTermEligible) loadLongTermAnalysis(data.symbol);
 }
 
 async function loadDetail(period) {
+  if (period !== activePeriod) resetChartViewport();
   activePeriod = period;
   const sequence = ++detailSequence;
   document.querySelectorAll("[data-period]").forEach((button) => button.classList.toggle("active", button.dataset.period === period));
-  if (detailCache.has(period)) {
-    renderDetail(detailCache.get(period));
+  const key = chartCacheKey(period);
+  if (detailCache.has(key)) {
+    renderDetail(detailCache.get(key));
+    $("#detail-chart").classList.remove("loading");
+    $("#detail-chart").removeAttribute("aria-busy");
     return;
   }
   $("#detail-message").textContent = `${periodLabels[period][0]} 차트를 불러오는 중입니다.`;
   $("#detail-chart").classList.add("loading");
   $("#detail-chart").setAttribute("aria-busy", "true");
   try {
-    const data = await fetchDetail(period);
+    const data = await fetchDetail(period, activeCandleInterval);
     if (sequence === detailSequence) renderDetail(data);
   } catch (error) {
     if (sequence !== detailSequence) return;
@@ -775,32 +794,36 @@ async function loadDetail(period) {
   }
 }
 
-function fetchDetail(period) {
-  if (detailCache.has(period)) return Promise.resolve(detailCache.get(period));
-  if (detailRequests.has(period)) return detailRequests.get(period);
-  const request = api(`/live/stocks/${encodeURIComponent(activeSymbol)}/detail?period=${period}`)
-    .then((data) => {
-      detailCache.set(period, data);
-      return data;
-    })
-    .finally(() => detailRequests.delete(period));
-  detailRequests.set(period, request);
+function fetchDetail(period, interval = activeCandleInterval) {
+  const key = chartCacheKey(period, interval);
+  if (detailCache.has(key)) return Promise.resolve(detailCache.get(key));
+  if (detailRequests.has(key)) return detailRequests.get(key);
+  const request = api(`/live/stocks/${encodeURIComponent(activeSymbol)}/detail?period=${period}&candle_interval=${interval}`)
+    .then(data => { detailCache.set(key,data); return data; })
+    .finally(() => detailRequests.delete(key));
+  detailRequests.set(key,request);
   return request;
 }
 
-function prefetchNearbyPeriods() {
-  const start = async () => {
-    // 사용자가 자주 누르는 순서대로 준비한다. 순차 실행해 토스 호출 한도를 보호한다.
-    for (const period of ["1W", "1M", "1Y", "3M"]) {
-      try { await fetchDetail(period); } catch (_) { /* 전환 시 화면에서 다시 시도한다. */ }
-    }
-  };
-  if ("requestIdleCallback" in window) window.requestIdleCallback(start, { timeout: 1200 });
-  else window.setTimeout(start, 350);
+function updateChartRangeButtons() {
+  const allowed = candleRanges[activeCandleInterval];
+  $('#detail-period-tabs').innerHTML = '<span class="chart-control-label">조회 기간</span>' + allowed.map(period => `<button type="button" data-period="${period}" class="${period === activePeriod ? 'active' : ''}">${periodLabels[period][0]}</button>`).join('');
 }
+
+function prefetchNearbyPeriods() { /* Load only the requested chart to avoid long minute-history requests. */ }
 
 $("#logout-button").addEventListener("click", async () => {
   try { await api("/auth/logout", { method: "POST" }); } finally { window.location.replace("/login"); }
+});
+$('#detail-candle-tabs').addEventListener('click', event => {
+  const button = event.target.closest('[data-candle-interval]');
+  if (!button || button.dataset.candleInterval === activeCandleInterval) return;
+  activeCandleInterval = button.dataset.candleInterval;
+  resetChartViewport();
+  activePeriod = candleDefaultRanges[activeCandleInterval];
+  document.querySelectorAll('[data-candle-interval]').forEach(node => node.classList.toggle('active', node.dataset.candleInterval === activeCandleInterval));
+  updateChartRangeButtons();
+  loadDetail(activePeriod);
 });
 $("#detail-period-tabs").addEventListener("click", (event) => {
   const button = event.target.closest("[data-period]");
@@ -813,8 +836,48 @@ $("#detail-chart-modes").addEventListener("click", (event) => {
   document.querySelectorAll("[data-chart-mode]").forEach((item) => item.classList.toggle("active", item === button));
   if (lastDetailData) $("#detail-chart").innerHTML = chartSvg(lastDetailData.candles);
 });
-$("#detail-chart").addEventListener("pointermove", updateChartHover);
-$("#detail-chart").addEventListener("pointerleave", clearChartHover);
+function redrawChartViewport() {
+  if (!lastDetailData) return;
+  $("#detail-chart").innerHTML = chartSvg(lastDetailData.candles);
+  clearChartHover();
+}
+$("#detail-chart").addEventListener('wheel', event => {
+  if (!lastDetailData?.candles.length || !event.deltaY || $("#detail-chart").classList.contains('loading')) return;
+  event.preventDefault();
+  const rect = $("#detail-chart").getBoundingClientRect();
+  const anchor = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+  zoomChartViewport(lastDetailData.candles, event.deltaY < 0 ? .8 : 1.25, anchor);
+  redrawChartViewport();
+}, {passive:false});
+$("#chart-zoom-in").addEventListener('click', () => { if (lastDetailData) { zoomChartViewport(lastDetailData.candles,.8); redrawChartViewport(); } });
+$("#chart-zoom-out").addEventListener('click', () => { if (lastDetailData) { zoomChartViewport(lastDetailData.candles,1.25); redrawChartViewport(); } });
+$("#chart-zoom-reset").addEventListener('click', () => { resetChartViewport(); redrawChartViewport(); });
+$("#detail-chart").addEventListener('pointerdown', event => {
+  if (event.button !== 0 || !lastDetailData?.candles.length || $("#detail-chart").classList.contains('loading')) return;
+  const range = chartVisibleRange(lastDetailData.candles);
+  chartViewport.drag = {x:event.clientX, end:range.end, count:range.count};
+  $("#detail-chart").setPointerCapture(event.pointerId);
+  $("#detail-chart").classList.add('dragging');
+});
+$("#detail-chart").addEventListener("pointermove", event => {
+  if (!chartViewport.drag) { chartViewport.hover = {clientX:event.clientX,clientY:event.clientY}; updateChartHover(event); return; }
+  const width = Math.max(1, $("#detail-chart").clientWidth - 100);
+  const offset = Math.round(-(event.clientX - chartViewport.drag.x) / width * chartViewport.drag.count);
+  panChartViewport(lastDetailData.candles, offset, chartViewport.drag.end);
+  redrawChartViewport();
+});
+for (const eventName of ['pointerup','pointercancel','lostpointercapture']) {
+  $("#detail-chart").addEventListener(eventName, () => { chartViewport.drag=null; $("#detail-chart").classList.remove('dragging'); });
+}
+$("#detail-chart").addEventListener("pointerleave", () => { chartViewport.hover=null; clearChartHover(); });
+let chartResizeTimer = null;
+window.addEventListener("resize", () => {
+  window.clearTimeout(chartResizeTimer);
+  chartResizeTimer = window.setTimeout(() => {
+    if (lastDetailData) $("#detail-chart").innerHTML = chartSvg(lastDetailData.candles);
+    clearChartHover();
+  }, 100);
+});
 $("#order-side-tabs").addEventListener("click", (event) => {
   const button = event.target.closest("[data-order-side]");
   if (!button) return;
@@ -861,8 +924,8 @@ $("#live-order-preview-button").addEventListener("click", async () => {
     const checks = document.createElement("ul");
     preview.checks.forEach((check) => {
       const item = document.createElement("li");
-      item.className = check.passed ? "passed" : "failed";
-      item.textContent = `${check.passed ? "✓" : "!"} ${check.message}`;
+      item.className = check.warning ? "warning" : check.passed ? "passed" : "failed";
+      item.textContent = `${check.warning ? "⚠" : check.passed ? "✓" : "!"} ${check.message}`;
       checks.append(item);
     });
     result.append(heading, message, checks);
@@ -872,8 +935,8 @@ $("#live-order-preview-button").addEventListener("click", async () => {
       const confirmButton = document.createElement("button");
       confirmButton.type = "button";
       confirmButton.className = "button order-final-confirm-button";
-      confirmButton.textContent = "최종 확인으로 이동";
-      confirmButton.addEventListener("click", openDryRunConfirmModal);
+      confirmButton.textContent = preview.checks.some(check=>check.warning) ? "한도 경고 확인 후 계속" : "최종 확인으로 이동";
+      confirmButton.addEventListener("click",()=>{const warnings=preview.checks.filter(check=>check.warning);if(warnings.length&&!window.confirm(warnings.map(check=>check.message).join("\n")+"\n\n투자 한도를 초과해도 주문 검토를 계속할까요?"))return;approvedOrderPayload.accept_financial_warnings=warnings.length>0;openDryRunConfirmModal();});
       result.append(confirmButton);
     }
   } catch (error) {
@@ -906,6 +969,7 @@ function openDryRunConfirmModal() {
   if (approvedOrderPayload.mode === "SINGLE") {
     values.push(["감시 가격", won.format(approvedOrderPayload.trigger_price)], ["만료일", approvedOrderPayload.expire_date]);
   }
+  if(approvedOrderPreview.checks.some(check=>check.warning)) values.push(["확인한 한도 경고",approvedOrderPreview.checks.filter(check=>check.warning).map(check=>check.message).join(" · ")]);
   summary.replaceChildren(...values.map(([labelText, valueText]) => {
     const row = document.createElement("div");
     const label = document.createElement("span");
@@ -939,7 +1003,7 @@ $("#confirm-dry-run-order").addEventListener("click", async () => {
   const button = $("#confirm-dry-run-order");
   const status = $("#dry-run-confirm-status");
   button.disabled = true;
-  status.textContent = "안전 검사를 다시 실행하고 기록하고 있습니다.";
+  status.textContent = "주문 조건을 확인하고 저장하는 중입니다.";
   try {
     const order = await api("/live/orders/dry-run", {
       method: "POST",
@@ -949,7 +1013,7 @@ $("#confirm-dry-run-order").addEventListener("click", async () => {
     const result = $("#order-preview-result");
     result.hidden = false;
     result.className = "order-preview-result approved";
-    result.textContent = `DRY RUN 주문 #${order.id}을 저장했습니다. 실제 주문은 전송되지 않았습니다.`;
+    result.textContent = `연습 주문 #${order.id}을 저장했습니다.`;
     approvedOrderPayload = null;
     approvedOrderPreview = null;
     pendingClientOrderId = null;
@@ -970,7 +1034,7 @@ $("#confirm-real-order").addEventListener("click", async () => {
   const status = $("#dry-run-confirm-status");
   button.disabled = true;
   $("#confirm-dry-run-order").disabled = true;
-  status.textContent = "안전 검사를 다시 실행하고 실제 주문을 한 번만 전송하고 있습니다.";
+  status.textContent = "주문 조건을 확인하고 전송하는 중입니다.";
   try {
     const order = await api("/live/orders/real", {
       method: "POST",
@@ -1077,13 +1141,15 @@ async function initialize() {
     $("#order-cash-policy-detail").textContent = `실제 주문은 현금·보유 수량과 1회·종목별·전체 투자 한도, 주문 후 최소 현금 ${Number(risk.settings.min_cash_ratio).toFixed(0)}% 기준을 모두 검사합니다.`;
     const readiness = await api("/live/orders/real/readiness");
     liveTradingReady = readiness.configured && readiness.enabled;
-    $("#order-lock-badge").textContent = liveTradingReady ? "LIVE ENABLED" : "LIVE LOCKED";
+    $("#order-lock-badge").textContent = liveTradingReady ? "주문 가능" : "주문 잠김";
     $("#live-order-notice").textContent = readiness.message;
     activeSymbol = decodeURIComponent(window.location.pathname.split("/").filter(Boolean).at(-1) || "");
     const requestedSection = window.location.hash.slice(1);
     if (["chart", "company", "long-term", "market", "news"].includes(requestedSection)) selectDetailSection(requestedSection);
+    updateChartRangeButtons();
     await loadDetail(activePeriod);
     prefetchNearbyPeriods();
+    window.startDetailStream();
   } catch (error) {
     $("#detail-message").textContent = error.message;
     $("#detail-chart").innerHTML = `<div class="empty"></div>`;

@@ -57,6 +57,55 @@ class TossClientTests(unittest.TestCase):
         self.assertLessEqual(remaining, 2.1)
         self.assertNotIn("ACCOUNT", client._group_rate_limit_until)
 
+    def test_get_rate_limit_retries_after_shared_cooldown(self):
+        from urllib.request import Request
+        client = TossClient(client_id="id", client_secret="secret")
+        client._group_rate_limit_until["MARKET_DATA_CHART"] = 12
+        error = TossApiError("limited", status_code=429)
+        with patch.object(client, "_json_request_once", side_effect=[error, {"ok": True}]) as request, \
+             patch("auto_trader.toss.monotonic", return_value=10), \
+             patch.object(client._request_waiter, "wait") as wait:
+            result = client._json_request(Request("https://x/api/v1/candles"))
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(request.call_count, 2)
+        wait.assert_called_once_with(2)
+
+    def test_order_submission_is_never_retried_on_rate_limit(self):
+        from urllib.request import Request
+        client = TossClient(client_id="id", client_secret="secret")
+        with patch.object(client, "_json_request_once", side_effect=TossApiError("limited", status_code=429)) as request:
+            with self.assertRaises(TossApiError):
+                client._json_request(Request("https://x/api/v1/orders", method="POST"))
+        self.assertEqual(request.call_count, 1)
+
+    def test_get_rate_limit_retries_are_bounded(self):
+        from urllib.request import Request
+        client = TossClient(client_id="id", client_secret="secret")
+        with patch.object(client, "_json_request_once", side_effect=TossApiError("limited", status_code=429)) as request, \
+             patch.object(client._request_waiter, "wait"):
+            with self.assertRaises(TossApiError):
+                client._json_request(Request("https://x/api/v1/candles"))
+        self.assertEqual(request.call_count, 3)
+
+    def test_concurrent_candle_requests_share_one_upstream_call(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Barrier
+        from time import sleep
+        client = TossClient(client_id="id", client_secret="secret")
+        barrier = Barrier(4)
+        rows = [{"timestamp": "2026-10-01T09:00:00+09:00", "openPrice": "100", "highPrice": "110", "lowPrice": "90", "closePrice": "105", "volume": "10"}]
+        def response(*_):
+            sleep(0.03)
+            return {"result": {"candles": rows}}
+        def read(_):
+            barrier.wait(timeout=5)
+            return client._domestic_candles("005930", "1d", 1)
+        with patch.object(client, "_authorized_json_request", side_effect=response) as upstream:
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                results = list(pool.map(read, range(4)))
+        self.assertEqual(upstream.call_count, 1)
+        self.assertTrue(all(result[0].close_price == Decimal(105) for result in results))
+
     def test_requests_are_classified_by_rate_limit_group(self):
         from urllib.request import Request
 
@@ -345,7 +394,7 @@ class TossClientTests(unittest.TestCase):
                 {"symbol": "OTHER", "name": "다른종목", "securityType": "STOCK", "isCommonShare": True},
             ]}),
             FakeResponse({"result": {"rankedAt": "2026-09-24T10:00:00+09:00", "rankings": [
-                {"rank": 7, "symbol": "009150", "price": {"lastPrice": "150000"},
+                {"rank": 7, "symbol": "009150", "price": {"lastPrice": "150000", "basePrice": "150000"},
                  "tradingVolume": "100", "tradingAmount": "15000000"},
                 {"rank": 12, "symbol": "005930", "price": {"lastPrice": "70000"},
                  "tradingVolume": "100", "tradingAmount": "7000000"},
@@ -384,7 +433,7 @@ class TossClientTests(unittest.TestCase):
                 {"symbol": "247540", "name": "에코프로비엠", "securityType": "STOCK", "isCommonShare": True},
             ]}),
             FakeResponse({"result": {"rankedAt": "2026-09-25T10:00:00+09:00", "rankings": [
-                {"rank": 1, "symbol": "247540", "price": {"changeRate": "0.03"}, "tradingAmount": "9000000"},
+                {"rank": 1, "symbol": "247540", "price": {"basePrice": "175000", "changeRate": "0.03"}, "tradingAmount": "9000000"},
             ]}}),
             FakeResponse({"result": [
                 {"symbol": "247540", "lastPrice": "180000", "currency": "KRW"},
@@ -399,7 +448,8 @@ class TossClientTests(unittest.TestCase):
         self.assertEqual(page.total, 1)
         self.assertEqual(page.results[0].symbol, "247540")
         self.assertEqual(page.results[0].market, "KOSDAQ")
-        self.assertEqual(page.results[0].change_rate_percent, 3)
+        self.assertEqual(page.results[0].previous_close, 175000)
+        self.assertAlmostEqual(float(page.results[0].change_rate_percent), 2.857142857)
         self.assertEqual(page.results[0].market_cap, 9000000000000)
         mocked_sleep.assert_called_once()
 
@@ -460,7 +510,7 @@ class TossClientTests(unittest.TestCase):
         )
         request_url = mocked.call_args_list[1].args[0].full_url
         self.assertIn("interval=1m", request_url)
-        self.assertNotIn("count=", request_url)
+        self.assertIn("count=200", request_url)
         self.assertEqual(result["005930"], [Decimal("70950"), Decimal("71050")])
 
     @patch("auto_trader.toss.sleep")
@@ -481,6 +531,8 @@ class TossClientTests(unittest.TestCase):
         )
         second_page_url = mocked.call_args_list[2].args[0].full_url
         self.assertIn("before=2026-09-24T10%3A00%3A00%2B09%3A00", second_page_url)
+        self.assertIn("count=200", second_page_url)
+        self.assertIn("count=200", mocked.call_args_list[1].args[0].full_url)
         self.assertEqual([item.close_price for item in candles], [Decimal("100"), Decimal("101"), Decimal("102")])
         mocked_sleep.assert_called_once_with(0.08)
 

@@ -13,6 +13,7 @@ from urllib.request import Request, urlopen
 from decimal import Decimal
 
 from .settings import settings
+from .chart_candles import CHART_RANGES, chart_candles
 from .models import (LiveBuyingPower, LiveCandidateList, LiveFavoriteStock, LiveHolding,
                      LivePortfolio, LiveStockCandle, LiveStockCandidate, LiveStockDetail, LiveStockSearchPage,
                      LiveStockSearchResult, Stock)
@@ -54,7 +55,7 @@ class TossClient:
         self._group_intervals = {
             "AUTH": 0.21, "ACCOUNT": 1.05, "ASSET": 0.21,
             "STOCK": 0.21, "STOCK_ALL": 1.05, "MARKET_INFO": 0.35,
-            "MARKET_DATA": 0.08, "MARKET_DATA_CHART": 0.06, "RANKING": 0.21,
+            "MARKET_DATA": 0.12, "MARKET_DATA_CHART": 0.12, "RANKING": 0.21,
             "ORDER": 0.11, "ORDER_HISTORY": 0.21, "ORDER_INFO": 0.18,
         }
         self._accounts_cache: list[dict] | None = None
@@ -141,6 +142,21 @@ class TossClient:
             return self._group_locks.setdefault(group, Lock())
 
     def _json_request(self, request: Request) -> dict:
+        # 조회만 제한적으로 재시도한다. 주문 생성/취소 요청은 재전송하지 않는다.
+        group = self._request_group(request)
+        deadline = monotonic() + 20
+        for attempt in range(3):
+            try:
+                return self._json_request_once(request)
+            except TossApiError as exc:
+                if exc.status_code != 429 or request.get_method() != "GET" or attempt == 2:
+                    raise
+                remaining = max(0.1, self._group_rate_limit_until.get(group, 0) - monotonic())
+                if monotonic() + remaining > deadline:
+                    raise
+                self._request_waiter.wait(remaining)
+
+    def _json_request_once(self, request: Request) -> dict:
         group = self._request_group(request)
         with self._group_lock(group):
             remaining = self._group_rate_limit_until.get(group, 0.0) - monotonic()
@@ -162,7 +178,7 @@ class TossClient:
                 try:
                     limit = float(headers.get("X-RateLimit-Limit", "0"))
                     if limit > 0:
-                        self._group_intervals[group] = max(0.01, 1 / limit + 0.02)
+                        self._group_intervals[group] = max(self._group_intervals.get(group, 0.1), 1 / limit + 0.02)
                 except (TypeError, ValueError):
                     pass
                 return payload
@@ -187,7 +203,11 @@ class TossClient:
                         reset_after = float(exc.headers.get("X-RateLimit-Reset", "0"))
                     except (TypeError, ValueError):
                         reset_after = 0
+                    # Reset은 상대 초 또는 Unix 시각으로 전달될 수 있다.
+                    if reset_after > 1_000_000_000:
+                        reset_after = max(0, reset_after - datetime.now(timezone.utc).timestamp())
                     retry_after = max(1.0, retry_after, reset_after) + 0.1
+                    self._group_intervals[group] = min(2.0, self._group_intervals.get(group, 0.1) * 1.5)
                     now = monotonic()
                     self._group_rate_limit_until[group] = max(
                         self._group_rate_limit_until.get(group, 0.0), now + retry_after
@@ -709,6 +729,7 @@ class TossClient:
             current_price = (self._decimal(prices[symbol].get("lastPrice"))
                              if symbol in prices else None)
             shares = self._decimal((details.get(symbol) or {}).get("sharesOutstanding"))
+            previous_close = self._decimal(((ranking or {}).get("price") or {}).get("basePrice"))
             results.append(LiveStockSearchResult(
                 symbol=symbol,
                 name=str(item.get("name", "")),
@@ -717,8 +738,10 @@ class TossClient:
                 is_common_share=bool(item.get("isCommonShare", False)),
                 currency=str((prices.get(symbol) or {}).get("currency", "KRW")),
                 price=current_price,
-                change_rate_percent=(self._percent(((ranking or {}).get("price") or {}).get("changeRate"))
-                                     if ranking else None),
+                previous_close=previous_close,
+                change_rate_percent=(((current_price / previous_close) - 1) * 100
+                                     if current_price is not None and previous_close and previous_close > 0
+                                     else None),
                 trading_amount_rank=(int(ranking.get("rank")) if ranking else None),
                 trading_amount=(self._decimal(ranking.get("tradingAmount")) if ranking else None),
                 market_cap=(current_price * shares if current_price is not None and shares else None),
@@ -789,7 +812,7 @@ class TossClient:
             seen_cursors: set[str] = set()
             max_pages = max(1, (count + 199) // 200)
             for page_index in range(max_pages):
-                query_values = {"symbol": normalized, "interval": interval}
+                query_values = {"symbol": normalized, "interval": interval, "count": 200}
                 if before:
                     query_values["before"] = before
                 query = urlencode(query_values)
@@ -841,7 +864,9 @@ class TossClient:
                 lines[symbol] = []
         return lines
 
-    def domestic_stock_detail(self, symbol: str, period: str = "1D") -> LiveStockDetail:
+    def domestic_stock_detail(self, symbol: str, period: str = "1D", *, refresh: bool = False, candle_interval: str | None = None) -> LiveStockDetail:
+        if candle_interval is not None and period not in CHART_RANGES.get(candle_interval, {}):
+            raise TossApiError("선택한 봉 단위와 조회 기간을 확인하세요.", status_code=422)
         stock = self.domestic_stock(symbol)
         if not stock:
             raise TossApiError("국내 종목을 찾지 못했습니다.", status_code=404,
@@ -855,25 +880,28 @@ class TossClient:
         price = price_rows[0] if price_rows else {}
         stock_info = self._domestic_stock_info(normalized)
         interval, candle_count = self._chart_period(period, detailed=True)
-        candles = self._domestic_candles(normalized, interval, candle_count)
+        if candle_interval is not None:
+            if period not in CHART_RANGES.get(candle_interval, {}):
+                raise TossApiError("선택한 봉 단위와 조회 기간을 확인하세요.", status_code=422)
+            interval = "1m" if candle_interval in ("1m", "1h") else "1d"
+            candle_count = CHART_RANGES[candle_interval][period]
+        candles = self._domestic_candles(normalized, interval, candle_count, cache_seconds=30 if refresh and interval == "1m" else None)
         current_price = self._decimal(price.get("lastPrice")) if price.get("lastPrice") is not None else None
         _, rankings = self._domestic_trading_amount_rankings()
         ranking = next((item for item in rankings if str(item.get("symbol", "")) == normalized), None)
-        ranking_change_rate = ((ranking or {}).get("price") or {}).get("changeRate")
-        change_rate = (self._percent(ranking_change_rate)
-                       if ranking_change_rate is not None else None)
-        if change_rate is None:
-            daily_candles = (candles if interval == "1d"
-                             else self._domestic_candles(normalized, "1d", 2))
-            if len(daily_candles) >= 2 and daily_candles[-2].close_price:
-                latest = current_price if current_price is not None else daily_candles[-1].close_price
-                change_rate = (latest / daily_candles[-2].close_price - Decimal("1")) * Decimal("100")
+        daily_candles = (candles if interval == "1d" else self._domestic_candles(normalized, "1d", 2))
+        previous_close = daily_candles[-2].close_price if len(daily_candles) >= 2 else None
+        if candle_interval is not None:
+            candles = chart_candles(candles, candle_interval, period)
+        change_rate = ((current_price / previous_close - Decimal("1")) * 100
+                       if current_price is not None and previous_close and previous_close > 0 else None)
         shares_outstanding = (self._decimal(stock_info.get("sharesOutstanding"))
                               if stock_info.get("sharesOutstanding") is not None else None)
         korean_market_detail = stock_info.get("koreanMarketDetail")
         if not isinstance(korean_market_detail, dict):
             korean_market_detail = {}
         return LiveStockDetail(
+            candle_interval=candle_interval,
             symbol=normalized,
             name=str(stock.get("name", "")),
             market=str(stock.get("market", "")),
@@ -881,7 +909,7 @@ class TossClient:
             is_common_share=bool(stock.get("isCommonShare", False)),
             currency=str(price.get("currency", "KRW")),
             price=current_price,
-            change_rate_percent=change_rate,
+            change_rate_percent=change_rate, previous_close=previous_close,
             trading_amount_rank=(int(ranking.get("rank")) if ranking else None),
             market_cap=(current_price * shares_outstanding
                         if current_price is not None and shares_outstanding else None),

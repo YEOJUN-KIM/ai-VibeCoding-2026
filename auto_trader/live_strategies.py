@@ -43,7 +43,7 @@ def save_strategy(user_id: int, payload: LiveStrategyWrite, stock_name: str,
         payload.execution_mode, payload.short_period, payload.long_period,
         payload.order_quantity, payload.take_profit_rate, payload.stop_loss_rate,
         payload.max_holding_days, payload.trading_start, payload.trading_end,
-        payload.daily_order_limit, payload.cooldown_minutes,
+        payload.daily_order_limit, payload.cooldown_minutes, payload.sizing_mode, payload.order_amount,
     )
     try:
         with connect() as conn:
@@ -52,8 +52,8 @@ def save_strategy(user_id: int, payload: LiveStrategyWrite, stock_name: str,
                 """INSERT INTO live_strategies(
                        user_id,name,symbol,stock_name,enabled,execution_mode,short_period,long_period,
                        order_quantity,take_profit_rate,stop_loss_rate,max_holding_days,trading_start,
-                       trading_end,daily_order_limit,cooldown_minutes)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
+                       trading_end,daily_order_limit,cooldown_minutes,sizing_mode,order_amount)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
                 (user_id, *values),
                 ).fetchone()
             else:
@@ -61,7 +61,7 @@ def save_strategy(user_id: int, payload: LiveStrategyWrite, stock_name: str,
                 """UPDATE live_strategies SET name=%s,symbol=%s,stock_name=%s,enabled=%s,
                        execution_mode=%s,short_period=%s,long_period=%s,order_quantity=%s,
                        take_profit_rate=%s,stop_loss_rate=%s,max_holding_days=%s,trading_start=%s,
-                       trading_end=%s,daily_order_limit=%s,cooldown_minutes=%s,updated_at=now()
+                       trading_end=%s,daily_order_limit=%s,cooldown_minutes=%s,sizing_mode=%s,order_amount=%s,updated_at=now()
                    WHERE id=%s AND user_id=%s RETURNING *""",
                 (*values, strategy_id, user_id),
                 ).fetchone()

@@ -96,6 +96,7 @@ def prepare_real_order(
         "checks": [check.model_dump(mode="json") for check in preview.checks],
         "message": preview.message,
         "confirmation": payload.confirmation,
+        "accept_financial_warnings": payload.accept_financial_warnings,
     }
     with connect() as conn:
         broker_account = conn.execute(

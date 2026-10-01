@@ -13,14 +13,14 @@ function renderReadiness(data, error = null) {
   readiness.className = `login-readiness ${servicesReady ? "ready" : "waiting"}`;
   if (servicesReady) {
     readinessTitle.textContent = "서비스 연결 완료";
-    readinessDetail.textContent = "PostgreSQL과 토스 API가 준비되었습니다.";
+    readinessDetail.textContent = "로그인할 수 있습니다.";
     readinessRetry.hidden = true;
     button.disabled = false;
     button.textContent = "로그인";
     return;
   }
-  const databaseMessage = data?.database?.message || "PostgreSQL 상태를 확인하지 못했습니다.";
-  const tossMessage = data?.toss_api?.message || error?.message || "토스 API 상태를 확인하지 못했습니다.";
+  const databaseMessage = data?.database?.message || "저장 서비스에 연결하지 못했습니다.";
+  const tossMessage = data?.toss_api?.message || error?.message || "증권사 연결 상태를 확인하지 못했습니다.";
   readinessTitle.textContent = "서비스 연결 대기 중";
   readinessDetail.textContent = `${databaseMessage} · ${tossMessage}`;
   readinessRetry.hidden = false;
@@ -47,7 +47,7 @@ readinessRetry.addEventListener("click", checkReadiness);
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!servicesReady) {
-    message.textContent = "PostgreSQL과 토스 API 연결이 완료될 때까지 잠시 기다려 주세요.";
+    message.textContent = "서비스에 연결될 때까지 잠시 기다려 주세요.";
     await checkReadiness();
     return;
   }

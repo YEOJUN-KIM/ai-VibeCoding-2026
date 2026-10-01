@@ -222,3 +222,7 @@ backups/
 
 # Persistent local paper execution audit
 .paper-history/
+
+# Local server output
+.runtime-logs/
+.backups/

@@ -50,14 +50,52 @@ class PaperMemoryTests(unittest.TestCase):
             min_cash_ratio=Decimal("0"), daily_loss_limit=Decimal("1000000"),
             daily_order_limit=100, profit_target=Decimal("1000000")))
 
-    def test_new_broker_starts_with_fresh_cash(self):
+    def test_new_broker_restores_assets_and_request_ids(self):
         self.buy()
         self.assertEqual(self.broker.account().cash, Decimal("30000"))
         restarted = paper.PaperBroker(self.market, Decimal("100000"))
         restarted.initialize()
-        self.assertEqual(restarted.account().cash, Decimal("100000"))
-        self.assertEqual(restarted.orders(), [])
-        self.assertEqual(restarted.account().positions, [])
+        self.assertEqual(restarted.account().cash, Decimal("30000"))
+        self.assertEqual(len(restarted.orders()), 1)
+        self.assertEqual(restarted.holding_quantity("005930"), 1)
+        self.assertEqual(restarted.submit(OrderRequest(symbol="005930", side="BUY", quantity=1,
+                                                       request_id="first")).id, 1)
+        self.assertEqual(restarted.cash_balance(), Decimal("30000"))
+
+    def test_storage_failure_rolls_back_trade(self):
+        with patch.object(self.broker, "_save_state", side_effect=RuntimeError("database down")):
+            with self.assertRaises(RuntimeError):
+                self.buy()
+        self.assertEqual(self.broker.cash_balance(), Decimal("100000"))
+        self.assertEqual(self.broker.orders(), [])
+        self.assertEqual(self.broker.holding_quantity("005930"), 0)
+        self.assertEqual(self.buy().id, 1)
+
+    def test_restore_costs_seed_and_missing_market_symbol(self):
+        self.broker.load_snapshot(cash=Decimal("200000"), positions=[],
+                                  metadata={"snapshot_at": datetime.now().isoformat(), "source_label": "test"})
+        self.buy()
+        market = MarketSimulator(symbols=("000660",))
+        restarted = paper.PaperBroker(market)
+        restarted.initialize()
+        self.assertEqual(restarted.position_average_price("005930"), Decimal("70000"))
+        self.assertEqual(restarted.snapshot_metadata["source_label"], "test")
+        restarted.reset_practice()
+        again = paper.PaperBroker(market)
+        again.initialize()
+        self.assertEqual(again.cash_balance(), Decimal("200000"))
+        self.assertEqual(again.account().positions, [])
+
+    def test_accounts_restore_separately(self):
+        self.buy()
+        other = paper.PaperBroker(self.market, Decimal("10000000"), "paper-experiment")
+        other.initialize()
+        other.submit(OrderRequest(symbol="000660", side="BUY", quantity=2))
+        restarted = paper.PaperBroker(self.market, account_name="paper-experiment")
+        restarted.initialize()
+        self.assertEqual(restarted.holding_quantity("000660"), 2)
+        self.assertEqual(restarted.holding_quantity("005930"), 0)
+        self.assertEqual(self.broker.cash_balance(), Decimal("30000"))
 
     def test_duplicate_request_and_conflict(self):
         first = self.buy()
@@ -90,6 +128,12 @@ class PaperMemoryTests(unittest.TestCase):
         self.assertEqual(account.total_taxes, Decimal("160"))
         self.assertEqual(account.realized_profit, Decimal("9690"))
         self.assertEqual(account.unrealized_profit, Decimal("9930"))
+        restored = paper.PaperBroker(self.market, account_name="cost-test")
+        restored.initialize()
+        self.assertEqual(restored.account().total_fees, Decimal("220"))
+        self.assertEqual(restored.account().total_taxes, Decimal("160"))
+        self.assertEqual(restored.position_average_price("005930"), Decimal("70070"))
+        self.assertEqual(restored.cash_balance(), broker.cash_balance())
 
     def test_fee_can_reject_buy(self):
         broker = paper.PaperBroker(self.market, Decimal("70000"), "fee-reject", fee_rate=Decimal("0.001"))
@@ -197,6 +241,7 @@ class PaperMemoryTests(unittest.TestCase):
         )
 
     def test_strategy_return_excludes_stocks_outside_selected_targets(self):
+        self.broker.begin_strategy([], scope="CURRENT")
         self.broker.load_snapshot(cash=Decimal("100000"), positions=[
             {"symbol": "005930", "quantity": 1, "average_price": Decimal("60000"),
              "current_price": Decimal("70000")},
@@ -215,6 +260,7 @@ class PaperMemoryTests(unittest.TestCase):
         self.assertEqual(status.strategy_return_percent, Decimal("1000") / Decimal("70000") * 100)
 
     def test_strategy_applies_take_profit_and_stop_loss(self):
+        self.broker.begin_strategy([], scope="CURRENT")
         now = [datetime(2026, 9, 30, 10, 0, tzinfo=ZoneInfo("Asia/Seoul"))]
         self.broker.load_snapshot(cash=Decimal("100000"), positions=[{
             "symbol": "005930", "quantity": 1, "average_price": Decimal("70000"),
@@ -248,6 +294,7 @@ class PaperMemoryTests(unittest.TestCase):
         self.assertIn("손절률", engine.status().recent_signals[0].reason)
 
     def test_strategy_applies_max_holding_days(self):
+        self.broker.begin_strategy([], scope="CURRENT")
         now = [datetime(2026, 9, 30, 10, 0, tzinfo=ZoneInfo("Asia/Seoul"))]
         self.broker.load_snapshot(cash=Decimal("100000"), positions=[{
             "symbol": "005930", "quantity": 1, "average_price": Decimal("70000"),

@@ -16,7 +16,7 @@ PRESETS = {
     },
     RiskPreset.DEFAULT: {
         "max_order_amount": Decimal("1000000"), "max_symbol_amount": Decimal("2000000"),
-        "max_total_investment": Decimal("7000000"), "min_cash_ratio": Decimal("0"),
+        "max_total_investment": Decimal("7000000"), "min_cash_ratio": Decimal("30"),
         "daily_loss_limit": Decimal("500000"), "daily_order_limit": 0,
         "profit_target": Decimal("1000000"),
     },

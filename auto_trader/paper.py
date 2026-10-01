@@ -1,5 +1,9 @@
-"""서버 프로세스가 살아 있는 동안만 유지되는 모의 계좌."""
+"""DB에 자산과 주문 상태를 저장하는 모의 계좌."""
 
+from copy import deepcopy
+from functools import wraps
+import logging
+from psycopg.types.json import Jsonb
 from datetime import datetime
 from decimal import Decimal, ROUND_DOWN
 from pathlib import Path
@@ -7,8 +11,39 @@ from threading import RLock
 from uuid import uuid4
 
 from .database import connect, initialize
-from .models import Account, Order, OrderRequest, OrderSide, OrderStatus, Position
+from .models import Account, Order, OrderRequest, OrderSide, OrderStatus, Position, Stock
 from .simulator import MarketSimulator, SAMPLE_STOCKS
+
+
+def persisted(method):
+    """Commit account mutations before reporting success; roll back on storage failure."""
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        with self._lock:
+            before = {key: deepcopy(value) for key, value in self.__dict__.items()
+                      if key.startswith('_') and key not in {'_lock', '_pending_journal'}}
+            initial_cash, metadata, run_id = self.initial_cash, deepcopy(self.snapshot_metadata), self.run_id
+            self._pending_journal = []
+            try:
+                result = method(self, *args, **kwargs)
+                self._save_state()
+            except Exception:
+                self.__dict__.update(before)
+                self.initial_cash, self.snapshot_metadata = initial_cash, metadata
+                self.run_id = run_id
+                raise
+            else:
+                pending = self._pending_journal
+                self._pending_journal = None
+                for payload in pending:
+                    try:
+                        self._journal(payload)
+                    except OSError:
+                        logging.getLogger(__name__).exception('PAPER journal append failed; account state is saved in DB')
+                return result
+            finally:
+                self._pending_journal = None
+    return wrapped
 
 
 class PaperBroker:
@@ -35,6 +70,12 @@ class PaperBroker:
         self.account_name = account_name
         self.account_id = None
         self.risk_manager = None
+        self.snapshot_metadata = {}
+        self._management_scope = "AUTO"
+        self._strategy_context = {}
+        self._management_symbols = []
+        self._management_external_flow = Decimal(0)
+        self._pending_journal = None
         self._lock = RLock()
         self._seed_cash = self.initial_cash
         self._seed_positions: dict[str, dict[str, Decimal | int]] = {}
@@ -50,53 +91,163 @@ class PaperBroker:
             self._total_fees = Decimal(0)
             self._total_taxes = Decimal(0)
             self._strategy_positions = {}
+            self._auto_lots = []
+            self._managed_lots = []
             self.run_id = str(uuid4())
 
     def initialize(self):
-        """영구 설정의 계좌 키만 보장하고 PAPER 자산은 항상 새로 시작한다."""
+        """저장된 자산과 주문 상태를 복구한다."""
         initialize()
         with connect() as conn:
             for stock in SAMPLE_STOCKS:
                 conn.execute("INSERT INTO stocks VALUES (%s,%s,%s) ON CONFLICT DO NOTHING",
                              (stock.symbol, stock.name, stock.market))
             conn.execute("""INSERT INTO accounts(name,mode,initial_cash,cash)
-                VALUES (%s,'PAPER',%s,%s) ON CONFLICT(name) DO UPDATE
-                SET initial_cash=EXCLUDED.initial_cash,cash=EXCLUDED.cash""",
+                VALUES (%s,'PAPER',%s,%s) ON CONFLICT(name) DO NOTHING""",
                 (self.account_name, self.initial_cash, self.initial_cash))
             self.account_id = conn.execute("SELECT id FROM accounts WHERE name=%s",
                                            (self.account_name,)).fetchone()["id"]
-        self._reset_memory()
+            saved = conn.execute("SELECT state FROM paper_account_state WHERE account_id=%s",
+                                 (self.account_id,)).fetchone()
+        if saved:
+            self._restore_state(saved['state'])
+        else:
+            self._save_state()
+
+    def _state(self):
+        def positions(rows):
+            return {symbol: {'quantity': int(row['quantity']), 'average_price': str(row['average_price'])}
+                    for symbol, row in rows.items()}
+        symbols = set(self._positions) | set(self._seed_positions)
+        stocks = {stock.symbol: stock for stock in self.market.stocks()}
+        return dict(version=1, cash=str(self._cash), initial_cash=str(self.initial_cash),
+                    seed_cash=str(self._seed_cash), positions=positions(self._positions),
+                    seed_positions=positions(self._seed_positions),
+                    orders=[order.model_dump(mode='json') for order in self._orders],
+                    requests={key: order.id for key, order in self._requests.items()},
+                    next_order_id=self._next_order_id, fees=str(self._total_fees), taxes=str(self._total_taxes),
+                    metadata=self.snapshot_metadata, management_scope=self._management_scope,
+                    auto_lots=self._auto_lots,
+                    stocks={symbol: {'stock': stocks[symbol].model_dump(mode='json'),
+                                     'price': str(self.market.quote(symbol).price)} for symbol in symbols})
+
+    def _save_state(self):
+        if self.account_id is None:
+            return
+        with connect() as conn:
+            conn.execute("""INSERT INTO paper_account_state(account_id,state) VALUES (%s,%s)
+                ON CONFLICT(account_id) DO UPDATE SET state=EXCLUDED.state,updated_at=NOW()""",
+                         (self.account_id, Jsonb(self._state())))
+            conn.execute('UPDATE accounts SET cash=%s,initial_cash=%s WHERE id=%s',
+                         (self._cash, self.initial_cash, self.account_id))
+
+    def _restore_state(self, state):
+        if state.get('version') != 1:
+            raise ValueError('지원하지 않는 모의계좌 저장 형식입니다.')
+        for symbol, item in state['stocks'].items():
+            if not self.market.has_symbol(symbol):
+                self.market.upsert_stock(Stock.model_validate(item['stock']), Decimal(item['price']))
+        def positions(rows):
+            return {symbol: {'quantity': int(row['quantity']), 'average_price': Decimal(row['average_price'])}
+                    for symbol, row in rows.items()}
+        self._cash = Decimal(state['cash'])
+        self.initial_cash = Decimal(state['initial_cash'])
+        self._seed_cash = Decimal(state['seed_cash'])
+        self._positions = positions(state['positions'])
+        self._seed_positions = positions(state['seed_positions'])
+        self._orders = [Order.model_validate(row) for row in state['orders']]
+        by_id = {order.id: order for order in self._orders}
+        self._requests = {key: by_id[value] for key, value in state['requests'].items()}
+        self._next_order_id = state['next_order_id']
+        self._total_fees, self._total_taxes = Decimal(state['fees']), Decimal(state['taxes'])
+        self.snapshot_metadata = state.get('metadata', {})
+        # Execution remains stopped; ownership and exit rules survive restart.
+        self._management_scope = state.get("management_scope", "AUTO")
+        self._auto_lots = state.get("auto_lots", [])
+        self._managed_lots = []
+        self._strategy_positions = {}
 
     def set_risk_manager(self, risk_manager):
         self.risk_manager = risk_manager
         risk_manager.initialize(self.account_id, self)
 
-    def begin_strategy(self, symbols: list[str]) -> Decimal:
-        """선택 시점의 보유분을 평가액으로 인수하고 이후 수동 거래와 분리한다."""
+    @property
+    def management_scope(self):
+        return self._management_scope
+
+    def managed_lots(self):
         with self._lock:
-            run_id = str(uuid4())
-            positions = {
-                symbol: {"quantity": self.holding_quantity(symbol),
-                         "average_price": self.market.quote(symbol).price}
-                for symbol in symbols if self.holding_quantity(symbol)
-            }
-            baseline = sum((p["quantity"] * p["average_price"]
-                            for p in positions.values()), Decimal(0))
-            self._journal({"event": "STRATEGY_BASELINE", "run_id": run_id,
-                           "created_at": datetime.now().astimezone().isoformat(),
-                           "positions": {s: {"quantity": p["quantity"], "average_price": str(p["average_price"])}
-                                         for s, p in positions.items()},
-                           "baseline": str(baseline)})
-            self.run_id = run_id
-            self._strategy_positions = positions
-            return baseline
+            return deepcopy(self._managed_lots)
+
+    def holding_management(self):
+        """Return owned quantities, including allocations outside the active scope."""
+        with self._lock:
+            managed = {lot['id']: lot for lot in self._managed_lots}
+            rows = []
+            for lot in self._auto_lots:
+                rows.append({**deepcopy(lot), 'managed': lot['id'] in managed})
+            for lot in self._managed_lots:
+                if lot['origin'] == 'MANUAL':
+                    rows.append({**deepcopy(lot), 'managed': True})
+            for symbol, holding in self._positions.items():
+                assigned = sum(row['quantity'] for row in rows if row['symbol'] == symbol)
+                if holding['quantity'] > assigned:
+                    rows.append(dict(id=f'unassigned:{symbol}', symbol=symbol,
+                                     quantity=holding['quantity'] - assigned, origin='MANUAL',
+                                     managed=False, context={}, opened_at=None,
+                                     average_price=str(holding['average_price'])))
+            return rows
+
+    def _sync_allocations(self):
+        self._strategy_positions = {}
+        for lot in self._managed_lots:
+            if not lot['quantity']:
+                continue
+            row = self._strategy_positions.setdefault(lot['symbol'], {'quantity': 0, 'average_price': Decimal(0)})
+            quantity = row['quantity'] + lot['quantity']
+            row['average_price'] = (row['average_price'] * row['quantity'] + Decimal(lot['average_price']) * lot['quantity']) / quantity
+            row['quantity'] = quantity
+
+    @persisted
+    def begin_strategy(self, symbols: list[str], *, context=None, scope=None) -> Decimal:
+        if scope is not None:
+            if scope not in {'CURRENT', 'AUTO', 'ALL'}:
+                raise ValueError('관리 범위를 확인하세요.')
+            self._management_scope = scope
+        self._strategy_context = deepcopy(context or {})
+        self._management_symbols = list(symbols)
+        self._management_external_flow = Decimal(0)
+        self._managed_lots = []
+        for lot in self._auto_lots:
+            if self._management_scope != 'CURRENT' or lot['symbol'] in symbols:
+                self._managed_lots.append(lot)
+        if self._management_scope != 'AUTO':
+            for symbol, holding in self._positions.items():
+                if self._management_scope == 'CURRENT' and symbol not in symbols:
+                    continue
+                auto_quantity = sum(lot['quantity'] for lot in self._auto_lots if lot['symbol'] == symbol)
+                quantity = holding['quantity'] - auto_quantity
+                if quantity:
+                    self._managed_lots.append(dict(id=str(uuid4()), symbol=symbol, quantity=quantity,
+                        average_price=str(self.market.quote(symbol).price), origin='MANUAL',
+                        opened_at=self._strategy_context.get('adopted_at', datetime.now().astimezone().isoformat()), context=deepcopy(self._strategy_context)))
+        self._sync_allocations()
+        baseline = self.strategy_value()
+        self.run_id = str(uuid4())
+        self._journal({'event': 'STRATEGY_BASELINE', 'run_id': self.run_id,
+                       'management_scope': self._management_scope, 'baseline': str(baseline),
+                       'created_at': datetime.now().astimezone().isoformat()})
+        return baseline
 
     def _journal(self, payload: dict) -> None:
+        if self._pending_journal is not None:
+            self._pending_journal.append(payload)
+            return
         if self.journal_path is not None:
             import json
             self.journal_path.parent.mkdir(parents=True, exist_ok=True)
             with self._lock, self.journal_path.open("a", encoding="utf-8") as stream:
-                stream.write(json.dumps(payload, ensure_ascii=False) + "\n")
+                stream.write(json.dumps({"account_name": self.account_name, **payload}, ensure_ascii=False) + "\n")
 
     def strategy_quantity(self, symbol: str) -> int:
         with self._lock:
@@ -116,7 +267,8 @@ class PaperBroker:
         return amount - (amount * self.fee_rate).quantize(Decimal("1"), rounding=ROUND_DOWN) - (
             amount * self.sell_tax_rate).quantize(Decimal("1"), rounding=ROUND_DOWN)
 
-    def submit(self, request: OrderRequest, *, signal_id=None, source="MANUAL", reason="") -> Order:
+    @persisted
+    def submit(self, request: OrderRequest, *, signal_id=None, source="MANUAL", reason="", lot_id=None, acquired_at=None) -> Order:
         request_id = request.request_id or str(uuid4())
         with self._lock:
             prior = self._requests.get(request_id)
@@ -149,7 +301,10 @@ class PaperBroker:
                     self.strategy_quantity(request.symbol) if source == "STRATEGY"
                     else quantity - self.strategy_quantity(request.symbol)):
                 status, message = OrderStatus.REJECTED, "전략 관리 보유분과 수동 보유분은 분리해서 매도합니다."
-            strategy_average = self.strategy_average(request.symbol) or Decimal(0)
+            selected_lot = next((lot for lot in self._managed_lots if lot['id'] == lot_id and lot['symbol'] == request.symbol), None) if lot_id else None
+            if lot_id and (selected_lot is None or request.quantity > selected_lot['quantity']):
+                status, message = OrderStatus.REJECTED, '관리 보유분 수량을 확인하세요.'
+            strategy_average = Decimal(selected_lot['average_price']) if selected_lot else self.strategy_average(request.symbol) or Decimal(0)
             realized = (amount - fee - tax - (strategy_average if source == "STRATEGY" else average) * request.quantity
                         if request.side == OrderSide.SELL and status == OrderStatus.FILLED else None)
             order = Order(id=self._next_order_id, symbol=request.symbol, side=request.side,
@@ -175,17 +330,40 @@ class PaperBroker:
                     self._positions.pop(request.symbol, None)
                 self._total_fees += fee
                 self._total_taxes += tax
-                if source == "STRATEGY":
-                    strategy_quantity = self.strategy_quantity(request.symbol)
-                    strategy_remaining = strategy_quantity + request.quantity if buying else strategy_quantity - request.quantity
-                    if strategy_remaining:
-                        self._strategy_positions[request.symbol] = {
-                            "quantity": strategy_remaining,
-                            "average_price": ((strategy_average * strategy_quantity + amount + fee) / strategy_remaining
-                                              if buying else strategy_average),
-                        }
+                if source == 'STRATEGY' and buying:
+                    lot = dict(id=str(uuid4()), symbol=request.symbol, quantity=request.quantity,
+                               average_price=str((amount + fee) / request.quantity), origin='AUTO',
+                               opened_at=(acquired_at or order.created_at).isoformat(), context=deepcopy(self._strategy_context))
+                    self._auto_lots.append(lot)
+                    self._managed_lots.append(lot)
+                elif buying and source == 'MANUAL' and self._strategy_context and (
+                        self._management_scope == 'ALL' or self._management_scope == 'CURRENT' and request.symbol in self._management_symbols):
+                    self._management_external_flow += amount + fee
+                    self._managed_lots.append(dict(id=str(uuid4()), symbol=request.symbol, quantity=request.quantity,
+                        average_price=str((amount + fee) / request.quantity), origin='MANUAL',
+                        opened_at=order.created_at.isoformat(), context=deepcopy(self._strategy_context)))
+                elif not buying:
+                    remaining_sale = request.quantity
+                    if source == 'STRATEGY':
+                        candidates = [selected_lot] if selected_lot else [lot for lot in self._managed_lots if lot['symbol'] == request.symbol]
                     else:
-                        self._strategy_positions.pop(request.symbol, None)
+                        managed_ids = {lot['id'] for lot in self._managed_lots}
+                        unmanaged = [lot for lot in self._auto_lots if lot['symbol'] == request.symbol and lot['id'] not in managed_ids]
+                        manual_quantity = quantity - sum(lot['quantity'] for lot in self._auto_lots if lot['symbol'] == request.symbol)
+                        remaining_sale = max(0, remaining_sale - manual_quantity)
+                        candidates = unmanaged
+                    for lot in candidates:
+                        sold = min(remaining_sale, lot['quantity'])
+                        lot['quantity'] -= sold
+                        for owned in self._auto_lots:
+                            if owned['id'] == lot['id']:
+                                owned['quantity'] = lot['quantity']
+                        remaining_sale -= sold
+                        if not remaining_sale:
+                            break
+                    self._auto_lots = [lot for lot in self._auto_lots if lot['quantity']]
+                    self._managed_lots = [lot for lot in self._managed_lots if lot['quantity']]
+                self._sync_allocations()
             return order
 
     def orders(self):
@@ -230,13 +408,15 @@ class PaperBroker:
                            total_fees=self._total_fees, total_taxes=self._total_taxes,
                            fee_rate=self.fee_rate, sell_tax_rate=self.sell_tax_rate)
 
+    @persisted
     def reset_practice(self):
         self._reset_memory()
         if self.risk_manager:
             self.risk_manager.reset_daily_baseline()
         return self.account()
 
-    def load_snapshot(self, *, cash: Decimal, positions: list[dict]) -> Account:
+    @persisted
+    def load_snapshot(self, *, cash: Decimal, positions: list[dict], metadata: dict | None = None) -> Account:
         """실제 계좌 값을 복사해 이후 실제 계좌와 분리된 PAPER 기준선을 만든다."""
         if cash < 0:
             raise ValueError("모의계좌 현금은 0원 이상이어야 합니다.")
@@ -253,6 +433,7 @@ class PaperBroker:
             seeded[symbol] = {"quantity": quantity, "average_price": current}
             market_value += current * quantity
         with self._lock:
+            self.snapshot_metadata = metadata or {}
             self._seed_cash = Decimal(cash)
             self._seed_positions = seeded
             self.initial_cash = self._seed_cash + market_value

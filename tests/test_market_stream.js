@@ -1,0 +1,28 @@
+const fs=require('fs'), vm=require('vm'), assert=require('node:assert/strict');
+const flashes=[];
+const status={textContent:''}, cells=new Map();
+const row=()=>({querySelector:s=>{if(!cells.has(s))cells.set(s,{textContent:'',className:'',animate:frames=>flashes.push(frames)});return cells.get(s)}});
+let source; class ES {constructor(url){this.url=url;source=this} close(){this.closed=true}}
+const scope={window:{},Intl,Map,Number,Date,CSS:{escape:s=>s},EventSource:ES,compactWon:n=>String(n),document:{hidden:false,querySelector:s=>s==='#stock-stream-status'?status:row()}};
+vm.createContext(scope);
+const code=fs.readFileSync('auto_trader/static/stocks.js','utf8').split('const escapeHtml')[0];
+vm.runInContext(code+"latestPrices.set('005930',100);marketItems.set('005930',{price:100,previous_close:100,market_cap:1000});openMarketStream();",scope);
+assert.match(source.url,/symbols=005930/);
+const tick=(price,timestamp,symbol='005930')=>({type:'message',topic:'trade:kr:'+symbol,data:{price,timestamp}});
+const send=frames=>source.onmessage({data:JSON.stringify({type:'batch',frames})});
+send([tick(105,'2026-10-01T05:10:20Z')]);
+assert.equal(cells.get('[data-quote-change]').textContent,'+₩5 (+5.00%)');
+assert.equal(cells.get('[data-quote-cap]').textContent,'1050');
+assert.equal(flashes.length,2);
+assert.match(flashes[0][0].backgroundColor,/255,113,107/);
+send([tick(105,'2026-10-01T05:10:21Z')]);assert.equal(flashes.length,2);
+send([tick(90,'2026-10-01T05:09:00Z'),tick(200,'2026-10-01T05:11:00Z','069500')]);
+assert.equal(cells.get('[data-quote-price]').textContent,'₩105');
+send([tick(95,'2026-10-01T05:11:00Z')]);
+assert.equal(cells.get('[data-quote-change]').textContent,'−₩5 (-5.00%)');
+assert.equal(cells.get('[data-quote-change]').className,'negative');
+assert.match(flashes.at(-1)[0].backgroundColor,/103,160,255/);
+const old=source;vm.runInContext('openMarketStream()',scope);assert.equal(old.closed,true);
+old.onmessage({data:JSON.stringify({type:'batch',frames:[tick(1,'2026-10-01T05:12:00Z')]})});
+assert.equal(cells.get('[data-quote-price]').textContent,'₩95');
+console.log('Market batch ticks, prior close, stale/other-symbol isolation and connection replacement passed');

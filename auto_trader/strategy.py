@@ -18,6 +18,7 @@ from .models import (
 from .paper import PaperBroker
 from .simulator import MarketSimulator
 from .paper_feed import PaperPriceFeed
+from .toss import TossApiError
 
 
 KST = ZoneInfo("Asia/Seoul")
@@ -48,6 +49,8 @@ class MovingAverageEngine:
         self.short_period = short_period
         self.long_period = long_period
         self.order_quantity = order_quantity
+        self.sizing_mode = "QUANTITY"
+        self.order_amount = Decimal("100000")
         self.take_profit_rate = Decimal(take_profit_rate)
         self.stop_loss_rate = Decimal(stop_loss_rate)
         self.max_holding_days = max_holding_days
@@ -80,6 +83,8 @@ class MovingAverageEngine:
         self._snapshots: dict[str, StrategySnapshot] = {}
         self._signals: list[SignalEvent] = []
         self.target_symbols: list[str] = []
+        self.strategy_id = None
+        self.strategy_name = None
         self._position_opened_at: dict[str, datetime] = {}
         self._last_order_at: dict[str, datetime] = {}
         self._strategy_baseline_value = Decimal("0")
@@ -149,11 +154,16 @@ class MovingAverageEngine:
             self.data_message = "운영 시간 외 대기 · 실제 시세 기반 모의매매"
             return
         now = self._clock()
-        symbols = self.target_symbols or [stock.symbol for stock in self.market.stocks()]
+        symbols = list(dict.fromkeys((self.target_symbols or [stock.symbol for stock in self.market.stocks()]) + [lot["symbol"] for lot in self.broker.managed_lots()]))
         valuation_symbols = [p.symbol for p in self.broker.account().positions]
         try:
             prices, candles = await asyncio.to_thread(
-                self.price_feed.read, symbols, valuation_symbols, self.long_period, now)
+                self.price_feed.read, symbols, valuation_symbols, max([self.long_period] + [int(lot["context"].get("long_period", self.long_period)) + 1 for lot in self.broker.managed_lots()]), now)
+        except TossApiError as exc:
+            self.data_message = ("API 요청 한도 대기: 다음 시세 조회에서 자동으로 다시 시도합니다."
+                                 if exc.status_code == 429 else "시세 오류·지연 또는 휴장: 신규 판단과 체결을 대기합니다.")
+            logging.getLogger(__name__).warning("Paper market data unavailable: %s", exc)
+            return
         except Exception:
             self.data_message = "시세 오류·지연 또는 휴장: 신규 판단과 체결을 대기합니다."
             logging.getLogger(__name__).warning("Paper market data unavailable", exc_info=True)
@@ -168,15 +178,31 @@ class MovingAverageEngine:
                 self.market.upsert_stock(stock, price)
         self.last_data_at = self._clock()
         self.data_message = "실제 현재가 · 완료된 1분봉 · 모의 체결"
+        unavailable = getattr(self.price_feed, "unavailable", {})
+        if not isinstance(unavailable, dict):
+            unavailable = {}
+        if unavailable:
+            stocks = {stock.symbol: stock.name for stock in self.market.stocks()}
+            reasons = " / ".join(f"{stocks.get(symbol, symbol)}: {reason}" for symbol, reason in unavailable.items())
+            self.data_message = f"{len(candles)}/{len(symbols)}종목 판단 가능 · 대기 {reasons}"
+            for symbol, reason in unavailable.items():
+                self._snapshots[symbol] = StrategySnapshot(
+                    symbol=symbol, name=stocks.get(symbol, symbol),
+                    price=self.market.quote(symbol).price, collected_prices=0, decision=f"시세 대기 · {reason}")
+        if not candles:
+            return
         self.step(candles=candles)
 
     def step(self, *, candles=None) -> None:
         if self.price_feed is not None and candles is None:
             raise ValueError("실제 시세 모드에는 최신 봉 데이터가 필요합니다.")
         self.tick_count += 1
+        exited = self._manage_exits(candles)
         quotes = ([self.market.quote(symbol, move=candles is None) for symbol in self.target_symbols]
                   if self.target_symbols else self.market.quotes(move=candles is None))
         for quote in quotes:
+            if candles is not None and quote.symbol not in candles:
+                continue
             history = self._history[quote.symbol]
             new_bar = True
             if candles is None:
@@ -191,15 +217,11 @@ class MovingAverageEngine:
                         self._above_count.pop(quote.symbol, None)
                         self._entry_armed.discard(quote.symbol)
                     history.clear()
-                    history.extend(bar.close_price for bar in bars)
+                    history.extend(bar.close_price for bar in bars[-self.long_period:])
                     self._last_bar_at[quote.symbol] = bars[-1].timestamp
             stock = next(item for item in self.market.stocks() if item.symbol == quote.symbol)
 
-            exit_reason = self._exit_reason(quote.symbol, quote.price)
-            if exit_reason:
-                self._sell(quote.symbol, exit_reason)
-                self._entry_armed.discard(quote.symbol)
-                # 같은 판단에서 청산 후 재매수하지 않는다.
+            if quote.symbol in exited:
                 continue
 
             if len(history) < self.long_period:
@@ -208,6 +230,7 @@ class MovingAverageEngine:
                     name=stock.name,
                     price=quote.price,
                     collected_prices=len(history),
+                    data_at=self._last_bar_at.get(quote.symbol),
                     decision=f"가격 수집 중 {len(history)}/{self.long_period}",
                 )
                 continue
@@ -222,6 +245,7 @@ class MovingAverageEngine:
                 name=stock.name,
                 price=quote.price,
                 collected_prices=len(history),
+                data_at=self._last_bar_at.get(quote.symbol),
                 short_average=short_average,
                 long_average=long_average,
                 trend=trend,
@@ -264,6 +288,34 @@ class MovingAverageEngine:
             self._previous_trend[quote.symbol] = trend
         self._update_drawdown()
 
+    def _buy_quantity(self, symbol: str) -> int:
+        if self.sizing_mode == "QUANTITY":
+            return self.order_quantity
+        # Use the same price, slippage and rounded fee as the broker. The broker
+        # rechecks all limits at submission if the account changes meanwhile.
+        from decimal import ROUND_DOWN
+        price = self.market.quote(symbol).price * (1 + self.broker.slippage_rate)
+        if price <= 0:
+            return 0
+        cash = self.broker.account().cash
+        maximum = min(1000, int(min(self.order_amount, cash) / price))
+        low, high = 0, maximum
+        while low < high:
+            quantity = (low + high + 1) // 2
+            amount = price * quantity
+            fee = (amount * self.broker.fee_rate).quantize(Decimal("1"), rounding=ROUND_DOWN)
+            allowed = amount + fee <= min(self.order_amount, cash)
+            if allowed and self.broker.risk_manager:
+                allowed = self.broker.risk_manager.check_buy(
+                    symbol=symbol, amount=amount, fee=fee,
+                    ignore_min_cash_ratio=self.broker.ignore_min_cash_ratio,
+                    ignore_daily_order_limit=self.broker.ignore_daily_order_limit) is None
+            if allowed:
+                low = quantity
+            else:
+                high = quantity - 1
+        return low
+
     def _buy(self, symbol: str, price: Decimal) -> bool:
         if not self._can_order(symbol):
             return False
@@ -271,11 +323,14 @@ class MovingAverageEngine:
         if (not self.broker.ignore_daily_order_limit and self.daily_order_limit > 0
                 and self._daily_orders.get(today, 0) >= self.daily_order_limit):
             return False
+        quantity = self._buy_quantity(symbol)
+        if quantity < 1:
+            return False
         reason = "상향 교차 후 2봉 확인 · 가격 추세 확인"
         self._record_signal(symbol, OrderSide.BUY, reason)
         before = self.broker.strategy_quantity(symbol)
-        order = self.broker.submit(OrderRequest(symbol=symbol, side=OrderSide.BUY, quantity=self.order_quantity),
-                                   source="STRATEGY", reason=reason)
+        order = self.broker.submit(OrderRequest(symbol=symbol, side=OrderSide.BUY, quantity=quantity),
+                                   source="STRATEGY", reason=reason, acquired_at=self._clock())
         if order.status.value == "FILLED":
             now = self._clock()
             cash_change = -(order.price * order.quantity + order.fee)
@@ -290,10 +345,10 @@ class MovingAverageEngine:
             return True
         return False
 
-    def _sell(self, symbol: str, reason: str) -> None:
+    def _sell(self, symbol: str, reason: str, *, lot_id=None) -> None:
         if not self._within_hours():
             return
-        quantity = self.broker.strategy_quantity(symbol)
+        quantity = next((lot["quantity"] for lot in self.broker.managed_lots() if lot["id"] == lot_id), 0) if lot_id else self.broker.strategy_quantity(symbol)
         if not quantity:
             return
         self._record_signal(symbol, OrderSide.SELL, reason)
@@ -301,7 +356,7 @@ class MovingAverageEngine:
         # 요청 모델의 1회 1,000주 범위 안에서 관리 보유분 전체를 청산한다.
         while quantity:
             order = self.broker.submit(OrderRequest(symbol=symbol, side=OrderSide.SELL, quantity=min(quantity, 1000)),
-                                       source="STRATEGY", reason=reason)
+                                       source="STRATEGY", reason=reason, lot_id=lot_id)
             if order.status.value != "FILLED":
                 break
             self._strategy_cash_flow += order.price * order.quantity - order.fee - order.tax
@@ -311,7 +366,7 @@ class MovingAverageEngine:
             today = self._clock().astimezone(KST).date()
             self._daily_orders[today] = self._daily_orders.get(today, 0) + 1
             self._last_order_at[symbol] = self._clock()
-            quantity = self.broker.strategy_quantity(symbol)
+            quantity = next((lot["quantity"] for lot in self.broker.managed_lots() if lot["id"] == lot_id), 0) if lot_id else self.broker.strategy_quantity(symbol)
             if not quantity:
                 self._position_opened_at.pop(symbol, None)
                 self._completed_trades += 1
@@ -345,6 +400,60 @@ class MovingAverageEngine:
             return f"최대 보유일 {self.max_holding_days}일 도달"
         return None
 
+    def _management_context(self):
+        return dict(strategy_id=self.strategy_id, strategy_name=self.strategy_name, adopted_at=self._clock().isoformat(),
+                    short_period=self.short_period, long_period=self.long_period,
+                    take_profit_rate=str(self.take_profit_rate), stop_loss_rate=str(self.stop_loss_rate),
+                    max_holding_days=self.max_holding_days,
+                    trading_start=self.trading_start.strftime('%H:%M'), trading_end=self.trading_end.strftime('%H:%M'))
+
+    def _manage_exits(self, candles):
+        exited = set()
+        now = self._clock()
+        for lot in self.broker.managed_lots():
+            symbol, context = lot['symbol'], lot['context']
+            if candles is not None and symbol not in candles:
+                continue
+            local = now.astimezone(KST)
+            if local.weekday() >= 5 or not self._parse_time(context.get('trading_start', '09:00')) <= local.time().replace(tzinfo=None) <= self._parse_time(context.get('trading_end', '18:00')):
+                continue
+            price = self.market.quote(symbol).price
+            basis = Decimal(lot['average_price']) * lot['quantity']
+            if basis <= 0:
+                continue
+            rate = (self.broker.exit_proceeds(symbol, lot['quantity'], price) / basis - 1) * 100
+            reason = None
+            if rate >= Decimal(context.get('take_profit_rate', str(self.take_profit_rate))):
+                reason = '익절률 도달'
+            elif rate <= -Decimal(context.get('stop_loss_rate', str(self.stop_loss_rate))):
+                reason = '손절률 도달'
+            elif now - datetime.fromisoformat(lot['opened_at']) >= timedelta(days=int(context.get('max_holding_days', self.max_holding_days))):
+                reason = '최대 보유일 도달'
+            elif candles is not None:
+                closes = [bar.close_price for bar in candles[symbol]]
+                short, long = int(context.get('short_period', self.short_period)), int(context.get('long_period', self.long_period))
+                if len(closes) >= long + 1:
+                    previous = sum(closes[-short-1:-1]) / short - sum(closes[-long-1:-1]) / long
+                    current = sum(closes[-short:]) / short - sum(closes[-long:]) / long
+                    if previous > 0 and current <= 0:
+                        reason = '이동평균 하향 교차'
+            if reason:
+                self._sell(symbol, f"{context.get('strategy_name') or '현재 전략'} · {reason}", lot_id=lot['id'])
+                exited.add(symbol)
+            if symbol not in self.target_symbols:
+                self._snapshots[symbol] = StrategySnapshot(symbol=symbol, name=self.market.quote(symbol).name,
+                    price=price, collected_prices=0, data_at=candles[symbol][-1].timestamp if candles else None,
+                    decision=f"청산 감시 · {context.get('strategy_name') or '현재 전략'}")
+        return exited
+
+    def set_management_scope(self, scope):
+        if self.running:
+            raise ValueError('자동매매를 일시정지한 뒤 관리 범위를 변경하세요.')
+        self.reset_performance_baseline(scope=scope)
+        self._snapshots.clear()
+        self.last_data_at = None
+        self.data_message = '관리 범위 적용 완료 · 시작하면 시세를 조회합니다.'
+
     def _record_signal(self, symbol: str, side: OrderSide, reason: str) -> None:
         self._signals.append(
             SignalEvent(
@@ -356,8 +465,8 @@ class MovingAverageEngine:
         )
         self._signals = self._signals[-20:]
 
-    def reset_performance_baseline(self) -> None:
-        self._strategy_baseline_value = self.broker.begin_strategy(self.target_symbols)
+    def reset_performance_baseline(self, *, scope=None) -> None:
+        self._strategy_baseline_value = self.broker.begin_strategy(self.target_symbols, context=self._management_context(), scope=scope)
         self._strategy_cash_flow = Decimal("0")
         self._strategy_buy_amount = Decimal("0")
         self._realized_profit = Decimal(0)
@@ -380,7 +489,8 @@ class MovingAverageEngine:
                   trading_start: str | None = None,
                   trading_end: str | None = None,
                   cooldown_minutes: int | None = None,
-                  daily_order_limit: int = 0) -> None:
+                  daily_order_limit: int = 0, sizing_mode: str = "QUANTITY",
+                  order_amount: Decimal = Decimal("100000"), strategy_id=None, strategy_name=None) -> None:
         if self.running:
             raise ValueError("자동매매를 중지한 뒤 전략을 변경하세요.")
         if short_period >= long_period:
@@ -391,6 +501,10 @@ class MovingAverageEngine:
         self.short_period = short_period
         self.long_period = long_period
         self.order_quantity = order_quantity
+        if sizing_mode not in {"QUANTITY", "AMOUNT"} or not Decimal(order_amount).is_finite() or Decimal(order_amount) <= 0:
+            raise ValueError("매수 방식과 1회 매수 금액을 확인하세요.")
+        self.sizing_mode = sizing_mode
+        self.order_amount = Decimal(order_amount)
         self.daily_order_limit = daily_order_limit
         if take_profit_rate is not None:
             self.take_profit_rate = Decimal(take_profit_rate)
@@ -406,10 +520,13 @@ class MovingAverageEngine:
             raise ValueError("운영 종료 시간은 시작 시간보다 늦어야 합니다.")
         if cooldown_minutes is not None:
             self.cooldown_minutes = cooldown_minutes
+        self.strategy_id, self.strategy_name = strategy_id, strategy_name
         self.target_symbols = list(dict.fromkeys(target_symbols or ([target_symbol] if target_symbol else [])))
         self._history = {stock.symbol: deque(maxlen=long_period) for stock in self.market.stocks()}
         self._previous_trend.clear()
         self._snapshots.clear()
+        self.last_data_at = None
+        self.data_message = "전략 적용 완료 · 시작하면 새 종목의 시세를 조회합니다."
         now = self._clock()
         self._position_opened_at = {
             symbol: now for symbol in self.target_symbols if self.broker.holding_quantity(symbol) > 0
@@ -419,6 +536,7 @@ class MovingAverageEngine:
         self.broker._journal({"event": "STRATEGY_SETTINGS", "run_id": self.broker.run_id,
                               "symbols": self.target_symbols, "short_period": short_period,
                               "long_period": long_period, "bar_interval": "1m", "order_quantity": order_quantity,
+                              "sizing_mode": self.sizing_mode, "order_amount": str(self.order_amount),
                               "cooldown_minutes": self.cooldown_minutes, "daily_order_limit": self.daily_order_limit,
                               "take_profit_rate": str(self.take_profit_rate), "stop_loss_rate": str(self.stop_loss_rate),
                               "fee_rate": str(self.broker.fee_rate), "sell_tax_rate": str(self.broker.sell_tax_rate),
@@ -427,8 +545,8 @@ class MovingAverageEngine:
 
     def status(self) -> StrategyStatus:
         current_strategy_value = self.broker.strategy_value()
-        strategy_profit = current_strategy_value + self._strategy_cash_flow - self._strategy_baseline_value
-        strategy_basis = self._strategy_baseline_value + self._strategy_buy_amount
+        strategy_profit = current_strategy_value + self._strategy_cash_flow - self._strategy_baseline_value - self.broker._management_external_flow
+        strategy_basis = self._strategy_baseline_value + self._strategy_buy_amount + self.broker._management_external_flow
         return StrategyStatus(
             running=self.running,
             emergency_stopped=self.emergency_stopped,
@@ -436,7 +554,7 @@ class MovingAverageEngine:
             interval_seconds=self.interval_seconds,
             short_period=self.short_period,
             long_period=self.long_period,
-            order_quantity=self.order_quantity,
+            order_quantity=self.order_quantity, sizing_mode=self.sizing_mode, order_amount=self.order_amount,
             strategy_basis_amount=strategy_basis,
             strategy_profit=strategy_profit,
             strategy_return_percent=(strategy_profit / strategy_basis * 100 if strategy_basis else None),
@@ -450,8 +568,8 @@ class MovingAverageEngine:
         )
 
     def _update_drawdown(self) -> None:
-        profit = self.broker.strategy_value() + self._strategy_cash_flow - self._strategy_baseline_value
+        profit = self.broker.strategy_value() + self._strategy_cash_flow - self._strategy_baseline_value - self.broker._management_external_flow
         self._peak_profit = max(self._peak_profit, profit)
-        basis = self._strategy_baseline_value + self._strategy_buy_amount
+        basis = self._strategy_baseline_value + self._strategy_buy_amount + self.broker._management_external_flow
         if basis + self._peak_profit > 0:
             self._max_drawdown = max(self._max_drawdown, (self._peak_profit - profit) / (basis + self._peak_profit) * 100)

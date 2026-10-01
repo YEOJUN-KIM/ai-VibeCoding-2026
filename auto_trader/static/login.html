@@ -3,30 +3,30 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>로그인 · 프라이빗 투자 데스크</title>
+  <title>로그인 · FOLIO</title>
   <link rel="stylesheet" href="/static/styles.css">
   <script src="/static/login.js" defer></script>
-</head>
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg"></head>
 <body class="login-page">
   <main class="login-layout">
     <section class="login-intro">
-      <p class="eyebrow">PRIVATE INVESTMENT DESK</p>
-      <h1>프라이빗<br>투자 데스크</h1>
-      <p>실제 자산부터 시장 탐색과 모의 전략까지 연결하는 개인 투자 워크스페이스입니다.</p>
+      <p class="eyebrow">FOLIO</p>
+      <h1>나의 투자,<br>하나의 흐름으로.</h1>
+      <p>자산 관리부터 기업 분석, 전략 운용까지. 나의 투자 흐름을 FOLIO에서 이어가세요.</p>
       <div class="security-note">
         <span class="security-icon">✓</span>
-        <div><strong>로컬 전용 접속</strong><small>현재 서버는 127.0.0.1에서만 실행됩니다.</small></div>
+        <div><strong>나만의 투자 공간</strong><small>이 기기에서 나의 계정으로 시작하세요.</small></div>
       </div>
     </section>
     <section class="login-card panel">
       <div>
-        <p class="section-kicker">DESK ACCESS</p>
-        <h2>투자 데스크 로그인</h2>
+        <p class="section-kicker">WELCOME TO FOLIO</p>
+        <h2>FOLIO 로그인</h2>
         <p class="login-help">등록된 관리자 계정으로 개인 워크스페이스에 접속합니다.</p>
       </div>
       <div class="login-readiness checking" id="login-readiness" aria-live="polite">
         <span class="login-readiness-dot" aria-hidden="true"></span>
-        <div><strong id="readiness-title">서비스 연결 확인 중</strong><small id="readiness-detail">PostgreSQL과 토스 API 상태를 확인하고 있습니다.</small></div>
+        <div><strong id="readiness-title">서비스 연결 확인 중</strong><small id="readiness-detail">계정과 시세 서비스에 연결하고 있습니다.</small></div>
         <button class="text-button" id="readiness-retry" type="button" hidden>다시 확인</button>
       </div>
       <form id="login-form" autocomplete="on">

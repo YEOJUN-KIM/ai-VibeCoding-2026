@@ -8,6 +8,65 @@ let loading = false;
 let searchTimer = null;
 let sparklineSequence = 0;
 const latestPrices = new Map();
+const marketItems = new Map();
+const marketTickTimes = new Map();
+let marketStream = null;
+
+function closeMarketStream() {
+  marketStream?.close();
+  marketStream = null;
+}
+
+function applyMarketTick(frame) {
+  const symbol = frame.topic?.split(":").at(-1);
+  const item = marketItems.get(symbol);
+  const price = Number(frame.data?.price), time = Date.parse(frame.data?.timestamp);
+  if (!item || !Number.isFinite(price) || price <= 0 || !Number.isFinite(time)) return;
+  if (time < (marketTickTimes.get(symbol) ?? 0)) return;
+  marketTickTimes.set(symbol, time);
+  const previousTickPrice = latestPrices.get(symbol);
+  latestPrices.set(symbol, price);
+  const row = document.querySelector(`[data-quote-symbol="${CSS.escape(symbol)}"]`);
+  if (!row) return;
+  row.querySelector('[data-quote-price]').textContent = won.format(price);
+  const previous = Number(item.previous_close);
+  const comparison = row.querySelector('[data-quote-change]');
+  if (previous > 0) {
+    const difference = price - previous, rate = (price / previous - 1) * 100;
+    comparison.textContent = `${difference > 0 ? "+" : difference < 0 ? "−" : ""}${won.format(Math.abs(difference))} (${rate > 0 ? "+" : ""}${rate.toFixed(2)}%)`;
+    comparison.className = difference > 0 ? 'positive' : difference < 0 ? 'negative' : 'neutral';
+  }
+  if (previousTickPrice != null && price !== previousTickPrice && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+    const color = price > previousTickPrice ? 'rgba(255,113,107,.24)' : 'rgba(103,160,255,.24)';
+    for (const cell of [row.querySelector('[data-quote-price]'), comparison]) {
+      cell.getAnimations?.().forEach(animation => animation.cancel());
+      cell.animate?.([{backgroundColor:color},{backgroundColor:'transparent'}], {duration:700,easing:'ease-out'});
+    }
+  }
+  if (item.price > 0 && item.market_cap != null) row.querySelector('[data-quote-cap]').textContent = compactWon(Number(item.market_cap) * price / Number(item.price));
+  $('#stock-stream-status').textContent = `실시간 수신 중 · ${new Date(time).toLocaleTimeString('ko-KR')} 체결`;
+}
+
+function openMarketStream() {
+  closeMarketStream();
+  if (document.hidden || !marketItems.size) return;
+  $('#stock-stream-status').textContent = '실시간 연결 중';
+  const source = new EventSource(`/live/stocks/stream?symbols=${encodeURIComponent([...marketItems.keys()].join(','))}`);
+  marketStream = source;
+  source.onmessage = event => {
+    if (source !== marketStream) return;
+    let payload; try { payload = JSON.parse(event.data); } catch { return; }
+    for (const frame of payload.type === 'batch' ? payload.frames : [payload]) {
+      if (frame.type === 'message') applyMarketTick(frame);
+      else if (frame.type === 'status') {
+        const labels = {connecting:'실시간 연결 중', connected:'실시간 연결됨 · 체결 수신 대기', reconnecting:'시세 연결 끊김 · 재연결 중', rejected:'일부 종목 실시간 구독 불가', unauthorized:'로그인 또는 화면 잠금 확인 필요'};
+        if (!marketTickTimes.size || frame.state !== 'connected') $('#stock-stream-status').textContent = labels[frame.state] || '시세 연결 확인 중';
+        if (frame.state === 'unauthorized') closeMarketStream();
+      }
+    }
+  };
+  source.onerror = () => { if (source === marketStream) $('#stock-stream-status').textContent = '시세 연결 끊김 · 재연결 중 · 마지막 수신값 표시'; };
+}
 
 const escapeHtml = (value) => String(value).replace(/[&<>'"]/g, (character) => ({
   "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;",
@@ -71,8 +130,8 @@ function sparklineSvg(values, symbol, period) {
     ? simplifyTrend(sourcePoints, 48)
     : period === "1W" ? densifyTrend(sourcePoints, 48) : sourcePoints;
   if (points.length < 2) return `<span class="sparkline-empty">데이터 없음</span>`;
-  const width = 140;
-  const height = 38;
+  const width = 200;
+  const height = 48;
   const padding = 3;
   const min = Math.min(...points);
   const max = Math.max(...points);
@@ -140,6 +199,9 @@ async function loadSparklines(symbols) {
 }
 
 function renderRows(items) {
+  marketItems.clear();
+  marketTickTimes.clear();
+  items.forEach(item => marketItems.set(item.symbol, item));
   latestPrices.clear();
   items.forEach((item) => { if (item.price != null) latestPrices.set(item.symbol, Number(item.price)); });
   $("#stock-list-body").innerHTML = items.length ? items.map((item) => {
@@ -147,15 +209,19 @@ function renderRows(items) {
     const rateClass = rate == null ? "neutral" : rate > 0 ? "positive" : rate < 0 ? "negative" : "neutral";
     const rateText = rate == null ? "-" : `${rate > 0 ? "+" : ""}${rate.toFixed(2)}%`;
     const priceText = item.price == null ? "-" : won.format(Number(item.price));
-    return `<tr>
+    const previous = item.previous_close == null ? null : Number(item.previous_close);
+    const difference = previous == null || item.price == null ? null : Number(item.price) - previous;
+    const comparison = difference == null ? rateText : `${difference > 0 ? "+" : difference < 0 ? "−" : ""}${won.format(Math.abs(difference))} (${rateText})`;
+    return `<tr data-quote-symbol="${escapeHtml(item.symbol)}">
       <td class="favorite-cell">${favoriteButton(item)}</td>
-      <td><a class="stock-name stock-name-link" href="/stocks/${encodeURIComponent(item.symbol)}">${escapeHtml(item.name)}</a><span class="stock-code">${escapeHtml(item.symbol)}</span></td>
+      <td class="directory-stock-cell"><a class="stock-name stock-name-link" title="${escapeHtml(item.name)}" href="/stocks/${encodeURIComponent(item.symbol)}">${escapeHtml(item.name)}</a><span class="stock-code">${escapeHtml(item.symbol)}</span></td>
       <td><span class="market-badge ${item.market === "KOSDAQ" ? "kosdaq" : "kospi"}">${escapeHtml(item.market)}</span></td>
-      <td>${priceText}</td><td class="${rateClass}">${rateText}</td>
-      <td>${compactWon(item.market_cap)}</td><td>${compactWon(item.trading_amount)}</td>
+      <td><span data-quote-price>${priceText}</span><small class="previous-close">전일 종가 ${previous == null ? "-" : won.format(previous)}</small></td><td data-quote-change class="${rateClass}">${comparison}</td>
+      <td data-quote-cap>${compactWon(item.market_cap)}</td><td>${compactWon(item.trading_amount)}</td>
       <td><div class="sparkline-slot" data-sparkline-symbol="${escapeHtml(item.symbol)}"><span class="sparkline-loading">차트 로딩</span></div></td>
     </tr>`;
   }).join("") : `<tr><td class="empty" colspan="8">조건에 맞는 국내 종목이 없습니다.</td></tr>`;
+  openMarketStream();
 }
 
 async function loadStocks(page = 1) {
@@ -196,13 +262,24 @@ async function loadStocks(page = 1) {
 async function toggleFavorite(button) {
   const symbol = button.dataset.favoriteSymbol;
   const active = button.dataset.favoriteActive === "true";
+  if (button.disabled) return;
+  const apply = (value) => {
+    button.dataset.favoriteActive = String(value);
+    button.classList.toggle("active", value);
+    button.textContent = value ? "♥" : "♡";
+    const label = (button.getAttribute("aria-label")||symbol).replace(/관심 종목.*$/, value ? "관심 종목에서 제거" : "관심 종목에 추가");
+    button.setAttribute("aria-label", label);
+    button.title = label;
+  };
+  apply(!active);
   button.disabled = true;
   try {
     if (active) await api(`/live/favorites/${encodeURIComponent(symbol)}`, { method: "DELETE" });
     else await api("/live/favorites", { method: "POST", body: JSON.stringify({ symbol }) });
-    await loadStocks(activePage);
   } catch (error) {
+    apply(active);
     $("#stock-list-message").textContent = error.message;
+  } finally {
     button.disabled = false;
   }
 }
@@ -244,3 +321,8 @@ async function initialize() {
 }
 
 initialize();
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { closeMarketStream(); $('#stock-stream-status').textContent = '다른 화면 보는 중 · 연결 대기'; }
+  else { openMarketStream(); }
+});
+window.addEventListener('pagehide', closeMarketStream);

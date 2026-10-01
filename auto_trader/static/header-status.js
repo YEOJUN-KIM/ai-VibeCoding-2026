@@ -15,7 +15,7 @@
 
   const screenLock = document.createElement('div');
   screenLock.className = 'modal-backdrop hidden';
-  screenLock.innerHTML = `<section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="screen-lock-title"><p class="section-kicker">SCREEN LOCK</p><h2 id="screen-lock-title">화면이 잠겼습니다</h2><p class="subtitle">자리를 비운 동안 계좌와 설정을 보호합니다. 6자리 PIN을 입력하면 원래 화면으로 돌아갑니다.</p><form data-screen-unlock-form autocomplete="off"><label>6자리 PIN<input class="pin-secret" data-screen-unlock-pin type="text" name="screen-unlock-code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore required></label><button class="button primary full" type="submit">화면 잠금 해제</button></form><p class="form-message" data-screen-lock-message>화면을 열어도 LIVE 주문 권한은 별도로 인증해야 합니다.</p></section>`;
+  screenLock.innerHTML = `<section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="screen-lock-title"><p class="section-kicker">SCREEN LOCK</p><h2 id="screen-lock-title">화면이 잠겼습니다</h2><p class="subtitle">자리를 비운 동안 계좌와 설정을 보호합니다. 6자리 PIN을 입력하면 원래 화면으로 돌아갑니다.</p><form data-screen-unlock-form autocomplete="off"><label>6자리 PIN<input class="pin-secret" data-screen-unlock-pin type="text" name="screen-unlock-code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore required></label><button class="button primary full" type="submit">화면 잠금 해제</button></form><p class="form-message" data-screen-lock-message>실제 주문 시에는 별도의 인증이 필요합니다.</p></section>`;
   document.body.appendChild(screenLock);
   const showScreenLock = () => {
     screenLock.classList.remove('hidden');
@@ -111,7 +111,7 @@
 
   let csrfToken = '';
   const setLiveStatus = status => {
-    liveLink.textContent = status.authorized ? 'LIVE 인증 완료' : 'LIVE 주문 잠금 해제';
+    liveLink.textContent = status.authorized ? '주문 인증 완료' : '주문 잠금 해제';
     liveLink.classList.toggle('live-ready', Boolean(status.authorized));
     liveLink.classList.toggle('danger', !status.authorized);
     if (status.authorized && status.authorized_until) {
@@ -133,7 +133,7 @@
   };
   const modal = document.createElement('div');
   modal.className = 'modal-backdrop hidden';
-  modal.innerHTML = `<section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="global-live-auth-title"><button class="modal-close" type="button" aria-label="닫기">×</button><p class="section-kicker">LIVE SECURITY</p><h2 id="global-live-auth-title">LIVE 기능 잠금 해제</h2><p class="subtitle">실제 주문 기능을 사용하기 전에 6자리 PIN으로 본인임을 다시 확인합니다.</p><div class="preflight-box" data-global-toss-status>토스 API 연결을 확인하는 중...</div><form data-global-live-pin-form autocomplete="off"><label>6자리 PIN<input class="pin-secret" data-global-live-pin type="text" name="live-authorization-code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore required></label><button class="button danger full" type="submit">인증하고 잠금 해제</button></form><p class="form-message" data-global-live-message>인증은 현재 로그인 세션에서 5분간 유효합니다.</p></section>`;
+  modal.innerHTML = `<section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="global-live-auth-title"><button class="modal-close" type="button" aria-label="닫기">×</button><p class="section-kicker">LIVE SECURITY</p><h2 id="global-live-auth-title">주문 인증</h2><p class="subtitle">실제 주문 기능을 사용하기 전에 6자리 PIN으로 본인임을 다시 확인합니다.</p><div class="preflight-box" data-global-toss-status>증권사 연결을 확인하는 중...</div><form data-global-live-pin-form autocomplete="off"><label>6자리 PIN<input class="pin-secret" data-global-live-pin type="text" name="live-authorization-code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore required></label><button class="button danger full" type="submit">인증하고 잠금 해제</button></form><p class="form-message" data-global-live-message>인증은 현재 로그인 세션에서 5분간 유효합니다.</p></section>`;
   document.body.appendChild(modal);
   const closeModal = () => { modal.classList.add('hidden'); modal.querySelector('[data-global-live-pin]').value = ''; };
   modal.querySelector('.modal-close').addEventListener('click', closeModal);
@@ -143,11 +143,11 @@
     modal.classList.remove('hidden');
     modal.querySelector('[data-global-live-pin]').focus();
     const tossStatus = modal.querySelector('[data-global-toss-status]');
-    tossStatus.textContent = '토스 API 연결을 확인하는 중...';
+    tossStatus.textContent = '증권사 연결을 확인하는 중...';
     try {
       if (!csrfToken) csrfToken = (await request('/auth/me')).csrf_token;
       const result = await request('/toss/test-connection', { method: 'POST' });
-      tossStatus.textContent = `API 정상 · 연결 계좌 ${result.account_count}개`;
+      tossStatus.textContent = `연결 완료 · 계좌 ${result.account_count}개`;
     } catch (error) { tossStatus.textContent = error.message; }
   });
   modal.querySelector('[data-global-live-pin-form]').addEventListener('submit', async event => {
@@ -163,5 +163,5 @@
     } catch (error) { message.textContent = error.message; }
     finally { input.value = ''; }
   });
-  request('/auth/live-pin').then(setLiveStatus).catch(() => { liveLink.textContent = 'LIVE 상태 확인'; });
+  request('/auth/live-pin').then(setLiveStatus).catch(() => { liveLink.textContent = '주문 인증'; });
 })();

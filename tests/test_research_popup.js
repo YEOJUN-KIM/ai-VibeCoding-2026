@@ -1,0 +1,38 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const elements = new Map();
+const node = id => {if (!elements.has(id)) elements.set(id,{textContent:'',innerHTML:'',disabled:false,addEventListener(e,f){this[e]=f;}});return elements.get(id);};
+const dialog = {open:false,querySelector:node,setAttribute(){},addEventListener(e,f){this[e]=f;},showModal(){this.open=true;},close(){this.open=false;this.closeHandler();}};
+dialog.addEventListener = (e,f) => {if(e==='close')dialog.closeHandler=f;else dialog[e]=f;};
+const pending = [], calls = [];
+let restored = 0, reloads = 0;
+const escapeHtml = s=>String(s??'').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const context = {window:{},document:{createElement:()=>dialog,activeElement:{isConnected:true,focus(){restored++;}},body:{append(){},classList:{add(){},remove(){}}}},
+  escapeHtml,metric:v=>v??'-',won:{format:String},loadMyCandidates:async()=>{reloads++;},
+  api:(url,options)=>{calls.push({url,options});return new Promise((resolve,reject)=>pending.push({resolve,reject}));}};
+vm.createContext(context);vm.runInContext(fs.readFileSync('auto_trader/static/research-popup.js','utf8'),context);
+const report = name=>({name,symbol:'005930',market:'KOSPI',generated_at:'2026-10-01',summary:'<safe>',rank:'A',overall_score:84,factors:[],opportunities:[],risks:[],financial_history:[],candles:[]});
+(async()=>{
+  const first=context.window.openResearchReport('005930','삼성전자');
+  const firstPending=pending.splice(0);
+  dialog.close();
+  const second=context.window.openResearchReport('000660','SK하이닉스');
+  const secondPending=pending.splice(0);
+  secondPending[0].resolve(report('SK하이닉스'));secondPending[1].resolve([]);await second;
+  firstPending[0].resolve(report('삼성전자'));firstPending[1].resolve([]);await first;
+  assert.equal(node('#research-popup-title').textContent,'SK하이닉스','late report must not replace new report');
+  assert.equal(node('[data-report-detail]').href, '/stocks/000660#chart');
+  assert.ok(node('[data-report-body]').innerHTML.includes('&lt;safe&gt;'));
+  assert.equal(node('[data-report-watch]').disabled,false);
+  const add=node('[data-report-watch]').click();
+  assert.equal(calls.at(-1).options.method,'POST');
+  assert.ok(calls.at(-1).url.endsWith('/000660'));
+  pending.shift().resolve({added:true});await add;
+  assert.equal(reloads,1);assert.equal(node('[data-report-watch]').disabled,true);
+  dialog.close();assert.equal(restored,2);
+  const existing=context.window.openResearchReport('005930','삼성전자');
+  pending.shift().resolve(report('삼성전자'));pending.shift().resolve([{symbol:'005930'}]);await existing;
+  assert.equal(node('[data-report-watch]').disabled,true,'already watched stock cannot be added again');
+  console.log('Research popup passed: stale responses, escaped content, add target, list refresh, existing watch and focus restoration.');
+})().catch(e=>{console.error(e);process.exitCode=1;});

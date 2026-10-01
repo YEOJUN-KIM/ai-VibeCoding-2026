@@ -1,0 +1,17 @@
+const fs=require('fs'),vm=require('vm'),assert=require('node:assert/strict');
+const scope={document:{querySelector:()=>null},Date,Math};vm.createContext(scope);
+vm.runInContext(fs.readFileSync('auto_trader/static/chart-viewport.js','utf8'),scope);
+const candles=Array.from({length:100},(_,i)=>({timestamp:new Date(Date.UTC(2026,9,1,0,i)).toISOString()}));scope.candles=candles;
+vm.runInContext('zoomChartViewport(candles,.5,1)',scope);
+assert.deepEqual(JSON.parse(vm.runInContext('JSON.stringify(chartVisibleRange(candles))',scope)),{start:50,end:100,count:50});
+vm.runInContext('panChartViewport(candles,-30,100)',scope);
+assert.equal(vm.runInContext('chartVisibleRange(candles).start',scope),20);
+candles.push({timestamp:new Date(Date.UTC(2026,9,1,0,100)).toISOString()});
+assert.equal(vm.runInContext('chartVisibleRange(candles).end',scope),70,'live append must preserve historical window');
+vm.runInContext('resetChartViewport();zoomChartViewport(candles,.01,1)',scope);
+assert.equal(vm.runInContext('chartVisibleRange(candles).count',scope),12);
+vm.runInContext('zoomChartViewport(candles,100,0)',scope);
+assert.equal(vm.runInContext('chartVisibleRange(candles).count',scope),101);
+vm.runInContext('resetChartViewport()',scope);
+assert.equal(vm.runInContext('chartVisibleRange(candles).end',scope),101);
+console.log('Chart zoom limits, pan bounds, live history preservation and reset passed');
