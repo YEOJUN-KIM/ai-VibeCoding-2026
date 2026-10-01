@@ -272,3 +272,10 @@ CREATE TABLE IF NOT EXISTS paper_account_state (
     state JSONB NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS strategy_preset_market (
+    snapshot_key TEXT PRIMARY KEY,
+    week_start DATE NOT NULL,
+    candidates JSONB NOT NULL,
+    generated_at TIMESTAMPTZ NOT NULL
+);

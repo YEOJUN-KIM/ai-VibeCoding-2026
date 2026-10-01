@@ -979,6 +979,20 @@ footer a { color: var(--accent-bright); text-decoration: none; }
 @media(max-width:650px) { [data-settings-panel="strategy"] > .panel-heading { align-items: stretch; flex-direction: column; } .strategy-heading-controls { align-items: flex-start; } .strategy-heading-controls .strategy-save-message { text-align: left; } }
 
 .strategy-library-all{width:100%;margin-top:14px}
+.default-presets{margin:0 0 24px;padding:20px;border:1px solid var(--panel-border);border-radius:12px;background:rgba(167,139,250,.04)}
+.default-presets-heading{display:flex;justify-content:space-between;gap:20px;align-items:start}
+.default-presets h3,.default-presets h4{margin:0 0 8px}
+.default-presets p,.default-presets li{font-size:13px;line-height:1.65;color:var(--muted)}
+.default-presets-heading label{display:grid;gap:8px;min-width:220px;font-size:12px}
+.default-presets-heading input{width:100%;box-sizing:border-box}
+.default-presets-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:16px}
+.default-presets-grid article{padding:16px;border:1px solid var(--panel-border);border-radius:10px;background:var(--panel-bg)}
+.default-preset-tag{display:block;color:var(--accent-bright);font-size:11px;margin-bottom:10px}
+.default-preset-common{padding:12px;border-radius:8px;background:rgba(167,139,250,.07)}
+#preset-preview{padding-top:16px;border-top:1px solid var(--panel-border)}
+#preset-preview small{color:var(--muted)}
+#preset-preview [data-apply-default-preset]{margin-top:14px}
+@media(max-width:750px){.default-presets-heading{display:grid}.default-presets-heading label{min-width:0}.default-presets-grid{grid-template-columns:1fr}}
 .strategy-library-modal{width:min(1600px,calc(100vw - 48px));max-width:none;max-height:85vh;box-sizing:border-box;padding:24px;border:1px solid #443354;border-radius:16px;background:#151020;color:#eee;overflow-y:auto}
 .strategy-library-modal::backdrop{background:rgba(5,3,12,.75);backdrop-filter:blur(4px)}
 .strategy-modal-heading{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:18px}

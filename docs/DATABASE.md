@@ -12,6 +12,7 @@
 - 관심종목: `favorite_stocks`
 - 두 PAPER 계좌의 잔액·보유수량·매입단가·시작 자산·비용·주문 상태·관리 범위·자동매수분의 전략/수량/청산 조건: `paper_account_state` (계좌별 저장)
 - 전략과 대상 종목: `live_strategies`, `live_strategy_symbols`
+- 기본 프리셋 주간 후보 데이터·주간 기준일·생성 시각: `strategy_preset_market`. 현재 주간 데이터 한 건을 유지하며, 사용자 저장 전략과 분리합니다. 갱신·별도 저장 방식은 [PAPER_STRATEGY.md](PAPER_STRATEGY.md)를 참고합니다.
 - 위험 설정과 일별 스냅샷: `risk_settings`, `risk_daily_snapshots`
 - 브로커 계좌·주문·이벤트: `broker_accounts`, `live_orders`, `live_order_events`
 - 장기 분석·자동 추천·내 후보: `long_term_analyses`, `long_term_recommendations`, `long_term_watchlist`
@@ -21,7 +22,7 @@
 
 PAPER 자산과 주문 상태는 변경할 때 DB에 저장하고 재시작 시 복구합니다. 초기화 버튼은 마지막 시작 자산으로 되돌립니다. 실제 자산 다시 복사는 새 시작 자산을 만듭니다. 자동매매 실행 상태와 전략 성과의 기준선은 메모리에 있으며 재시작 후 전략을 다시 선택해 실행합니다. 다중 워커 간 자산 변경 조정은 지원하지 않으므로 단일 워커만 사용합니다.
 
-PAPER 주문 감사 기록은 `.paper-history/orders.jsonl`에 남지만 이 파일만으로 계좌 상태를 완전히 복구하지는 않습니다. 외부 API 응답 캐시는 일시 데이터이며 영구 저장 대상으로 보지 않습니다.
+PAPER 주문 감사 기록은 `.paper-history/orders.jsonl`에 남지만 이 파일만으로 계좌 상태를 완전히 복구하지는 않습니다. 일반 외부 API 응답 캐시는 일시 데이터입니다. 기본 프리셋의 주간 후보 데이터는 같은 주의 일관성을 유지하기 위해 별도로 PostgreSQL에 보관합니다.
 
 ## 백업과 복원 확인
 

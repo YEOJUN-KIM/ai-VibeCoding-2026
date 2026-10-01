@@ -39,6 +39,7 @@ ai-VibeCoding-2026/
 - `paper_feed.py`: PAPER용 실제 시세와 완료 봉 공급
 - `paper.py`: 모의 계좌, 체결, 비용, 기록과 손익
 - `strategy.py`: 이동평균 신호, 실행 제어와 청산 조건
+- `strategy_presets.py`: 기본 인기·가성비 후보 선별, 주간 데이터 저장·재사용과 새 전략 초안
 - `simulator.py`: 시뮬레이션 보조
 - `risk.py`: PAPER/LIVE 공통 위험 한도
 
@@ -62,6 +63,7 @@ ai-VibeCoding-2026/
 - `long-term`: 자동 추천과 내 장기 관찰 후보
 - `news`: 뉴스
 - `settings`: 전략과 위험 설정
+- `settings-presets.js`: 주간 기본 프리셋 미리보기, 예산 변경과 별도 저장 안내
 
 ## 테스트
 

@@ -60,6 +60,7 @@ from .live_orders import (auto_position_quantities, cancel_dry_run_order, delete
                           orders_for_reconciliation, real_order_for_user,
                           save_dry_run_order, update_real_order)
 from .live_strategies import delete_strategy, list_strategies, save_strategy
+from .strategy_presets import weekly_preset
 from .long_term import (analyze_long_term, long_term_recommendation_assessment,
                         next_daily_scan_at)
 from .long_term_repository import (add_long_term_watch, fresh_long_term_analysis,
@@ -706,6 +707,22 @@ def live_trading_readiness(_: AuthenticatedUser = Depends(require_user)) -> Live
 @app.get("/settings/strategies", response_model=list[LiveStrategy])
 def list_strategy_settings(user: AuthenticatedUser = Depends(require_user)) -> list[LiveStrategy]:
     return list_strategies(user.id)
+
+
+@app.get("/settings/strategy-presets/{kind}")
+def strategy_preset_preview(
+    kind: str, order_amount: Decimal = Query(default=Decimal("300000"), ge=10000, le=1000000),
+    _: AuthenticatedUser = Depends(require_user),
+) -> dict:
+    if kind not in {"popular", "affordable"}:
+        raise HTTPException(status_code=404, detail="지원하지 않는 기본 프리셋입니다.")
+    try:
+        return weekly_preset(kind, order_amount, toss_client.strategy_preset_candidates,
+                             fee_rate=settings.paper_fee_rate, slippage_rate=settings.paper_slippage_rate)
+    except TossApiError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 def _strategy_stock_name(symbol: str) -> str:

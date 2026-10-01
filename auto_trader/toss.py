@@ -667,6 +667,12 @@ class TossClient:
             query=query, page=page, page_size=page_size, sort="POPULAR"
         )
 
+    def strategy_preset_candidates(self):
+        """Reuse the directory's batched quotes and cached trading metadata."""
+        page = self.list_domestic_stocks(security_type="COMMON", sort="POPULAR", page_size=50)
+        return [(stock, self._domestic_stock_info(stock.symbol)) for stock in page.results
+                if stock.trading_amount_rank and stock.trading_amount_rank <= 50]
+
     def list_domestic_stocks(self, *, query: str = "", market: str = "ALL",
                              security_type: str = "ALL", sort: str = "POPULAR",
                              page: int = 1, page_size: int = 20) -> LiveStockSearchPage:
