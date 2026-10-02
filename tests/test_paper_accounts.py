@@ -25,6 +25,21 @@ class PaperAccountTests(unittest.IsolatedAsyncioTestCase):
             p.start()
             self.addCleanup(p.stop)
 
+    async def test_restore_last_strategy_configures_but_does_not_start(self):
+        from types import SimpleNamespace
+        symbol = main.market.stocks()[0].symbol
+        saved = SimpleNamespace(id=12, execution_mode='DRY_RUN', targets=[SimpleNamespace(symbol=symbol)])
+        self.broker.remember_strategy(7, 12, [symbol])
+        with patch.object(main, 'list_strategies', return_value=[saved]) as lookup, patch.object(main, '_configure_paper_strategy') as configure:
+            self.assertIs(main._restore_paper_strategy(self.broker, self.engine), saved)
+            lookup.assert_called_once_with(7)
+            configure.assert_called_once_with(self.engine, saved)
+            self.assertFalse(self.engine.running)
+        for available in ([], [SimpleNamespace(id=12, execution_mode='LIVE')]):
+            with patch.object(main, 'list_strategies', return_value=available), patch.object(main, '_configure_paper_strategy') as configure:
+                self.assertIsNone(main._restore_paper_strategy(self.broker, self.engine))
+                configure.assert_not_called()
+
     async def test_accounts_preserve_separate_cash_positions_and_orders(self):
         symbol = main.market.stocks()[0].symbol
         self.broker.submit(OrderRequest(symbol=symbol, side=OrderSide.BUY, quantity=1))

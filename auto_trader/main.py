@@ -261,7 +261,7 @@ def reconcile_saved_real_orders(*, active_only: bool = False) -> int:
 
 
 async def refresh_long_term_candidates(
-    candidate_count: int = 20, target_count: int = 5, *, force: bool = False,
+    candidate_count: int = 20, max_count: int = 10, *, force: bool = False,
 ) -> None:
     """거래대금 상위 보통주를 검증해 품질 조건을 통과한 추천을 저장한다."""
     status = _long_term_scan_status
@@ -424,7 +424,7 @@ async def long_term_candidate_worker(stock_directory_task: asyncio.Task | None) 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    global watchlist_source, paper_snapshot_at, paper_source_account_label
+    global watchlist_source, paper_snapshot_at, paper_source_account_label, paper_selected_strategy
     stock_directory_warm_task: asyncio.Task | None = None
     long_term_candidate_task: asyncio.Task | None = None
     initialize()
@@ -450,6 +450,7 @@ async def lifespan(_: FastAPI):
         paper_snapshot_at = datetime.fromisoformat(broker.snapshot_metadata['snapshot_at'])
         paper_source_account_label = broker.snapshot_metadata.get('source_label')
     broker.set_risk_manager(risk_manager)
+    paper_selected_strategy = _restore_paper_strategy(broker, engine)
     if toss_client.configured:
         async def warm_stock_directory() -> None:
             try:
@@ -778,7 +779,8 @@ def strategy_preset_preview(
         raise HTTPException(status_code=404, detail="지원하지 않는 기본 프리셋입니다.")
     try:
         return weekly_preset(kind, order_amount, toss_client.strategy_preset_candidates,
-                             fee_rate=settings.paper_fee_rate, slippage_rate=settings.paper_slippage_rate)
+                             fee_rate=settings.paper_fee_rate, slippage_rate=settings.paper_slippage_rate,
+                             max_count=10)
     except TossApiError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     except ValueError as exc:
@@ -1512,7 +1514,8 @@ async def select_paper_account(mode: str, user: AuthenticatedUser = Depends(requ
             price_feed=PaperPriceFeed(toss_client),
             decision_recorder=ml_decision_recorder.record,
         )
-        target = (new_broker, new_engine, datetime.now().astimezone(), "실험계좌", None)
+        target = (new_broker, new_engine, datetime.now().astimezone(), "실험계좌",
+                  _restore_paper_strategy(new_broker, new_engine))
     _paper_sessions[paper_account_mode] = current
     broker, engine, paper_snapshot_at, paper_source_account_label, paper_selected_strategy = target
     paper_account_mode = mode
@@ -1555,6 +1558,36 @@ async def snapshot_live_account(_: AuthenticatedUser = Depends(require_csrf)) ->
     return paper_workspace(_)
 
 
+def _configure_paper_strategy(target_engine, strategy):
+    target_symbols = [target.symbol for target in strategy.targets]
+    target_engine.configure(
+        interval_seconds=max(10, settings.strategy_interval_seconds),
+        short_period=strategy.short_period, long_period=strategy.long_period,
+        order_quantity=strategy.order_quantity, target_symbols=target_symbols,
+        sizing_mode=strategy.sizing_mode, order_amount=strategy.order_amount,
+        take_profit_rate=strategy.take_profit_rate,
+        stop_loss_rate=strategy.stop_loss_rate,
+        max_holding_days=strategy.max_holding_days,
+        trading_start=strategy.trading_start,
+        trading_end=strategy.trading_end,
+        cooldown_minutes=strategy.cooldown_minutes,
+        daily_order_limit=strategy.daily_order_limit,
+        strategy_id=strategy.id, strategy_name=strategy.name,
+    )
+
+
+def _restore_paper_strategy(target_broker, target_engine):
+    selection = target_broker.last_strategy_selection
+    if not selection:
+        return None
+    strategy = next((item for item in list_strategies(selection['user_id'])
+                     if item.id == selection['strategy_id'] and item.execution_mode == 'DRY_RUN'), None)
+    if strategy is None or any(not market.has_symbol(target.symbol) for target in strategy.targets):
+        return None
+    _configure_paper_strategy(target_engine, strategy)
+    return strategy
+
+
 @app.post("/paper/strategies/{strategy_id}/select", response_model=PaperWorkspaceStatus)
 @_serialize_paper_change
 async def select_paper_strategy(
@@ -1577,20 +1610,8 @@ async def select_paper_strategy(
             market.upsert_stock(Stock(symbol=target.symbol, name=target.stock_name, market="KRX"), price)
     except TossApiError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    engine.configure(
-        interval_seconds=max(10, settings.strategy_interval_seconds),
-        short_period=strategy.short_period, long_period=strategy.long_period,
-        order_quantity=strategy.order_quantity, target_symbols=target_symbols,
-        sizing_mode=strategy.sizing_mode, order_amount=strategy.order_amount,
-        take_profit_rate=strategy.take_profit_rate,
-        stop_loss_rate=strategy.stop_loss_rate,
-        max_holding_days=strategy.max_holding_days,
-        trading_start=strategy.trading_start,
-        trading_end=strategy.trading_end,
-        cooldown_minutes=strategy.cooldown_minutes,
-        daily_order_limit=strategy.daily_order_limit,
-        strategy_id=strategy.id, strategy_name=strategy.name,
-    )
+    await asyncio.to_thread(broker.remember_strategy, user.id, strategy.id, target_symbols)
+    _configure_paper_strategy(engine, strategy)
     paper_selected_strategy = strategy
     return paper_workspace(user)
 

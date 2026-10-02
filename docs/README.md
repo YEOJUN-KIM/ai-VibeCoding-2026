@@ -16,9 +16,11 @@
 | [VIBE_CODING_NOTES.md](VIBE_CODING_NOTES.md) | 프로젝트와 분리해 보관하는 개발 학습 메모 |
 | [machine-learning/](machine-learning/README.md) | 자동매매 머신러닝의 설치·데이터·학습·운영·포트폴리오 과정 |
 
+기준일: 2026-10-02. 현재 동작은 `CURRENT_STATE.md`에서, 아직 결정되지 않은 API·계좌 구조는 `BACKLOG.md`에서 확인합니다. `CHANGELOG.md`의 과거 기록은 당시 동작이며 현재 사양을 대신하지 않습니다.
+
 ## 문서 갱신 규칙
 
-- 기능이 완성되면 `CURRENT_STATE.md`와 `CHANGELOG.md`를 갱신합니다.
+- 기능이 완성되면 `CURRENT_STATE.md`와 `CHANGELOG.md`를 갱신하고 관련 사용·저장 문서도 함께 맞춥니다. `BACKLOG.md`·`ROADMAP.md`의 완료된 항목은 제거하거나 잔여 범위만 남깁니다.
 - 요구사항 자체가 바뀌면 `PRD.md`를 갱신합니다.
 - 바로 진행할 작업만 `ROADMAP.md`에 둡니다.
 - 보류된 아이디어는 `BACKLOG.md`에 두고 시작할 때 로드맵으로 옮깁니다.

@@ -62,6 +62,25 @@ class PaperMemoryTests(unittest.TestCase):
                                                        request_id="first")).id, 1)
         self.assertEqual(restarted.cash_balance(), Decimal("30000"))
 
+    def test_last_strategy_restores_per_account_without_running(self):
+        self.broker.remember_strategy(7, 12, ['005930'])
+        other = paper.PaperBroker(self.market, account_name='paper-experiment')
+        other.initialize()
+        other.remember_strategy(7, 23, ['000660'])
+        restarted_market = MarketSimulator(symbols=('000660',))
+        restarted = paper.PaperBroker(restarted_market)
+        restarted.initialize()
+        self.assertEqual(restarted.last_strategy_selection['strategy_id'], 12)
+        self.assertTrue(restarted_market.has_symbol('005930'))
+        self.assertFalse(MovingAverageEngine(restarted_market, restarted).running)
+        restarted_other = paper.PaperBroker(self.market, account_name='paper-experiment')
+        restarted_other.initialize()
+        self.assertEqual(restarted_other.last_strategy_selection['strategy_id'], 23)
+        with patch.object(restarted, '_save_state', side_effect=RuntimeError('database down')):
+            with self.assertRaises(RuntimeError):
+                restarted.remember_strategy(7, 99, ['000660'])
+        self.assertEqual(restarted.last_strategy_selection['strategy_id'], 12)
+
     def test_storage_failure_rolls_back_trade(self):
         with patch.object(self.broker, "_save_state", side_effect=RuntimeError("database down")):
             with self.assertRaises(RuntimeError):

@@ -1,5 +1,7 @@
 # 데이터 저장과 백업 정책
 
+기준일: 2026-10-02
+
 ## PostgreSQL
 
 현재 기본 구성은 Windows PostgreSQL 서비스의 `127.0.0.1:5432`, 데이터베이스 `auto_trader`입니다. Windows 시작 시 서비스가 함께 시작하므로 별도 프로젝트 DB 시작 명령은 필요하지 않습니다.
@@ -10,17 +12,18 @@
 
 - 관리자와 인증 세션: `admin_users`, `auth_sessions`
 - 관심종목: `favorite_stocks`
-- 두 PAPER 계좌의 잔액·보유수량·매입단가·시작 자산·비용·주문 상태·관리 범위·자동매수분의 전략/수량/청산 조건: `paper_account_state` (계좌별 저장)
+- 두 PAPER 계좌의 잔액·보유수량·매입단가·시작 자산·비용·주문 상태·관리 범위·자동매수분의 전략/수량/청산 조건·마지막 선택 전략: `paper_account_state` (계좌별 저장)
 - 전략과 대상 종목: `live_strategies`, `live_strategy_symbols`
 - 기본 프리셋 주간 후보 데이터·주간 기준일·생성 시각: `strategy_preset_market`. 현재 주간 데이터 한 건을 유지하며, 사용자 저장 전략과 분리합니다. 갱신·별도 저장 방식은 [PAPER_STRATEGY.md](PAPER_STRATEGY.md)를 참고합니다.
 - 위험 설정과 일별 스냅샷: `risk_settings`, `risk_daily_snapshots`
 - 브로커 계좌·주문·이벤트: `broker_accounts`, `live_orders`, `live_order_events`
 - 장기 분석·자동 추천·내 후보: `long_term_analyses`, `long_term_recommendations`, `long_term_watchlist`
+- ML 원본 종목·시장 봉, 수집 실행, 거시 지표, 봉별 PAPER 판단, 품질 보고서: `ml_raw_candles`, `ml_market_indicator_candles`, `ml_collection_runs`, `ml_macro_observations`, `ml_strategy_decisions`, `ml_data_quality_reports`. 세부 저장·검증 기준은 [머신러닝 구현 현황](machine-learning/CURRENT_PROGRESS.md)을 참고합니다.
 - 호환 및 향후 확장을 위한 거래 테이블: `stocks`, `accounts`, `positions`, `strategy_runs`, `signals`, `orders`, `executions`, `order_events`, `cash_transactions`
 
 ## 메모리와 로컬 파일
 
-PAPER 자산과 주문 상태는 변경할 때 DB에 저장하고 재시작 시 복구합니다. 초기화 버튼은 마지막 시작 자산으로 되돌립니다. 실제 자산 다시 복사는 새 시작 자산을 만듭니다. 자동매매 실행 상태와 전략 성과의 기준선은 메모리에 있으며 재시작 후 전략을 다시 선택해 실행합니다. 다중 워커 간 자산 변경 조정은 지원하지 않으므로 단일 워커만 사용합니다.
+PAPER 자산과 주문 상태는 변경할 때 DB에 저장하고 재시작 시 복구합니다. 초기화 버튼은 마지막 시작 자산으로 되돌립니다. 실제 자산 다시 복사는 새 시작 자산을 만듭니다. 마지막 선택 전략은 DB에서 복원해 미리 선택합니다. 자동매매 실행 상태와 전략 성과 기준선·화면의 최신 판단은 메모리에 있어 재시작 시 초기화되며, 사용자가 전략 시작을 눌러 재개합니다. 학습용 판단 데이터는 별도 DB 기록입니다. 다중 워커 간 자산 변경 조정은 지원하지 않으므로 단일 워커만 사용합니다.
 
 PAPER 주문 감사 기록은 `.paper-history/orders.jsonl`에 남지만 이 파일만으로 계좌 상태를 완전히 복구하지는 않습니다. 일반 외부 API 응답 캐시는 일시 데이터입니다. 기본 프리셋의 주간 후보 데이터는 같은 주의 일관성을 유지하기 위해 별도로 PostgreSQL에 보관합니다.
 
@@ -51,6 +54,10 @@ python backup_database.py --verify
 
 ## PAPER 관리 정보
 
-`paper_account_state.state`에는 `management_scope`와 `auto_lots`를 함께 저장합니다. 자동매수분별 전략 ID·이름·수량·단가·취득 시각·청산 조건을 보존하며 새 테이블을 추가하지 않습니다. 기존 저장 상태에 해당 키가 없으면 AUTO 범위와 빈 자동매수 기록으로 복구합니다. 예전 주문 이력만 보고 소유 전략을 추정하지 않습니다.
+`paper_account_state.state`에는 `management_scope`, `auto_lots`, `last_strategy_selection`을 함께 저장합니다. 자동매수분별 전략 ID·이름·수량·단가·취득 시각·청산 조건을 보존하며 새 테이블을 추가하지 않습니다. 기존 저장 상태에 해당 키가 없으면 AUTO 범위·빈 자동매수 기록·선택 전략 없음으로 복구합니다. 예전 주문 이력만 보고 소유 전략을 추정하지 않습니다.
 
-화면에서 표시하는 계좌와 실행 중인 워커는 별개입니다. 각 계좌의 워커·선택 전략은 프로세스 메모리에 보관하며, 계좌 전환으로 워커를 종료하지 않습니다. 최근 선택한 설정 전략 목록은 사용자별 브라우저 localStorage에 저장합니다.
+화면에서 표시하는 계좌와 실행 중인 워커는 별개입니다. 각 계좌 워커는 프로세스 메모리에 보관하며 계좌 전환으로 종료하지 않습니다. 마지막 선택은 `last_strategy_selection`의 사용자 ID·전략 ID·대상 종목으로 저장합니다. 복구 시 해당 사용자의 저장 전략을 조회해 DRY RUN 여부와 종목 복구 가능 여부를 확인한 뒤 엔진을 설정하며, 자동 실행하지 않습니다.
+
+설정 화면의 최근 선택 전략 목록은 사용자별 브라우저 localStorage에 저장하며 PAPER의 계좌별 마지막 전략과는 별개입니다. 내 자산 가림 선택도 브라우저에 저장하지만 실제 자산 값은 localStorage에 저장하지 않습니다.
+
+현재 PAPER 계좌와 토스 API 연결은 서버 전역 구성입니다. 사용자별 API 연결과 여러 실제 계좌에 맞춘 저장 키·권한 분리는 [BACKLOG.md](BACKLOG.md)의 계정 설정 설계에서 검토합니다.

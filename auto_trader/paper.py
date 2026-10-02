@@ -71,6 +71,7 @@ class PaperBroker:
         self.account_id = None
         self.risk_manager = None
         self.snapshot_metadata = {}
+        self._last_strategy_selection = {}
         self._management_scope = "AUTO"
         self._strategy_context = {}
         self._management_symbols = []
@@ -118,7 +119,7 @@ class PaperBroker:
         def positions(rows):
             return {symbol: {'quantity': int(row['quantity']), 'average_price': str(row['average_price'])}
                     for symbol, row in rows.items()}
-        symbols = set(self._positions) | set(self._seed_positions)
+        symbols = set(self._positions) | set(self._seed_positions) | set(self._last_strategy_selection.get("symbols", []))
         stocks = {stock.symbol: stock for stock in self.market.stocks()}
         return dict(version=1, cash=str(self._cash), initial_cash=str(self.initial_cash),
                     seed_cash=str(self._seed_cash), positions=positions(self._positions),
@@ -127,7 +128,7 @@ class PaperBroker:
                     requests={key: order.id for key, order in self._requests.items()},
                     next_order_id=self._next_order_id, fees=str(self._total_fees), taxes=str(self._total_taxes),
                     metadata=self.snapshot_metadata, management_scope=self._management_scope,
-                    auto_lots=self._auto_lots,
+                    auto_lots=self._auto_lots, last_strategy_selection=self._last_strategy_selection,
                     stocks={symbol: {'stock': stocks[symbol].model_dump(mode='json'),
                                      'price': str(self.market.quote(symbol).price)} for symbol in symbols})
 
@@ -161,11 +162,21 @@ class PaperBroker:
         self._next_order_id = state['next_order_id']
         self._total_fees, self._total_taxes = Decimal(state['fees']), Decimal(state['taxes'])
         self.snapshot_metadata = state.get('metadata', {})
+        self._last_strategy_selection = state.get("last_strategy_selection", {})
         # Execution remains stopped; ownership and exit rules survive restart.
         self._management_scope = state.get("management_scope", "AUTO")
         self._auto_lots = state.get("auto_lots", [])
         self._managed_lots = []
         self._strategy_positions = {}
+
+    @property
+    def last_strategy_selection(self):
+        return deepcopy(self._last_strategy_selection)
+
+    @persisted
+    def remember_strategy(self, user_id, strategy_id, symbols):
+        self._last_strategy_selection = {"user_id": user_id, "strategy_id": strategy_id,
+                                         "symbols": list(symbols)}
 
     def set_risk_manager(self, risk_manager):
         self.risk_manager = risk_manager

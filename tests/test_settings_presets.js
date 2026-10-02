@@ -15,7 +15,7 @@ const context = {document:{querySelector:node,querySelectorAll:()=>buttons},wind
   won:{format:String},Date,encodeURIComponent};
 vm.createContext(context);
 vm.runInContext(fs.readFileSync('auto_trader/static/settings-presets.js','utf8'),context);
-const result = name=>({name,basis:'기준',week_start:'2026-09-28',next_refresh_on:'2026-10-05',payload:{},targets:[{symbol:'005930',stock_name:'<safe>',price:50000,quantity_estimate:5,rank:2}],planned_budget:300000,generated_at:'2026-10-01T01:00:00Z',notes:['<note>']});
+const result = name=>({max_count:10,name,basis:'기준',week_start:'2026-09-28',next_refresh_on:'2026-10-05',payload:{},targets:[{symbol:'005930',stock_name:'<safe>',price:50000,quantity_estimate:5,rank:2}],planned_budget:300000,generated_at:'2026-10-01T01:00:00Z',notes:['<note>']});
 (async()=>{
   node('#preset-budget').value='300000';
   const first = buttons[0].click();
@@ -54,8 +54,17 @@ const result = name=>({name,basis:'기준',week_start:'2026-09-28',next_refresh_
   assert.equal(node('#preset-preview').open,true);
   node('#preset-preview').cancel({preventDefault(){}});
   assert.equal(node('#preset-preview').open,false,'Escape closes the modal');
+  const expanded=buttons[0].click();
+  assert.ok(calls[5].endsWith('order_amount=200000'));
+  pending[5].resolve({...result('인기'),max_count:10,eligible_count:2,selection_message:'최대 10종목 · 예산 조건까지 통과 2종목 · 선정 1종목'});await expanded;
+  assert.match(node('#preset-preview').innerHTML,/최대 10종목/);
+  assert.match(node('#preset-preview').innerHTML,/후보가 적어/);
+  node('#preset-budget').input();
+  assert.equal(node('#preset-preview').hidden,true,'budget changes invalidate old preview');
+  node('#preset-preview').click({target:{closest:selector=>selector==='[data-apply-default-preset]'}});
+  assert.equal(applied,1);
   node('#preset-budget').reportValidity=()=>false;
-  await buttons[0].click();assert.equal(calls.length,5,'invalid budgets make no requests');
+  await buttons[0].click();assert.equal(calls.length,6,'invalid budgets make no requests');
   let resetCount=0, confirmed=false;
   const values = new Map();
   const field = id=>{if(!values.has(id))values.set(id,{value:'',scrollIntoView(){}});return values.get(id);};

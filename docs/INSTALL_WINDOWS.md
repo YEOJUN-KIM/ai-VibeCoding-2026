@@ -103,7 +103,7 @@ DART_API_KEY=발급받은_OpenDART_인증키
 ```
 
 - `.env`에는 따옴표나 등호 주변의 불필요한 공백을 넣지 않는 것이 안전하다.
-- `TOSS_ACCOUNT`는 계좌를 하나만 사용한다면 비워 둘 수 있다.
+- `TOSS_ACCOUNT`는 API가 반환한 계좌가 하나이면 비워 둘 수 있다. 여러 계좌가 반환되면 사용할 `accountSeq`를 지정한다. 현재 앱은 이 계좌 하나를 선택해 사용하며, 사용자별 API 등록·여러 계좌 전환 UI는 아직 제공하지 않는다. 향후 설계는 [BACKLOG.md](BACKLOG.md)를 참고한다.
 - `DART_API_KEY`는 무료 OpenDART 인증키이며, 비워 두면 기업·재무·배당·공시만 표시되지 않는다.
 - 토스 허용 IP는 `.env`가 아니라 토스증권 Open API 관리 화면에 등록한다.
 - `.env`는 Git에서 제외되며 절대 커밋하지 않는다.
@@ -135,7 +135,7 @@ python -m auto_trader.set_live_pin
 ## 8. 실행과 확인
 
 ```powershell
-python -m auto_trader
+.\.venv\Scripts\python.exe -m auto_trader
 ```
 
 - 로그인: `http://127.0.0.1:8000/login`
@@ -143,7 +143,9 @@ python -m auto_trader
 - LIVE 실제계좌 조회: `http://127.0.0.1:8000/live`
 - API 문서: `http://127.0.0.1:8000/docs`
 
-LIVE 화면에서 총자산, 보유종목, 원화·외화 매수 가능 금액이 나오면 계좌 연결이 완료된 것이다. 국내 종목 검색과 관심종목은 조회 전용이며, 현재 실제 주문 기능은 잠겨 있다.
+LIVE 화면에서 총자산, 보유종목, 원화·외화 매수 가능 금액이 나오면 계좌 연결이 완료된 것이다. 실제 수동 주문은 주문 PIN·서버 안전 잠금·입력 검증을 모두 통과해야 하며, 연결 성공만으로 주문이 허용되는 것은 아니다.
+
+PAPER에서는 계좌 확인 → 전략 선택(즉시 적용) → 전략 시작 순서로 진행한다. 재시작 후 자산과 마지막 선택 전략은 복원되지만 자동매매는 정지 상태이며 전략 시작을 눌러야 한다. 세부 동작은 [PAPER_STRATEGY.md](PAPER_STRATEGY.md)를 참고한다.
 
 ## 9. 테스트
 

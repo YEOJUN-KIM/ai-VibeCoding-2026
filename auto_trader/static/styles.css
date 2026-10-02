@@ -1345,5 +1345,22 @@ body:has(#preset-preview[open]){overflow:hidden}
 .paper-results-links{display:flex;flex-wrap:wrap;gap:12px;margin-top:20px;padding-top:18px;border-top:1px solid var(--panel-border)}
 .paper-results-links>span{width:100%;font-size:11px;color:var(--muted)}
 .paper-results-links button{border:0;background:none;padding:0;color:var(--accent-bright);font:inherit;font-size:12px;cursor:pointer}
+.live-portfolio-actions{display:flex;align-items:center;flex-wrap:wrap;justify-content:flex-end;gap:14px}
+.asset-eye-button{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-width:32px;min-height:32px;padding:6px;border:1px solid transparent;border-radius:7px;background:transparent;color:var(--muted);cursor:pointer;font:inherit;font-size:12px}
+.asset-eye-button:hover,.asset-eye-button[aria-pressed="true"]{color:var(--accent-bright);background:rgba(139,92,246,.1)}
+.asset-eye-button:focus-visible{outline:2px solid var(--accent-bright);outline-offset:2px}
+.asset-privacy-all{padding:7px 10px;border-color:var(--panel-border)}
+.default-presets-heading{display:grid;grid-template-columns:minmax(0,1fr) minmax(160px,220px);gap:14px}
+.default-presets-heading>div{grid-column:1/-1}
+.default-presets-heading label{min-width:0}
+.preset-selection-summary{padding:12px 14px;border-radius:8px;background:rgba(139,92,246,.08);font-size:12px;line-height:1.7;color:var(--accent-bright)}
+@media(max-width:560px){.default-presets-heading{grid-template-columns:1fr}}
+.live-summary-grid>div{position:relative}
+.live-summary-grid>div>span{padding-right:30px}
+.asset-privacy-card{position:absolute;top:6px;right:7px}
+.live-summary-grid [data-privacy-hidden="true"],.live-portfolio-panel [data-privacy-hidden="true"]{filter:blur(3px);user-select:none;color:var(--muted)!important;letter-spacing:3px}
+.live-holdings-heading{display:flex;align-items:center;justify-content:space-between;margin:18px 0 8px}
+.live-holdings-heading h3{margin:0;font-size:14px}
+@media(max-width:760px){.live-portfolio-actions{justify-content:flex-start;gap:8px}.asset-privacy-all{font-size:11px}}
 @media(max-width:1250px){.paper-controls-panel .paper-controls-grid{grid-template-columns:minmax(0,1fr) minmax(0,1.3fr)}.paper-execution-panel{grid-column:1/-1}}
 @media(max-width:760px){.paper-controls-panel .paper-controls-grid{grid-template-columns:1fr}.paper-execution-panel{grid-column:auto}.paper-next-step{flex-direction:column;gap:4px}.paper-controls-panel .paper-account-summary-heading{padding-right:95px}.paper-controls-panel .paper-account-summary-heading .pill{font-size:9px}}

@@ -1,5 +1,6 @@
 (() => {
   const budget = document.querySelector('#preset-budget');
+  const maxCount = 10;
   const status = document.querySelector('#preset-status');
   const preview = document.querySelector('#preset-preview');
   const buttons = [...document.querySelectorAll('[data-default-preset]')];
@@ -28,14 +29,15 @@
     try {
       const result=await api(`/settings/strategy-presets/${button.dataset.defaultPreset}?order_amount=${encodeURIComponent(budget.value)}`);
       if(request!==sequence)return;
+      if(result.max_count!==Number(maxCount))throw new Error('서버가 아직 이전 버전입니다. 서버 재시작 후 최대 10종목 프리셋을 사용할 수 있습니다.');
       draft=result;
       metadataVersion++;renderRefreshInfo({...result,current:true});
       previewButton=button;
-      preview.innerHTML=`<h4>${esc(result.name)} · ${result.targets.length}종목</h4><p>${esc(result.basis)}</p><div class="table-wrap"><table><thead><tr><th>종목</th><th>참고 가격</th><th>예상 수량</th><th>거래대금 순위</th></tr></thead><tbody>${result.targets.map(t=>`<tr><td>${esc(t.stock_name)} <small>${esc(t.symbol)}</small></td><td>${esc(won.format(Number(t.price)))}</td><td>${esc(t.quantity_estimate)}주</td><td>${esc(t.rank)}위</td></tr>`).join('')}</tbody></table></div><p>선택 종목당 한 번씩 매수할 때 예산 합계: ${esc(won.format(Number(result.planned_budget)))} · 계좌 잔액·투자 한도 확인 필요</p><ul>${result.notes.map(n=>`<li>${esc(n)}</li>`).join('')}</ul><small>조회 ${esc(new Date(result.generated_at).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}))} · 장외에는 최근 제공된 시세 사용</small><div class="preset-preview-actions"><button class="button primary" type="button" data-apply-default-preset>이 설정으로 새 전략 만들기</button></div>`;
+      preview.innerHTML=`<h4>${esc(result.name)} · ${result.targets.length}종목</h4><p>${esc(result.basis)}</p><p class="preset-selection-summary">${esc(result.selection_message||`최대 ${maxCount}종목 · 선정 ${result.targets.length}종목`)}${result.targets.length<Number(maxCount)?'<br>최대값보다 후보가 적어 조건을 통과한 종목을 모두 제공합니다.':''}</p><div class="table-wrap"><table><thead><tr><th>종목</th><th>참고 가격</th><th>예상 수량</th><th>거래대금 순위</th></tr></thead><tbody>${result.targets.map(t=>`<tr><td>${esc(t.stock_name)} <small>${esc(t.symbol)}</small></td><td>${esc(won.format(Number(t.price)))}</td><td>${esc(t.quantity_estimate)}주</td><td>${esc(t.rank)}위</td></tr>`).join('')}</tbody></table></div><p>선택 종목당 한 번씩 매수할 때 예산 합계: ${esc(won.format(Number(result.planned_budget)))} · 계좌 잔액·투자 한도 확인 필요</p><ul>${result.notes.map(n=>`<li>${esc(n)}</li>`).join('')}</ul><small>조회 ${esc(new Date(result.generated_at).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}))} · 장외에는 최근 제공된 시세 사용</small><div class="preset-preview-actions"><button class="button primary" type="button" data-apply-default-preset>이 설정으로 새 전략 만들기</button></div>`;
       preview.innerHTML=`<div class="preset-preview-heading"><strong id="preset-preview-title">프리셋 미리보기</strong><button class="button secondary" type="button" data-close-preset-preview>미리보기 닫기</button></div><p>주간 기준 ${esc(result.week_start)} · 다음 갱신 기준 ${esc(result.next_refresh_on)} (한국시간)<br>마음에 드는 구성은 이름을 바꿔 따로 저장하세요. 저장한 전략은 주간 갱신으로 바뀌지 않습니다.</p>${preview.innerHTML}`;
       preview.hidden=false;
       preview.showModal();
-      status.textContent=result.targets.length<3?'조건을 충족한 종목만 표시합니다. 부족한 수를 다른 종목으로 채우지 않습니다.':'종목과 예산을 확인한 뒤 새 전략으로 저장하세요.';
+      status.textContent=result.targets.length<Number(maxCount)?'조건을 충족한 종목만 표시합니다. 부족한 수를 다른 종목으로 채우지 않습니다.':'종목과 예산을 확인한 뒤 새 전략으로 저장하세요.';
     } catch(error) { if(request===sequence){status.textContent=error.message;draft=null;} }
     finally { if(request===sequence)buttons.forEach(b=>b.disabled=false); }
   }));

@@ -144,10 +144,31 @@ const guide=()=>vm.runInContext('renderControlGuide(setupWorkspace,setupStrategy
 guide();assert.match($('#paper-next-step').textContent,/1단계/);assert.equal($('#start-button').disabled,true);
 scope.setupWorkspace.snapshot_ready=true;guide();assert.match($('#paper-next-step').textContent,/전략을 만들어/);
 vm.runInContext('strategies=[{id:1},{id:2}]',scope);
-picker.value='';guide();assert.match($('#paper-next-step').textContent,/전략을 고르고/);assert.equal($('#select-strategy-button').disabled,true);
-picker.value='1';guide();assert.match($('#paper-next-step').textContent,/아직/);assert.equal($('#select-strategy-button').disabled,false);assert.equal($('#start-button').disabled,true);
-scope.setupWorkspace.selected_strategy_id=1;guide();assert.match($('#paper-next-step').textContent,/준비가 끝/);assert.equal($('#select-strategy-button').textContent,'적용됨');assert.equal($('#start-button').disabled,false);assert.equal($('#stop-button').disabled,true);
-picker.value='2';guide();assert.match($('#paper-execution-guide').textContent,/현재 적용된 전략/);assert.equal(picker.value,'2');assert.equal($('#start-button').disabled,true,'an unapplied draft cannot start the previous strategy');
-scope.setupStrategy.running=true;guide();assert.match($('#paper-next-step').textContent,/주문 기록/);assert.equal($('#select-strategy-button').disabled,true);assert.equal($('#start-button').disabled,true);assert.equal($('#stop-button').disabled,false);
+picker.value='';guide();assert.match($('#paper-next-step').textContent,/전략을 고르/);
+picker.value='1';guide();assert.match($('#paper-next-step').textContent,/적용하고/);assert.equal($('#start-button').disabled,true);
+scope.setupWorkspace.selected_strategy_id=1;guide();assert.match($('#paper-next-step').textContent,/준비가 끝/);assert.equal($('#start-button').disabled,false);assert.equal($('#stop-button').disabled,true);
+picker.value='2';guide();assert.match($('#paper-execution-guide').textContent,/기다려/);assert.equal(picker.value,'2');assert.equal($('#start-button').disabled,true,'an unapplied draft cannot start the previous strategy');
+scope.setupStrategy.running=true;guide();assert.match($('#paper-next-step').textContent,/주문 기록/);assert.equal($('#start-button').disabled,true);assert.equal($('#stop-button').disabled,false);
 scope.setupStrategy={running:false,emergency_stopped:true};picker.value='1';guide();assert.match($('#paper-execution-guide').textContent,/긴급 중지/);assert.match($('#paper-snapshot-help').textContent,/기존 모의계좌/);
 console.log('Setup guide passed: unprepared account, no strategies, unapplied choice, ready, running and emergency stop.');
+
+// Choosing a strategy saves immediately, blocks starting during save, and restores selection on failure.
+vm.runInContext(source.slice(source.indexOf("$('#paper-account-comparison').addEventListener"),source.indexOf("$('#start-button').addEventListener")),scope);
+(async()=>{
+ scope.setupWorkspace.selected_strategy_id=1;scope.setupStrategy={running:false};picker.value='2';guide();
+ let finish;const saved=new Promise(resolve=>finish=resolve);let calls=0;
+ scope.api=async(path,options)=>{calls++;assert.equal(path,'/paper/strategies/2/select');assert.equal(options.method,'POST');await saved;};
+ scope.refresh=async()=>{};
+ const changing=picker.change();assert.equal(picker.disabled,true);assert.equal($('#start-button').disabled,true);
+ await picker.change();assert.equal(calls,1,'duplicate changes do not send another selection');
+ finish();await changing;assert.match($('#paper-action-message').textContent,/선택한 전략을 적용/);
+ picker.value='2';scope.api=async()=>{throw new Error('저장 실패');};await picker.change();
+ assert.equal(picker.value,'1');assert.match($('#paper-action-message').textContent,/변경하지 못/);
+ const details=[{open:false},{open:false}];scope.document.querySelectorAll=()=>details;
+ const summary={closest:()=>details[0]};let prevented=false;
+ $('#paper-account-comparison').click({target:{closest:()=>summary},preventDefault(){prevented=true;}});
+ assert.equal(prevented,true);assert.ok(details.every(item=>item.open));
+ $('#paper-account-comparison').click({target:{closest:()=>summary},preventDefault(){}});
+ assert.ok(details.every(item=>!item.open));
+ console.log('Immediate selection passed: save, duplicate guard, busy start, failure restore; account details expand/collapse together.');
+})().catch(error=>{console.error(error);process.exitCode=1;});

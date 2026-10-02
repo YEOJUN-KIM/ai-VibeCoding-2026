@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>포트폴리오 · FOLIO</title>
   <link rel="stylesheet" href="/static/styles.css">
+  <script src="/static/live-privacy.js" defer></script>
   <script src="/static/live.js" defer></script>
   <script src="/static/header-status.js" defer></script>
 <link rel="icon" type="image/svg+xml" href="/static/favicon.svg"></head>
@@ -44,18 +45,19 @@
 
       <section class="panel live-portfolio-panel workspace-section-panel" data-live-panel="portfolio">
         <div class="panel-heading">
-          <div><p class="section-kicker">MY PORTFOLIO</p><h2>내 포트폴리오</h2><p class="subtitle" id="live-account-label">자산 현황을 불러오는 중입니다.</p></div>
-          <div class="live-connection"><span class="status-dot" id="account-dot"></span><span id="live-connection-status">연결 중...</span></div>
+          <div><p class="section-kicker">MY PORTFOLIO</p><h2>내 포트폴리오</h2><p class="subtitle" data-private-value="account" id="live-account-label">자산 현황을 불러오는 중입니다.</p></div>
+          <div class="live-portfolio-actions"><button class="asset-eye-button asset-privacy-all" type="button" data-privacy-toggle="all" aria-label="전체 자산 가리기">전체 자산 가리기</button><div class="live-connection"><span class="status-dot" id="account-dot"></span><span id="live-connection-status">연결 중...</span></div></div>
         </div>
         <div class="live-summary-grid">
-          <div class="asset-primary"><span>추정 총자산</span><strong id="live-total-assets">-</strong><small>평가금액 + 원화 현금 매수 가능</small></div>
-          <div><span>매입금액</span><strong id="live-purchase">-</strong></div>
-          <div><span>평가금액</span><strong id="live-market-value">-</strong></div>
-          <div><span>총 평가손익</span><strong id="live-profit">-</strong><small id="live-profit-rate">-</small></div>
-          <div><span id="live-daily-profit-label">오늘 평가손익</span><strong id="live-daily-profit">-</strong><small id="live-daily-rate">-</small><small id="live-daily-profit-basis">장 운영 정보를 확인하는 중</small></div>
-          <div><span>원화</span><strong id="live-buying-power-krw">-</strong><small>미수 미발생 기준</small></div>
-          <div><span>달러</span><strong id="live-buying-power-usd">-</strong><small>미수 미발생 기준</small></div>
+          <div class="asset-primary"><span>추정 총자산</span><button class="asset-eye-button asset-privacy-card" type="button" data-privacy-toggle="assets" data-privacy-label="추정 총자산" aria-label="추정 총자산 가리기"></button><strong data-private-value="assets" id="live-total-assets">-</strong><small>평가금액 + 원화 현금 매수 가능</small></div>
+          <div><span>매입금액</span><button class="asset-eye-button asset-privacy-card" type="button" data-privacy-toggle="purchase" data-privacy-label="매입금액" aria-label="매입금액 가리기"></button><strong data-private-value="purchase" id="live-purchase">-</strong></div>
+          <div><span>평가금액</span><button class="asset-eye-button asset-privacy-card" type="button" data-privacy-toggle="market" data-privacy-label="평가금액" aria-label="평가금액 가리기"></button><strong data-private-value="market" id="live-market-value">-</strong></div>
+          <div><span>총 평가손익</span><button class="asset-eye-button asset-privacy-card" type="button" data-privacy-toggle="profit" data-privacy-label="총 평가손익" aria-label="총 평가손익 가리기"></button><strong data-private-value="profit" id="live-profit">-</strong><small data-private-value="profit" id="live-profit-rate">-</small></div>
+          <div><span id="live-daily-profit-label">오늘 평가손익</span><button class="asset-eye-button asset-privacy-card" type="button" data-privacy-toggle="daily" data-privacy-label="일일 평가손익" aria-label="일일 평가손익 가리기"></button><strong data-private-value="daily" id="live-daily-profit">-</strong><small data-private-value="daily" id="live-daily-rate">-</small><small id="live-daily-profit-basis">장 운영 정보를 확인하는 중</small></div>
+          <div><span>원화</span><button class="asset-eye-button asset-privacy-card" type="button" data-privacy-toggle="krw" data-privacy-label="원화" aria-label="원화 가리기"></button><strong data-private-value="krw" id="live-buying-power-krw">-</strong><small>미수 미발생 기준</small></div>
+          <div><span>달러</span><button class="asset-eye-button asset-privacy-card" type="button" data-privacy-toggle="usd" data-privacy-label="달러" aria-label="달러 가리기"></button><strong data-private-value="usd" id="live-buying-power-usd">-</strong><small>미수 미발생 기준</small></div>
         </div>
+        <div class="live-holdings-heading"><h3>보유 종목</h3><button class="asset-eye-button" type="button" data-privacy-toggle="holdings" data-privacy-label="보유 종목" aria-label="보유 종목 가리기"></button></div>
         <div class="table-wrap"><table>
           <thead><tr><th>보유종목</th><th>수량</th><th>평균 매입가</th><th>현재가</th><th>평가금액</th><th>평가손익</th></tr></thead>
           <tbody id="live-holdings-body"><tr><td class="empty" colspan="6">보유종목을 불러오는 중입니다.</td></tr></tbody>

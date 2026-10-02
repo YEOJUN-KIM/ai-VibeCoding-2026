@@ -40,15 +40,15 @@ function holdingStockCell(item) {
   return `<a class="candidate-stock-link" href="/stocks/${encodeURIComponent(item.symbol)}?from=live&section=portfolio" title="${escapeHtml(item.name)} 상세 보기">${body}</a>`;
 }
 
+let privacyHoldings = [];
 function renderPortfolio(data) {
-  $("#live-account-label").textContent = `${data.account_label} · 5초 자동 갱신`;
-  $("#live-purchase").textContent = won.format(Number(data.total_purchase_krw));
-  $("#live-market-value").textContent = won.format(Number(data.market_value));
+  AssetPrivacy.write("live-account-label", "account", `${data.account_label} · 5초 자동 갱신`);
+  AssetPrivacy.write("live-purchase", "purchase", won.format(Number(data.total_purchase_krw)));
+  AssetPrivacy.write("live-market-value", "market", won.format(Number(data.market_value)));
   for (const [id, amount, rateId, rate] of [["live-profit", data.profit_loss, "live-profit-rate", data.profit_rate], ["live-daily-profit", data.daily_profit_loss, "live-daily-rate", data.daily_profit_rate]]) {
-    const element = $("#" + id);
-    element.textContent = won.format(Number(amount));
-    element.className = Number(amount) > 0 ? "positive" : Number(amount) < 0 ? "negative" : "neutral";
-    $("#" + rateId).textContent = `${Number(rate).toFixed(2)}%`;
+    const group = id === "live-profit" ? "profit" : "daily";
+    AssetPrivacy.write(id, group, won.format(Number(amount)), Number(amount) > 0 ? "positive" : Number(amount) < 0 ? "negative" : "neutral");
+    AssetPrivacy.write(rateId, group, `${Number(rate).toFixed(2)}%`);
   }
   const referenceDate = String(data.daily_profit_reference_date || "").replaceAll("-", ".");
   if (data.market_open_today === false) {
@@ -61,7 +61,16 @@ function renderPortfolio(data) {
     $("#live-daily-profit-label").textContent = "최근 일일 평가손익";
     $("#live-daily-profit-basis").textContent = `${referenceDate} 장 상태 확인 불가`;
   }
-  $("#live-holdings-body").innerHTML = data.holdings.length ? data.holdings.map((item) => `<tr>
+  privacyHoldings = data.holdings;
+  renderPrivateHoldings();
+}
+
+function renderPrivateHoldings() {
+  if (AssetPrivacy.hidden('holdings')) {
+    $("#live-holdings-body").innerHTML = '<tr>' + Array.from({length:6},()=>'<td><span data-privacy-hidden="true" aria-label="가려진 보유 정보">••••••</span></td>').join('') + '</tr>';
+    return;
+  }
+  $("#live-holdings-body").innerHTML = privacyHoldings.length ? privacyHoldings.map((item) => `<tr>
     <td>${holdingStockCell(item)}</td><td>${number.format(Number(item.quantity))}주</td>
     <td>${won.format(Number(item.average_purchase_price))}</td><td>${won.format(Number(item.last_price))}</td>
     <td>${won.format(Number(item.market_value))}</td>
@@ -70,8 +79,8 @@ function renderPortfolio(data) {
 }
 
 function renderBuyingPower(data) {
-  $("#live-buying-power-krw").textContent = won.format(Number(data.krw_cash_buying_power));
-  $("#live-buying-power-usd").textContent = dollar.format(Number(data.usd_cash_buying_power));
+  AssetPrivacy.write("live-buying-power-krw", "krw", won.format(Number(data.krw_cash_buying_power)));
+  AssetPrivacy.write("live-buying-power-usd", "usd", dollar.format(Number(data.usd_cash_buying_power)));
 }
 
 function renderCandidates(data) {
@@ -176,9 +185,9 @@ async function refreshPortfolio() {
     ]);
     renderPortfolio(portfolio);
     renderBuyingPower(buyingPower);
-    $("#live-total-assets").textContent = won.format(
+    AssetPrivacy.write("live-total-assets", "assets", won.format(
       Number(portfolio.market_value) + Number(buyingPower.krw_cash_buying_power)
-    );
+    ));
     const time = new Date().toLocaleTimeString("ko-KR");
     $("#live-connection-status").textContent = `토스 연결됨 · ${time}`;
     $("#account-dot").classList.add("online");
@@ -393,3 +402,6 @@ $("#delete-today-dry-runs").addEventListener("click", async () => {
 });
 
 initialize();
+
+AssetPrivacy.onChange(renderPrivateHoldings);
+renderPrivateHoldings();

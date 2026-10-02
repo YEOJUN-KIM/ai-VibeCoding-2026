@@ -16,7 +16,7 @@ ai-VibeCoding-2026/
 └─ README.md          프로젝트 시작 안내
 ```
 
-로컬 실행 중 생성되는 `.env`, `.paper-history/`, `backups/`와 로그는 소스가 아닙니다.
+로컬 실행 중 생성되는 `.env`, `.paper-history/`, `.backups/`, `.runtime-logs/`와 로그는 소스가 아닙니다.
 
 ## 서버와 공통 기능
 
@@ -30,6 +30,7 @@ ai-VibeCoding-2026/
 ## 시장 데이터와 분석
 
 - `toss.py`: 토스증권 인증, 계좌, 시세와 차트 API
+- `quote_stream.py`: 공유 토스 WebSocket 구독과 상세 페이지 시세 전달
 - `dart.py`: OpenDART 기업·공시·재무 데이터
 - `news.py`: 뉴스 수집과 유사 기사 그룹화
 - `ai_news.py`: 선택형 AI 뉴스 처리
@@ -60,7 +61,7 @@ ai-VibeCoding-2026/
 ## PAPER와 전략
 
 - `paper_feed.py`: PAPER용 실제 시세와 완료 봉 공급
-- `paper.py`: 모의 계좌, 체결, 비용, 기록과 손익
+- `paper.py`: 모의 계좌, 체결, 비용, 기록과 손익·마지막 선택 전략 저장
 - `strategy.py`: 이동평균 신호, 실행 제어와 청산 조건
 - `strategy_presets.py`: 기본 인기·가성비 후보 선별, 주간 데이터 저장·재사용과 새 전략 초안
 - `simulator.py`: 시뮬레이션 보조
@@ -79,8 +80,9 @@ ai-VibeCoding-2026/
 `auto_trader/static/`에 페이지별 HTML과 JavaScript, 공통 `styles.css`, 헤더 상태를 관리하는 `header-status.js`가 있습니다.
 
 - `login`: 로그인과 준비 상태
-- `index`: PAPER 트레이딩 랩
+- `index.html`·`app.js`: PAPER 화면, 계좌별 전략 선택 즉시 적용·상세 동시 펼침·기록 필터
 - `live`: LIVE 계좌와 주문 기록
+- `live-privacy.js`: 전체·카드별 자산 가림과 브라우저 가림 선택 저장
 - `stocks`: 국내주식 탐색
 - `stock-detail`: 종목 상세·장기 분석·수동 주문
 - `long-term`: 자동 추천과 내 장기 관찰 후보
