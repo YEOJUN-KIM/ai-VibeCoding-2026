@@ -113,6 +113,42 @@ class TossClientTests(unittest.TestCase):
         self.assertEqual(TossClient._request_group(Request("https://x/api/v1/holdings")), "ASSET")
         self.assertEqual(TossClient._request_group(Request("https://x/api/v1/buying-power")), "ORDER_INFO")
         self.assertEqual(TossClient._request_group(Request("https://x/api/v1/prices")), "MARKET_DATA")
+        self.assertEqual(
+            TossClient._request_group(Request("https://x/api/v1/market-indicators/prices")),
+            "MARKET_INDICATOR",
+        )
+        self.assertEqual(
+            TossClient._request_group(Request("https://x/api/v1/market-indicators/KOSPI/candles")),
+            "MARKET_INDICATOR_CHART",
+        )
+
+    def test_market_indicator_candles_use_dedicated_endpoint(self):
+        client = TossClient(client_id="id", client_secret="secret")
+        response = {"result": {"candles": [
+            {"timestamp": "2026-10-02T09:01:00+09:00", "openPrice": "3450.1",
+             "highPrice": "3452.2", "lowPrice": "3449.8", "closePrice": "3451.7",
+             "volume": "123456"},
+        ]}}
+        with patch.object(client, "_authorized_json_request", return_value=response) as request:
+            candles = client._market_indicator_candles("kospi", "1m", 1)
+
+        self.assertIn("/api/v1/market-indicators/KOSPI/candles?", request.call_args.args[0])
+        self.assertEqual(candles[0].close_price, Decimal("3451.7"))
+
+    def test_exchange_rate_uses_mid_rate_and_official_endpoint(self):
+        client = TossClient(client_id="id", client_secret="secret")
+        response = {"result": {
+            "baseCurrency": "USD", "quoteCurrency": "KRW", "rate": "1380.5",
+            "midRate": "1375", "basisPoint": "40", "rateChangeType": "UP",
+            "validFrom": "2026-10-02T14:00:00+09:00",
+            "validUntil": "2026-10-02T14:01:00+09:00",
+        }}
+        with patch.object(client, "_authorized_json_request", return_value=response) as request:
+            result = client.exchange_rate()
+
+        self.assertEqual(result["midRate"], "1375")
+        self.assertIn("baseCurrency=USD", request.call_args.args[0])
+        self.assertIn("quoteCurrency=KRW", request.call_args.args[0])
 
     @patch("auto_trader.toss.urlopen")
     def test_token_is_cached_and_accounts_are_read(self, mocked):

@@ -8,7 +8,7 @@ from psycopg import sql
 
 from auto_trader import database
 from auto_trader.ml import data_pipeline
-from auto_trader.ml.data_pipeline import RawCandle
+from auto_trader.ml.data_pipeline import RawCandle, RawMarketIndicator
 
 
 class MlDataPipelineTests(unittest.TestCase):
@@ -86,6 +86,39 @@ class MlDataPipelineTests(unittest.TestCase):
     def test_invalid_ohlc_is_rejected_before_insert(self):
         with self.assertRaisesRegex(ValueError, "고가"):
             data_pipeline.save_raw_candles([self.candle(high_price=Decimal("69000"))])
+
+    def test_market_indicator_rows_are_idempotent_and_as_of_safe(self):
+        row = RawMarketIndicator(
+            source="TOSS_MARKET_INDICATOR",
+            indicator="KOSPI",
+            interval="1m",
+            event_at=self.base_at,
+            available_at=self.base_at + timedelta(minutes=2),
+            collected_at=self.base_at + timedelta(minutes=2),
+            open_price=Decimal("3400"),
+            high_price=Decimal("3410"),
+            low_price=Decimal("3390"),
+            close_price=Decimal("3405"),
+            volume=Decimal("100000"),
+        )
+        self.assertEqual(data_pipeline.save_market_indicator_candles([row]), (1, 0))
+        self.assertEqual(data_pipeline.save_market_indicator_candles([row]), (0, 1))
+        self.assertEqual(
+            data_pipeline.available_market_indicator_candles(
+                "KOSPI",
+                start_at=self.base_at,
+                end_at=self.base_at + timedelta(minutes=5),
+                as_of=self.base_at + timedelta(minutes=1),
+            ),
+            [],
+        )
+        available = data_pipeline.available_market_indicator_candles(
+            "KOSPI",
+            start_at=self.base_at,
+            end_at=self.base_at + timedelta(minutes=5),
+            as_of=self.base_at + timedelta(minutes=3),
+        )
+        self.assertEqual(len(available), 1)
 
 
 if __name__ == "__main__":

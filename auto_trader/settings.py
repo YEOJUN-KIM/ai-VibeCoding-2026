@@ -54,6 +54,11 @@ class Settings:
     strategy_short_period: int
     strategy_long_period: int
     order_quantity: int
+    ml_data_collection_enabled: bool
+    ml_data_collection_count: int
+    ml_market_indicators: tuple[str, ...]
+    ml_quality_report_hour: int
+    ml_quality_report_minute: int
     toss_client_id: str
     toss_client_secret: str
     toss_account: str
@@ -98,6 +103,11 @@ def load_settings() -> Settings:
         ).split(",")
         if symbol.strip()
     )
+    ml_market_indicators = tuple(
+        symbol.strip().upper()
+        for symbol in os.getenv("ML_MARKET_INDICATORS", "KOSPI,KOSDAQ").split(",")
+        if symbol.strip()
+    )
 
     settings = Settings(
         app_host=os.getenv("APP_HOST", "127.0.0.1"),
@@ -118,6 +128,11 @@ def load_settings() -> Settings:
         strategy_short_period=_integer("STRATEGY_SHORT_PERIOD", 5),
         strategy_long_period=_integer("STRATEGY_LONG_PERIOD", 20),
         order_quantity=_integer("ORDER_QUANTITY", 1),
+        ml_data_collection_enabled=_boolean("ML_DATA_COLLECTION_ENABLED", True),
+        ml_data_collection_count=_integer("ML_DATA_COLLECTION_COUNT", 20),
+        ml_market_indicators=ml_market_indicators,
+        ml_quality_report_hour=_integer("ML_QUALITY_REPORT_HOUR", 15),
+        ml_quality_report_minute=_integer("ML_QUALITY_REPORT_MINUTE", 40),
         toss_client_id=os.getenv("TOSS_CLIENT_ID", ""),
         toss_client_secret=os.getenv("TOSS_CLIENT_SECRET", ""),
         toss_account=os.getenv("TOSS_ACCOUNT", ""),
@@ -142,6 +157,12 @@ def load_settings() -> Settings:
     )
     if settings.strategy_short_period >= settings.strategy_long_period:
         raise ValueError("STRATEGY_SHORT_PERIOD는 STRATEGY_LONG_PERIOD보다 작아야 합니다.")
+    if not 1 <= settings.ml_data_collection_count <= 10000:
+        raise ValueError("ML_DATA_COLLECTION_COUNT는 1부터 10000 사이여야 합니다.")
+    if any(symbol not in {"KOSPI", "KOSDAQ"} for symbol in settings.ml_market_indicators):
+        raise ValueError("ML_MARKET_INDICATORS 1분봉은 KOSPI,KOSDAQ만 지원합니다.")
+    if not 0 <= settings.ml_quality_report_hour <= 23 or not 0 <= settings.ml_quality_report_minute <= 59:
+        raise ValueError("ML 품질 보고서 시각은 00:00부터 23:59 사이여야 합니다.")
     if not 0 <= settings.long_term_scan_hour <= 23 or not 0 <= settings.long_term_scan_minute <= 59:
         raise ValueError("장기분석 자동 갱신 시각은 00:00부터 23:59 사이여야 합니다.")
     return settings

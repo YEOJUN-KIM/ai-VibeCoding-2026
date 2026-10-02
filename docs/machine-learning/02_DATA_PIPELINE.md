@@ -39,12 +39,14 @@
 
 첫 학습 전에는 최소한 여러 시장 국면을 포함하는 기간이 필요합니다. 데이터가 적을 때는 모델 성능을 주장하지 않고 파이프라인과 백테스트 재현성을 포트폴리오 결과로 삼습니다.
 
-## 현재 구현: 1분봉 원본 저장
+## 현재 구현: 종목·시장 지표 1분봉 원본 저장
 
 2026-10-02에 첫 수집 파이프라인을 구현했습니다.
 
 - `ml_collection_runs`: 언제 어떤 종목을 몇 개 요청했고 성공·실패했는지 기록
 - `ml_raw_candles`: 토스에서 받은 완료 1분봉과 세 가지 시각을 원본 형태로 보존
+- `ml_market_indicator_candles`: 코스피·코스닥 완료 1분봉을 종목 데이터와 분리해 보존
+- `ml_macro_observations`: 환율·미국 시장 일별 값과 나중에 받은 수정값을 버전별 보존
 - `(source, symbol, interval, event_at)` 기본키로 재수집 중복 방지
 - `collection_run_id`로 각 원본 행의 수집 실행 추적
 - `available_at` 조건이 있는 조회 함수로 미래 데이터 누출 방지
@@ -76,6 +78,13 @@ powershell -ExecutionPolicy Bypass -File .\scripts\collect-ml-data.ps1 `
 
 처음 과거 봉을 가져오는 백필에서는 오래된 봉의 `delayed_over_5m`가 큰 것이 정상입니다. 이후 정시 수집분은 이 값이 갑자기 늘어나는지 감시합니다.
 
+코스피·코스닥 지수만 따로 수집할 수도 있습니다.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\collect-market-indicators.ps1 `
+  -Indicators "KOSPI,KOSDAQ" -Count 200
+```
+
 ### 실제 첫 검증 결과
 
 2026-10-02 삼성전자와 SK하이닉스의 완료 1분봉을 수집했습니다.
@@ -83,6 +92,117 @@ powershell -ExecutionPolicy Bypass -File .\scripts\collect-ml-data.ps1 `
 - 첫 실행: 36건 저장, 누락 구간 0건, 오류 0건
 - 동일 구간 재실행: 0건 추가, 중복 36건으로 판정
 - 저장된 시각 범위: 한국시간 11:17~11:34
+
+## 서버 정기 수집
+
+서버가 실행 중이면 `WATCH_SYMBOLS` 종목과 `ML_MARKET_INDICATORS`의 최근 완료 1분봉을 평일 한국시간 09:01:02부터 15:31:02까지 매분 수집합니다. 기본 시장 지표는 코스피와 코스닥입니다. 매번 최근 20개를 확인하므로 짧은 API 장애 뒤에도 빠진 구간을 다시 받을 수 있고, 이미 저장한 봉은 중복으로 집계될 뿐 추가되지 않습니다.
+
+토스의 영업일 조회 결과가 휴장일이면 봉 API 호출을 건너뜁니다. 수집 중 DB나 API 오류가 발생해도 PAPER 주문 작업을 중지시키지 않고 수집 상태에 오류를 남깁니다.
+
+설정값은 다음과 같습니다.
+
+```dotenv
+ML_DATA_COLLECTION_ENABLED=true
+ML_DATA_COLLECTION_COUNT=20
+ML_MARKET_INDICATORS=KOSPI,KOSDAQ
+```
+
+로그인 후 다음 API에서 다음 실행 시각, 최근 신규·중복 건수와 오류를 확인할 수 있습니다.
+
+```text
+GET /ml/data-collection/status
+```
+
+서버를 중지하면 정기 수집 작업도 함께 안전하게 종료됩니다.
+
+2026-10-02 11:55:02 한국시간 첫 자동 실행에서 `WATCH_SYMBOLS` 10개 종목의 완료 봉 180건을 저장했고 오류는 0건이었습니다. 이 실행으로 원본 1분봉은 총 216건이 됐습니다.
+
+2026-10-02 14:30:02 한국시간 시장 지표 자동 실행에서 코스피·코스닥 신규 봉 4건을 저장했고 오류는 0건이었습니다. 직전 수동 검증에서는 두 지수 36건을 저장한 뒤 같은 구간 재수집이 신규 0건·중복 36건으로 처리되는 것도 확인했습니다.
+
+## 환율과 미국 시장 지표
+
+한국시간 평일 08:10과 13:10에 다음 정보를 수집합니다. 서버가 시작될 때도 한 번 실행합니다.
+
+- 토스 공식 환율의 USD/KRW 매매기준율
+- 토스 미국 일봉의 시장 대용 ETF: SPY, QQQ, DIA, VIXY, IEF
+- FRED의 정확한 일별 S&P 500, NASDAQ Composite, DJIA, VIX, 미국 국채 10년 금리
+
+ETF는 각각 미국 대형주, 나스닥 100, 다우, 변동성 선물, 7~10년 미국채 가격의 대용 지표입니다. 특히 VIXY와 IEF 가격은 VIX 지수나 10년물 금리 그 자체가 아니므로 특징 이름에서도 `PROXY`를 유지합니다. FRED가 늦게 갱신되거나 일시적으로 연결되지 않아도 토스 대용 지표와 환율은 계속 저장됩니다.
+
+일별 값도 `event_at`, `available_at`, `collected_at`을 분리합니다. 같은 기준일 값이 장중 또는 사후에 바뀌면 `(source, indicator, event_at, value)`가 다른 새 버전으로 저장됩니다. 과거 학습 조회는 `available_at` 이전에 실제로 받은 버전만 선택합니다.
+
+수동 수집 명령은 다음과 같습니다.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\collect-macro-context.ps1 -Days 14
+```
+
+로그인 후 자동 수집 상태는 다음 API에서 확인합니다.
+
+```text
+GET /ml/macro-collection/status
+```
+
+## PAPER 전략 판단 기록
+
+PAPER 전략이 새 완료 봉을 판단할 때 `ml_strategy_decisions`에 학습용 판단 행을 저장합니다.
+
+- `DATA_WAIT`: 이동평균 계산에 필요한 봉이 아직 부족함
+- `WAIT`: 진입·청산 조건을 기다림
+- `BUY_FILLED`, `BUY_BLOCKED`: 매수 조건 이후 체결 또는 제한
+- `SELL_FILLED`, `SELL_BLOCKED`: 청산 조건 이후 체결 또는 제한
+
+각 판단에는 다음 정보가 함께 저장됩니다.
+
+- PAPER 실행 ID, 계좌와 선택 전략
+- 판단 시각과 사용한 마지막 완료 봉 시각
+- 현재가, 단기·장기 이동평균과 이전·현재 추세
+- 교차 확인 횟수와 진입 준비 상태
+- 전략 보유 수량, 당시 현금과 총자산
+- 최종 행동과 사람이 읽을 수 있는 판단 이유
+
+전략 루프는 PostgreSQL 쓰기를 기다리지 않습니다. 판단을 메모리 큐에 넣고 별도 작업이 묶어서 저장하며, DB 장애 시 해당 묶음을 큐 앞에 되돌려 다음 주기에 재시도합니다. 각 판단의 고유키로 재시도 중복도 막습니다. 큐 검증이나 저장 오류가 주문 판단으로 전파되지 않습니다.
+
+로그인 후 기록 작업 상태를 확인할 수 있습니다.
+
+```text
+GET /ml/decision-recording/status
+```
+
+판단 기록은 PAPER 자동매매가 실행 중일 때 새 완료 1분봉마다 생성됩니다.
+
+## 장 마감 품질 보고서
+
+평일 한국시간 15:40에 당일 ML 원본 데이터 품질 보고서를 자동 생성해 `ml_data_quality_reports`에 저장합니다. 서버가 15:40 이후 시작됐고 당일 보고서가 없으면 시작 직후 한 번 생성합니다.
+
+보고서에는 다음 항목이 포함됩니다.
+
+- 종목별·시장 지표별 예상 1분봉 수, 실제 수, 부족한 봉 수
+- 최초·마지막 봉 시각, 5분 초과 수집 지연, 거래량 0인 봉
+- 완료·부분 성공·실패 수집 실행 수와 신규·중복 행 수
+- PAPER 판단 수, 실행 수, 매수·매도·제한 행동 수
+- USD/KRW와 미국 시장 대용 지표의 당일 수집 여부
+- 종합 상태 `PASS`, `WARN`, `FAIL`과 사람이 확인할 문제 목록
+
+수동으로 오늘 또는 과거 날짜의 보고서를 다시 만들 수 있습니다. 같은 날짜는 한 행으로 갱신됩니다.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\generate-ml-quality-report.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\generate-ml-quality-report.ps1 -Date "2026-10-02"
+```
+
+로그인 후 최근 보고서와 다음 자동 실행 시각은 다음 API에서 확인합니다.
+
+```text
+GET /ml/data-quality/latest
+```
+
+설정 시각은 다음과 같습니다.
+
+```dotenv
+ML_QUALITY_REPORT_HOUR=15
+ML_QUALITY_REPORT_MINUTE=40
+```
 
 ## 학습 테이블 예시
 
@@ -109,7 +229,6 @@ powershell -ExecutionPolicy Bypass -File .\scripts\collect-ml-data.ps1 `
 
 ## 다음 구현 순서
 
-1. 수집 주기를 1분으로 운용하고 장 마감 후 일일 품질 보고서를 남긴다.
-2. PAPER 전략의 판단 시점과 매수 거절 사유를 원본 데이터에 연결한다.
-3. KOSPI·KOSDAQ 대표 지표를 같은 시간 구조로 저장한다.
-4. 충분한 기간이 쌓인 뒤 특징·정답 데이터셋을 원본에서 생성한다.
+1. 충분한 기간이 쌓인 뒤 종목·국내 지수·환율·미국 지표 특징과 정답을 생성한다.
+2. 시간 순서 학습·검증·테스트 분할과 첫 기준 모델을 만든다.
+3. 기존 이동평균 전략과 비용 차감 백테스트 결과를 비교한다.

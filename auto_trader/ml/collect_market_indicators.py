@@ -1,4 +1,4 @@
-"""Collect completed Toss one-minute candles into the immutable ML source table."""
+"""Collect completed KOSPI and KOSDAQ candles for ML market context."""
 
 from __future__ import annotations
 
@@ -10,79 +10,77 @@ from ..database import initialize
 from ..settings import settings
 from ..toss import TossClient
 from .data_pipeline import (
-    RawCandle,
-    candle_quality_report,
+    RawMarketIndicator,
     finish_collection_run,
-    save_raw_candles,
+    market_indicator_quality_report,
+    save_market_indicator_candles,
     start_collection_run,
 )
 
 
-def collect_candles(
+def collect_market_indicators(
     client: TossClient,
-    symbols: list[str],
+    indicators: list[str],
     *,
     count: int,
     collected_at: datetime | None = None,
     cache_seconds: int = 0,
 ) -> dict:
     now = collected_at or datetime.now(timezone.utc)
-    normalized = list(dict.fromkeys(symbol.strip().upper() for symbol in symbols if symbol.strip()))
+    normalized = list(dict.fromkeys(item.strip().upper() for item in indicators if item.strip()))
     if not normalized:
-        raise ValueError("수집할 종목 코드가 필요합니다.")
+        raise ValueError("수집할 시장 지표가 필요합니다.")
+    if any(item not in {"KOSPI", "KOSDAQ"} for item in normalized):
+        raise ValueError("시장 지표 1분봉은 KOSPI와 KOSDAQ만 지원합니다.")
     if count <= 0:
         raise ValueError("count는 1 이상이어야 합니다.")
 
-    run_id = start_collection_run("TOSS", "1m", normalized, count, now)
+    run_id = start_collection_run("TOSS_MARKET_INDICATOR", "1m", normalized, count, now)
     inserted = duplicates = 0
     errors: dict[str, str] = {}
-    for symbol in normalized:
+    for indicator in normalized:
         try:
-            received = client._domestic_candles(
-                symbol, "1m", count, cache_seconds=cache_seconds
+            received = client._market_indicator_candles(
+                indicator, "1m", count, cache_seconds=cache_seconds
             )
             completed = [
-                RawCandle.from_live_candle(symbol, candle, collected_at=now)
+                RawMarketIndicator.from_live_candle(indicator, candle, collected_at=now)
                 for candle in received
                 if candle.timestamp + timedelta(minutes=1) <= now
             ]
-            new_rows, duplicate_rows = save_raw_candles(completed, run_id=run_id)
+            new_rows, duplicate_rows = save_market_indicator_candles(completed, run_id=run_id)
             inserted += new_rows
             duplicates += duplicate_rows
         except Exception as exc:
-            errors[symbol] = str(exc)
+            errors[indicator] = str(exc)
 
-    finished_at = datetime.now(timezone.utc)
     status = finish_collection_run(
         run_id,
         inserted_rows=inserted,
         duplicate_rows=duplicates,
         errors=errors,
-        finished_at=finished_at,
+        finished_at=datetime.now(timezone.utc),
     )
     return {
         "run_id": run_id,
         "status": status,
-        "symbols": normalized,
+        "indicators": normalized,
         "inserted_rows": inserted,
         "duplicate_rows": duplicates,
         "errors": errors,
-        "quality": [candle_quality_report(symbol) for symbol in normalized],
+        "quality": [market_indicator_quality_report(item) for item in normalized],
     }
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--symbols",
-        default=",".join(settings.watch_symbols),
-        help="Comma-separated symbols. Defaults to WATCH_SYMBOLS.",
-    )
-    parser.add_argument("--count", type=int, default=200, help="Recent one-minute candles per symbol")
+    parser.add_argument("--indicators", default=",".join(settings.ml_market_indicators))
+    parser.add_argument("--count", type=int, default=200)
     args = parser.parse_args()
-
     initialize()
-    result = collect_candles(TossClient(), args.symbols.split(","), count=args.count)
+    result = collect_market_indicators(
+        TossClient(), args.indicators.split(","), count=args.count
+    )
     print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
     if result["status"] == "FAILED":
         raise SystemExit(1)

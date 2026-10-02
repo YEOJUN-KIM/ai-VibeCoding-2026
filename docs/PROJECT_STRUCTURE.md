@@ -40,11 +40,22 @@ ai-VibeCoding-2026/
 
 ## 머신러닝
 
+- `machine-learning/CURRENT_PROGRESS.md`: 현재 구현·운용·검증 현황과 다음 작업
 - `ml/verify_environment.py`: 패키지와 모델 저장·재로딩 확인
-- `ml/data_pipeline.py`: 원본 1분봉 검증·저장, 시점 제한 조회와 품질 통계
+- `ml/data_pipeline.py`: 종목·시장 지표 원본 1분봉 검증·저장, 시점 제한 조회와 품질 통계
 - `ml/collect_candles.py`: 토스 완료 1분봉 수집 명령
+- `ml/collect_market_indicators.py`: 코스피·코스닥 완료 1분봉 수집 명령
+- `ml/collection_worker.py`: 평일 장중 매분 자동 수집과 실행 상태
+- `ml/decision_pipeline.py`: PAPER 판단의 비동기 큐와 PostgreSQL 저장
+- `ml/quality_report.py`: 일별 원본·판단 데이터 품질 검사와 보고서 저장
+- `ml/quality_worker.py`: 장 마감 후 품질 보고서 자동 생성
+- `ml/macro_pipeline.py`: 토스 환율·미국 대용 ETF·FRED 일별 지표 수집과 버전 저장
+- `ml/macro_worker.py`: 한국시간 08:10·13:10 거시 지표 자동 수집
 - `scripts/setup-ml.ps1`: 가상환경과 ML 패키지 설치
 - `scripts/collect-ml-data.ps1`: 원본 1분봉 수집 실행
+- `scripts/collect-market-indicators.ps1`: 코스피·코스닥 원본 1분봉 수집 실행
+- `scripts/generate-ml-quality-report.ps1`: ML 일별 품질 보고서 수동 생성
+- `scripts/collect-macro-context.ps1`: 환율과 미국 시장 지표 수동 수집
 
 ## PAPER와 전략
 

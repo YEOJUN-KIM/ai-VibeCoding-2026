@@ -319,3 +319,115 @@ CREATE INDEX IF NOT EXISTS ml_raw_candles_symbol_time
     ON ml_raw_candles(symbol, interval, event_at);
 CREATE INDEX IF NOT EXISTS ml_raw_candles_available
     ON ml_raw_candles(symbol, interval, available_at, event_at);
+
+CREATE TABLE IF NOT EXISTS ml_market_indicator_candles (
+    source TEXT NOT NULL,
+    indicator TEXT NOT NULL,
+    interval TEXT NOT NULL,
+    event_at TIMESTAMPTZ NOT NULL,
+    available_at TIMESTAMPTZ NOT NULL,
+    collected_at TIMESTAMPTZ NOT NULL,
+    open_price NUMERIC NOT NULL CHECK (open_price > 0),
+    high_price NUMERIC NOT NULL CHECK (high_price > 0),
+    low_price NUMERIC NOT NULL CHECK (low_price > 0),
+    close_price NUMERIC NOT NULL CHECK (close_price > 0),
+    volume NUMERIC NOT NULL CHECK (volume >= 0),
+    collection_run_id BIGINT REFERENCES ml_collection_runs(id) ON DELETE SET NULL,
+    raw_payload JSONB NOT NULL,
+    PRIMARY KEY (source, indicator, interval, event_at),
+    CHECK (event_at <= available_at),
+    CHECK (available_at <= collected_at),
+    CHECK (high_price >= open_price AND high_price >= close_price AND high_price >= low_price),
+    CHECK (low_price <= open_price AND low_price <= close_price AND low_price <= high_price)
+);
+CREATE INDEX IF NOT EXISTS ml_market_indicator_candles_time
+    ON ml_market_indicator_candles(indicator, interval, event_at);
+CREATE INDEX IF NOT EXISTS ml_market_indicator_candles_available
+    ON ml_market_indicator_candles(indicator, interval, available_at, event_at);
+
+CREATE TABLE IF NOT EXISTS ml_macro_observations (
+    source TEXT NOT NULL,
+    indicator TEXT NOT NULL,
+    event_at TIMESTAMPTZ NOT NULL,
+    available_at TIMESTAMPTZ NOT NULL,
+    collected_at TIMESTAMPTZ NOT NULL,
+    value NUMERIC NOT NULL,
+    unit TEXT NOT NULL,
+    frequency TEXT NOT NULL CHECK (frequency IN ('SNAPSHOT','DAILY')),
+    collection_run_id BIGINT REFERENCES ml_collection_runs(id) ON DELETE SET NULL,
+    raw_payload JSONB NOT NULL,
+    PRIMARY KEY (source, indicator, event_at, value),
+    CHECK (event_at <= available_at),
+    CHECK (available_at <= collected_at)
+);
+CREATE INDEX IF NOT EXISTS ml_macro_observations_indicator_time
+    ON ml_macro_observations(indicator, event_at);
+CREATE INDEX IF NOT EXISTS ml_macro_observations_available
+    ON ml_macro_observations(indicator, available_at, event_at);
+
+CREATE TABLE IF NOT EXISTS ml_strategy_decisions (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    decision_key TEXT NOT NULL UNIQUE,
+    run_id TEXT NOT NULL,
+    account_id BIGINT,
+    account_name TEXT NOT NULL,
+    strategy_id BIGINT,
+    strategy_name TEXT,
+    data_source TEXT NOT NULL CHECK (data_source IN ('TOSS','SIMULATED')),
+    symbol TEXT NOT NULL,
+    candle_event_at TIMESTAMPTZ,
+    decision_at TIMESTAMPTZ NOT NULL,
+    available_at TIMESTAMPTZ NOT NULL,
+    collected_at TIMESTAMPTZ NOT NULL,
+    action TEXT NOT NULL CHECK (
+        action IN ('DATA_WAIT','WAIT','BUY_FILLED','BUY_BLOCKED','SELL_FILLED','SELL_BLOCKED')
+    ),
+    reason TEXT NOT NULL,
+    price NUMERIC NOT NULL CHECK (price > 0),
+    short_average NUMERIC,
+    long_average NUMERIC,
+    trend TEXT,
+    previous_trend TEXT,
+    history_count INTEGER NOT NULL CHECK (history_count >= 0),
+    entry_armed BOOLEAN NOT NULL,
+    confirmation_count INTEGER NOT NULL CHECK (confirmation_count >= 0),
+    strategy_quantity INTEGER NOT NULL CHECK (strategy_quantity >= 0),
+    cash NUMERIC NOT NULL CHECK (cash >= 0),
+    total_asset NUMERIC NOT NULL CHECK (total_asset >= 0),
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    CHECK (decision_at <= available_at),
+    CHECK (available_at <= collected_at)
+);
+ALTER TABLE ml_strategy_decisions ADD COLUMN IF NOT EXISTS decision_key TEXT;
+UPDATE ml_strategy_decisions SET decision_key = 'legacy-' || id WHERE decision_key IS NULL;
+ALTER TABLE ml_strategy_decisions ALTER COLUMN decision_key SET NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS ml_strategy_decisions_key
+    ON ml_strategy_decisions(decision_key);
+-- Earlier development schemas used a partial index with the name above.
+-- Keep it for compatibility and add an unconditional index that PostgreSQL can
+-- infer for ON CONFLICT (decision_key).
+CREATE UNIQUE INDEX IF NOT EXISTS ml_strategy_decisions_key_all
+    ON ml_strategy_decisions(decision_key);
+CREATE INDEX IF NOT EXISTS ml_strategy_decisions_symbol_time
+    ON ml_strategy_decisions(symbol, decision_at);
+CREATE INDEX IF NOT EXISTS ml_strategy_decisions_run_time
+    ON ml_strategy_decisions(run_id, decision_at);
+CREATE INDEX IF NOT EXISTS ml_strategy_decisions_action_time
+    ON ml_strategy_decisions(action, decision_at);
+
+CREATE TABLE IF NOT EXISTS ml_data_quality_reports (
+    report_date DATE PRIMARY KEY,
+    status TEXT NOT NULL CHECK (status IN ('PASS','WARN','FAIL')),
+    expected_bars INTEGER NOT NULL CHECK (expected_bars >= 0),
+    stock_summary JSONB NOT NULL,
+    indicator_summary JSONB NOT NULL,
+    macro_summary JSONB NOT NULL DEFAULT '{}'::jsonb,
+    decision_summary JSONB NOT NULL,
+    collection_summary JSONB NOT NULL,
+    issues JSONB NOT NULL DEFAULT '[]'::jsonb,
+    generated_at TIMESTAMPTZ NOT NULL
+);
+ALTER TABLE ml_data_quality_reports
+    ADD COLUMN IF NOT EXISTS macro_summary JSONB NOT NULL DEFAULT '{}'::jsonb;
+CREATE INDEX IF NOT EXISTS ml_data_quality_reports_generated
+    ON ml_data_quality_reports(generated_at DESC);

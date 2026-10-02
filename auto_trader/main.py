@@ -69,6 +69,11 @@ from .long_term_repository import (add_long_term_watch, fresh_long_term_analysis
                                    ranked_long_term_analyses, remove_long_term_watch,
                                    replace_long_term_recommendations,
                                    save_long_term_analysis)
+from .ml.collection_worker import CandleCollectionWorker
+from .ml.decision_pipeline import StrategyDecisionRecorder
+from .ml.quality_report import latest_quality_report
+from .ml.quality_worker import QualityReportWorker
+from .ml.macro_worker import MacroCollectionWorker
 
 
 market = MarketSimulator(symbols=settings.watch_symbols)
@@ -78,6 +83,7 @@ broker = PaperBroker(market, initial_cash=settings.paper_initial_cash,
                      journal_path=Path(__file__).parent.parent / ".paper-history" / "orders.jsonl",
                      ignore_min_cash_ratio=settings.paper_ignore_min_cash_ratio,
                      ignore_daily_order_limit=settings.paper_ignore_daily_order_limit)
+ml_decision_recorder = StrategyDecisionRecorder()
 engine = MovingAverageEngine(
     market,
     broker,
@@ -85,11 +91,31 @@ engine = MovingAverageEngine(
     short_period=settings.strategy_short_period,
     long_period=settings.strategy_long_period,
     order_quantity=settings.order_quantity,
+    decision_recorder=ml_decision_recorder.record,
 )
 risk_manager = RiskManager(market)
 toss_client = TossClient()
 quote_stream = QuoteStream(toss_client, settings.toss_ws_url)
 engine.price_feed = PaperPriceFeed(toss_client)
+ml_collection_worker = CandleCollectionWorker(
+    toss_client,
+    settings.watch_symbols,
+    market_indicators=settings.ml_market_indicators,
+    count=settings.ml_data_collection_count,
+    enabled=settings.ml_data_collection_enabled,
+)
+ml_quality_worker = QualityReportWorker(
+    toss_client,
+    settings.watch_symbols,
+    settings.ml_market_indicators,
+    hour=settings.ml_quality_report_hour,
+    minute=settings.ml_quality_report_minute,
+    enabled=settings.ml_data_collection_enabled,
+)
+ml_macro_worker = MacroCollectionWorker(
+    toss_client,
+    enabled=settings.ml_data_collection_enabled,
+)
 watchlist_source = "fallback"
 paper_snapshot_at = None
 paper_source_account_label = None
@@ -402,6 +428,7 @@ async def lifespan(_: FastAPI):
     stock_directory_warm_task: asyncio.Task | None = None
     long_term_candidate_task: asyncio.Task | None = None
     initialize()
+    await ml_decision_recorder.start()
     if toss_client.configured:
         readiness = await asyncio.to_thread(_startup_readiness, force=True)
         try:
@@ -440,6 +467,9 @@ async def lifespan(_: FastAPI):
         long_term_candidate_task = asyncio.create_task(
             long_term_candidate_worker(stock_directory_warm_task)
         )
+        await ml_collection_worker.start()
+        await ml_quality_worker.start()
+        await ml_macro_worker.start()
     try:
         yield
     finally:
@@ -450,7 +480,11 @@ async def lifespan(_: FastAPI):
         manual_refresh_task = getattr(app.state, "long_term_manual_refresh_task", None)
         if manual_refresh_task is not None and not manual_refresh_task.done():
             manual_refresh_task.cancel()
+        await ml_collection_worker.stop()
+        await ml_quality_worker.stop()
+        await ml_macro_worker.stop()
         await _stop_all_paper_engines()
+        await ml_decision_recorder.stop()
         await quote_stream.close()
 
 
@@ -665,12 +699,33 @@ def health(_: AuthenticatedUser = Depends(require_user)) -> dict[str, str]:
         "toss_api": "ready" if settings.toss_api_ready else "not_configured",
         "postgres": "connected",
         "paper_watchlist": watchlist_source,
+        "ml_collection": ml_collection_worker.status()["phase"],
     }
 
 
 @app.get("/startup/readiness")
 def startup_readiness() -> dict:
     return _startup_readiness()
+
+
+@app.get("/ml/data-collection/status")
+def ml_data_collection_status(_: AuthenticatedUser = Depends(require_user)) -> dict:
+    return ml_collection_worker.status()
+
+
+@app.get("/ml/decision-recording/status")
+def ml_decision_recording_status(_: AuthenticatedUser = Depends(require_user)) -> dict:
+    return ml_decision_recorder.status()
+
+
+@app.get("/ml/data-quality/latest")
+def ml_data_quality_latest(_: AuthenticatedUser = Depends(require_user)) -> dict:
+    return {"worker": ml_quality_worker.status(), "report": latest_quality_report()}
+
+
+@app.get("/ml/macro-collection/status")
+def ml_macro_collection_status(_: AuthenticatedUser = Depends(require_user)) -> dict:
+    return ml_macro_worker.status()
 
 
 @app.post("/toss/test-connection", response_model=TossConnectionStatus)
@@ -1451,7 +1506,12 @@ async def select_paper_account(mode: str, user: AuthenticatedUser = Depends(requ
         )
         await asyncio.to_thread(new_broker.initialize)
         await asyncio.to_thread(new_broker.set_risk_manager, RiskManager(market))
-        new_engine = MovingAverageEngine(market, new_broker, price_feed=PaperPriceFeed(toss_client))
+        new_engine = MovingAverageEngine(
+            market,
+            new_broker,
+            price_feed=PaperPriceFeed(toss_client),
+            decision_recorder=ml_decision_recorder.record,
+        )
         target = (new_broker, new_engine, datetime.now().astimezone(), "실험계좌", None)
     _paper_sessions[paper_account_mode] = current
     broker, engine, paper_snapshot_at, paper_source_account_label, paper_selected_strategy = target

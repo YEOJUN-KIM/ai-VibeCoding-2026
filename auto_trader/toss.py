@@ -56,6 +56,7 @@ class TossClient:
             "AUTH": 0.21, "ACCOUNT": 1.05, "ASSET": 0.21,
             "STOCK": 0.21, "STOCK_ALL": 1.05, "MARKET_INFO": 0.35,
             "MARKET_DATA": 0.12, "MARKET_DATA_CHART": 0.12, "RANKING": 0.21,
+            "MARKET_INDICATOR": 0.12, "MARKET_INDICATOR_CHART": 0.12,
             "ORDER": 0.11, "ORDER_HISTORY": 0.21, "ORDER_INFO": 0.18,
         }
         self._accounts_cache: list[dict] | None = None
@@ -131,6 +132,10 @@ class TossClient:
             return "MARKET_INFO"
         if path == "/api/v1/candles":
             return "MARKET_DATA_CHART"
+        if path == "/api/v1/market-indicators/prices":
+            return "MARKET_INDICATOR"
+        if path.startswith("/api/v1/market-indicators/") and path.endswith("/candles"):
+            return "MARKET_INDICATOR_CHART"
         if path in {"/api/v1/prices", "/api/v1/orderbook", "/api/v1/trades", "/api/v1/price-limits"}:
             return "MARKET_DATA"
         if path == "/api/v1/rankings":
@@ -850,6 +855,83 @@ class TossClient:
             with self._candle_lock:
                 self._candle_cache[cache_key] = (monotonic() + cache_seconds, count, candles)
             return candles[-count:]
+
+    def _market_indicator_candles(
+        self, symbol: str, interval: str, count: int, *, cache_seconds: int = 0
+    ) -> list[LiveStockCandle]:
+        """Return Toss market-index candles in chronological order."""
+        normalized = symbol.strip().upper()
+        if interval == "1m" and normalized not in {"KOSPI", "KOSDAQ"}:
+            raise ValueError("시장 지표 1분봉은 KOSPI와 KOSDAQ만 지원합니다.")
+        if interval not in {"1m", "1d"}:
+            raise ValueError("시장 지표 봉 단위는 1m 또는 1d여야 합니다.")
+        if count <= 0:
+            raise ValueError("count는 1 이상이어야 합니다.")
+
+        cache_key = (f"MARKET_INDICATOR:{normalized}", interval, cache_seconds)
+        cached = self._candle_cache.get(cache_key)
+        if cached is not None and monotonic() < cached[0] and cached[1] >= count:
+            return cached[2][-count:]
+        with self._candle_lock:
+            request_lock = self._candle_request_locks.setdefault(cache_key, Lock())
+        with request_lock:
+            cached = self._candle_cache.get(cache_key)
+            if cached is not None and monotonic() < cached[0] and cached[1] >= count:
+                return cached[2][-count:]
+            raw_rows: list[dict] = []
+            before: str | None = None
+            seen_cursors: set[str] = set()
+            max_pages = max(1, (count + 199) // 200)
+            for page_index in range(max_pages):
+                query_values = {"interval": interval, "count": min(200, count - len(raw_rows))}
+                if before:
+                    query_values["before"] = before
+                query = urlencode(query_values)
+                payload = self._authorized_json_request(
+                    f"{self.base_url}/api/v1/market-indicators/{normalized}/candles?{query}"
+                )
+                result = payload.get("result")
+                rows = result.get("candles") if isinstance(result, dict) else None
+                if not isinstance(rows, list):
+                    raise TossApiError("토스 API 시장 지표 차트 응답 형식이 예상과 다릅니다.")
+                raw_rows.extend(rows)
+                if len(raw_rows) >= count:
+                    break
+                next_before = result.get("nextBefore") if isinstance(result, dict) else None
+                if not next_before or str(next_before) in seen_cursors:
+                    break
+                seen_cursors.add(str(next_before))
+                before = str(next_before)
+                if page_index + 1 < max_pages:
+                    sleep(0.08)
+            candles = [
+                LiveStockCandle(
+                    timestamp=item.get("timestamp"),
+                    open_price=self._decimal(item.get("openPrice")),
+                    high_price=self._decimal(item.get("highPrice")),
+                    low_price=self._decimal(item.get("lowPrice")),
+                    close_price=self._decimal(item.get("closePrice")),
+                    volume=self._decimal(item.get("volume")),
+                )
+                for item in reversed(raw_rows)
+            ]
+            with self._candle_lock:
+                self._candle_cache[cache_key] = (monotonic() + cache_seconds, count, candles)
+            return candles[-count:]
+
+    def exchange_rate(self, base_currency: str = "USD", quote_currency: str = "KRW") -> dict:
+        base = base_currency.strip().upper()
+        quote = quote_currency.strip().upper()
+        if {base, quote} != {"USD", "KRW"} or base == quote:
+            raise ValueError("환율 조회는 USD와 KRW 조합만 지원합니다.")
+        query = urlencode({"baseCurrency": base, "quoteCurrency": quote})
+        payload = self._authorized_json_request(
+            f"{self.base_url}/api/v1/exchange-rate?{query}"
+        )
+        result = payload.get("result")
+        if not isinstance(result, dict) or not result.get("validFrom"):
+            raise TossApiError("토스 API 환율 응답 형식이 예상과 다릅니다.")
+        return result
 
     def domestic_sparklines(
         self, symbols: list[str], count: int | None = None, period: str = "1D"

@@ -42,6 +42,7 @@ class MovingAverageEngine:
         cooldown_minutes: int = 30,
         clock: Callable[[], datetime] | None = None,
         price_feed: PaperPriceFeed | None = None,
+        decision_recorder: Callable[[dict], None] | None = None,
     ) -> None:
         self.market = market
         self.broker = broker
@@ -59,6 +60,7 @@ class MovingAverageEngine:
         self.cooldown_minutes = cooldown_minutes
         self._clock = clock or (lambda: datetime.now().astimezone())
         self.price_feed = price_feed
+        self.decision_recorder = decision_recorder
         self.last_data_at = None
         self.data_message = "시세 수신 대기"
         self._last_bar_at = {}
@@ -94,6 +96,58 @@ class MovingAverageEngine:
     @staticmethod
     def _parse_time(value: str) -> time:
         return datetime.strptime(value, "%H:%M").time()
+
+    def _record_ml_decision(
+        self,
+        snapshot: StrategySnapshot,
+        action: str,
+        *,
+        previous_trend: str | None = None,
+        metadata: dict | None = None,
+    ) -> None:
+        if self.decision_recorder is None:
+            return
+        try:
+            decision_at = self._clock()
+            account = self.broker.account()
+            self.decision_recorder(
+                {
+                    "run_id": self.broker.run_id,
+                    "account_id": self.broker.account_id,
+                    "account_name": self.broker.account_name,
+                    "strategy_id": self.strategy_id,
+                    "strategy_name": self.strategy_name,
+                    "data_source": "TOSS" if self.price_feed else "SIMULATED",
+                    "symbol": snapshot.symbol,
+                    "candle_event_at": snapshot.data_at,
+                    "decision_at": decision_at,
+                    "available_at": decision_at,
+                    "action": action,
+                    "reason": snapshot.decision,
+                    "price": snapshot.price,
+                    "short_average": snapshot.short_average,
+                    "long_average": snapshot.long_average,
+                    "trend": snapshot.trend,
+                    "previous_trend": previous_trend,
+                    "history_count": snapshot.collected_prices,
+                    "entry_armed": snapshot.symbol in self._entry_armed,
+                    "confirmation_count": self._above_count.get(snapshot.symbol, 0),
+                    "strategy_quantity": self.broker.strategy_quantity(snapshot.symbol),
+                    "cash": account.cash,
+                    "total_asset": account.total_asset,
+                    "metadata": {
+                        "tick_count": self.tick_count,
+                        "short_period": self.short_period,
+                        "long_period": self.long_period,
+                        "sizing_mode": self.sizing_mode,
+                        **(metadata or {}),
+                    },
+                }
+            )
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Could not enqueue ML strategy decision for %s", snapshot.symbol
+            )
 
     async def start(self) -> bool:
         if self.running:
@@ -233,6 +287,10 @@ class MovingAverageEngine:
                     data_at=self._last_bar_at.get(quote.symbol),
                     decision=f"가격 수집 중 {len(history)}/{self.long_period}",
                 )
+                if new_bar:
+                    self._record_ml_decision(
+                        self._snapshots[quote.symbol], "DATA_WAIT"
+                    )
                 continue
 
             short_average = sum(list(history)[-self.short_period :], Decimal("0")) / self.short_period
@@ -273,18 +331,27 @@ class MovingAverageEngine:
             # 교차 강도를 거래비용과 직접 비교하면 짧은 이동평균에서 정상 신호까지
             # 거의 모두 제거된다. 비용은 체결 손익에 반영하고 진입은 2봉·추세로 확인한다.
             rising = history[-1] > history[0] and quote.price >= short_average
+            action = "WAIT"
             if (quote.symbol in self._entry_armed and self._above_count.get(quote.symbol, 0) >= 2
                     and rising and not self.broker.strategy_quantity(quote.symbol)):
                 if self._buy(quote.symbol, quote.price):
                     self._entry_armed.discard(quote.symbol)
                     self._snapshots[quote.symbol].decision = "매수 체결 · 청산 조건 감시"
+                    action = "BUY_FILLED"
                 else:
                     self._snapshots[quote.symbol].decision = "매수 조건 충족 · 주문 제한/잔액 확인"
+                    action = "BUY_BLOCKED"
             elif quote.symbol in self._entry_armed and self._above_count.get(quote.symbol, 0) >= 2:
                 self._snapshots[quote.symbol].decision = "2봉 확인 · 가격 추세 확인 대기"
             elif previous_trend == "ABOVE" and trend == "BELOW":
                 self._sell(quote.symbol, "단기 이동평균이 장기 이동평균을 하향 돌파")
 
+            self._record_ml_decision(
+                self._snapshots[quote.symbol],
+                action,
+                previous_trend=previous_trend,
+                metadata={"rising": rising},
+            )
             self._previous_trend[quote.symbol] = trend
         self._update_drawdown()
 
@@ -345,20 +412,22 @@ class MovingAverageEngine:
             return True
         return False
 
-    def _sell(self, symbol: str, reason: str, *, lot_id=None) -> None:
+    def _sell(self, symbol: str, reason: str, *, lot_id=None) -> bool:
         if not self._within_hours():
-            return
+            return False
         quantity = next((lot["quantity"] for lot in self.broker.managed_lots() if lot["id"] == lot_id), 0) if lot_id else self.broker.strategy_quantity(symbol)
         if not quantity:
-            return
+            return False
         self._record_signal(symbol, OrderSide.SELL, reason)
         trade_profit = Decimal(0)
+        filled_any = False
         # 요청 모델의 1회 1,000주 범위 안에서 관리 보유분 전체를 청산한다.
         while quantity:
             order = self.broker.submit(OrderRequest(symbol=symbol, side=OrderSide.SELL, quantity=min(quantity, 1000)),
                                        source="STRATEGY", reason=reason, lot_id=lot_id)
             if order.status.value != "FILLED":
                 break
+            filled_any = True
             self._strategy_cash_flow += order.price * order.quantity - order.fee - order.tax
             self._trading_costs += order.fee + order.tax + order.slippage
             self._realized_profit += order.realized_profit or Decimal(0)
@@ -371,6 +440,7 @@ class MovingAverageEngine:
                 self._position_opened_at.pop(symbol, None)
                 self._completed_trades += 1
                 self._winning_trades += int(trade_profit > 0)
+        return filled_any
 
     def _can_order(self, symbol: str) -> bool:
         now = self._clock()
@@ -438,7 +508,31 @@ class MovingAverageEngine:
                     if previous > 0 and current <= 0:
                         reason = '이동평균 하향 교차'
             if reason:
-                self._sell(symbol, f"{context.get('strategy_name') or '현재 전략'} · {reason}", lot_id=lot['id'])
+                sold = self._sell(symbol, f"{context.get('strategy_name') or '현재 전략'} · {reason}", lot_id=lot['id'])
+                closes = [bar.close_price for bar in candles[symbol]] if candles is not None else []
+                short = int(context.get('short_period', self.short_period))
+                long = int(context.get('long_period', self.long_period))
+                short_average = sum(closes[-short:], Decimal(0)) / short if len(closes) >= short else None
+                long_average = sum(closes[-long:], Decimal(0)) / long if len(closes) >= long else None
+                snapshot = StrategySnapshot(
+                    symbol=symbol,
+                    name=self.market.quote(symbol).name,
+                    price=price,
+                    collected_prices=len(closes),
+                    data_at=candles[symbol][-1].timestamp if closes else None,
+                    short_average=short_average,
+                    long_average=long_average,
+                    trend=(
+                        "ABOVE" if short_average is not None and long_average is not None
+                        and short_average > long_average else "BELOW"
+                    ),
+                    decision=f"{context.get('strategy_name') or '현재 전략'} · {reason}",
+                )
+                self._record_ml_decision(
+                    snapshot,
+                    "SELL_FILLED" if sold else "SELL_BLOCKED",
+                    metadata={"lot_id": lot["id"], "return_rate": str(rate)},
+                )
                 exited.add(symbol)
             if symbol not in self.target_symbols:
                 self._snapshots[symbol] = StrategySnapshot(symbol=symbol, name=self.market.quote(symbol).name,
