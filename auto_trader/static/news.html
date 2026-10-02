@@ -8,7 +8,7 @@
   <script src="/static/news.js" defer></script>
   <script src="/static/header-status.js" defer></script>
 <link rel="icon" type="image/svg+xml" href="/static/favicon.svg"></head>
-<body class="news-page">
+<body class="section-sidebar-page news-page">
   <div class="shell">
     <header class="topbar">
       <div><p class="eyebrow">FOLIO · BRIEF</p><h1>마켓 브리프</h1><p class="subtitle">지금 시장을 움직이는 이야기.</p></div>
@@ -25,7 +25,12 @@
         <a class="workspace-nav-link" href="/settings"><span class="nav-index">06</span><span><strong>설정</strong><small>전략·계정·한도</small></span></a>
       </div>
     </nav>
-    <main>
+    <main class="workspace-page-layout">
+<aside class="workspace-section-sidebar"><div class="workspace-sidebar-brand"><span>FOLIO</span><strong>마켓 브리프</strong><small>페이지 메뉴</small></div><nav class="workspace-side-tabs workspace-section-tabs" id="news-section-tabs" role="tablist" aria-label="뉴스 화면 구역">
+        <button type="button" role="tab" aria-selected="true" data-news-tab="core" class="active"><span>01</span>핵심 이슈</button>
+        <button type="button" role="tab" aria-selected="false" data-news-tab="coverage"><span>02</span>전체 보도 흐름</button>
+      </nav></aside>
+<div class="workspace-page-content">
       <section class="panel news-search-hero">
         <div><p class="section-kicker">MARKET BRIEF</p><h2>시장 한눈에</h2><p class="subtitle">관심 종목과 산업의 최근 소식을 찾아보세요.</p></div>
         <form class="news-search-form" id="news-search-form">
@@ -42,10 +47,7 @@
         </div>
       </section>
 
-      <nav class="workspace-section-tabs" id="news-section-tabs" role="tablist" aria-label="뉴스 화면 구역">
-        <button type="button" role="tab" aria-selected="true" data-news-tab="core" class="active"><span>01</span>핵심 이슈</button>
-        <button type="button" role="tab" aria-selected="false" data-news-tab="coverage"><span>02</span>전체 보도 흐름</button>
-      </nav>
+
 
       <section class="panel news-core-panel workspace-section-panel" data-news-panel="core">
         <div class="panel-heading"><div><p class="section-kicker">TOP STORIES</p><h2 id="news-core-title">주요 이슈</h2><p class="subtitle">여러 매체에서 주목한 시장의 주요 소식입니다.</p></div><span class="market-badge" id="news-core-count">-</span></div>
@@ -58,6 +60,7 @@
           <p class="news-overview" id="news-overview">뉴스를 불러오는 중입니다.</p>
           <div class="news-keywords" id="news-keywords"></div>
           <p class="news-disclaimer">기사 제목의 반복 키워드를 정리한 정보이며, 긍정·부정 판단이나 투자 권유가 아닙니다.</p>
+          <nav class="news-issue-index" aria-labelledby="news-index-title"><h3 id="news-index-title">이슈 목차</h3><p>이슈를 선택하면 해당 기사 묶음으로 이동합니다.</p><ol id="news-issue-index"><li class="news-index-empty">뉴스를 불러오는 중입니다.</li></ol></nav>
         </article>
         <section class="panel news-feed-panel">
           <div class="panel-heading"><div><p class="section-kicker">ISSUE CLUSTERS</p><h2>최근 이슈</h2></div><span class="updated" id="news-updated">-</span></div>
@@ -65,7 +68,7 @@
           <p class="form-message" id="news-message"></p>
         </section>
       </section>
-    </main>
+    </div></main>
     <footer><span>기사 제목을 누르면 해당 매체의 원문으로 이동합니다.</span></footer>
   </div>
 </body>

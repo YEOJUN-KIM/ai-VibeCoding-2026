@@ -22,6 +22,22 @@ def preset_week(now=None):
     return monday
 
 
+def preset_snapshot_status(now=None):
+    """Read refresh metadata without generating or replacing a snapshot."""
+    week = preset_week(now)
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT week_start,generated_at FROM strategy_preset_market WHERE snapshot_key=%s",
+            (_SNAPSHOT_KEY,),
+        ).fetchone()
+    current = row is not None and row['week_start'] == week
+    return dict(week_start=week.isoformat(),
+                snapshot_week_start=row['week_start'].isoformat() if row else None,
+                generated_at=row['generated_at'].isoformat() if row else None,
+                next_refresh_on=(week + timedelta(days=7) if current else week).isoformat(),
+                current=current)
+
+
 def weekly_preset(kind, amount, fetch_candidates, *, fee_rate, slippage_rate, now=None):
     """Refresh the shared market snapshot on the week's first preview, not saved strategies."""
     week = preset_week(now)

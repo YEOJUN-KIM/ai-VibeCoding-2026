@@ -45,9 +45,11 @@ function articleElement(article) {
   return link;
 }
 
-function issueElement(issue) {
+function issueElement(issue, index) {
   const wrapper = document.createElement("article");
   wrapper.className = "news-issue";
+  wrapper.id = `news-issue-${index + 1}`;
+  wrapper.tabIndex = -1;
   const summary = document.createElement("div");
   summary.className = "news-issue-summary";
   const stats = document.createElement("span");
@@ -125,6 +127,33 @@ function renderCoreIssues(data) {
   coreIssues.forEach((issue, index) => grid.append(coreIssueElement(issue, index + 1)));
 }
 
+function issueIndexElement(issue, target, index) {
+  const item = document.createElement("li");
+  const button = document.createElement("button");
+  button.type = "button";
+  button.setAttribute("aria-controls", target.id);
+  const label = document.createElement("span");
+  label.textContent = `${index + 1}. ${issue.key_topics.slice(0, 2).join(" · ") || issue.title}`;
+  const count = document.createElement("small");
+  count.textContent = `${issue.article_count}건`;
+  button.append(label, count);
+  button.addEventListener("click", () => {
+    $("#news-issue-index").querySelectorAll("button").forEach((entry) => entry.removeAttribute("aria-current"));
+    button.setAttribute("aria-current", "location");
+    target.focus({ preventScroll: true });
+    target.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+  });
+  item.append(button);
+  return item;
+}
+
+function clearIssueIndex(message) {
+  const empty = document.createElement("li");
+  empty.className = "news-index-empty";
+  empty.textContent = message;
+  $("#news-issue-index").replaceChildren(empty);
+}
+
 function renderDigest(data) {
   $("#news-brief-title").textContent = `‘${data.query}’ 보도 흐름`;
   $("#news-count").textContent = `${data.article_count}개 기사 · ${data.issue_count}개 이슈`;
@@ -139,13 +168,19 @@ function renderDigest(data) {
   }));
   const list = $("#news-list");
   list.replaceChildren();
+  $("#news-issue-index").replaceChildren();
   if (!data.issues.length) {
     const empty = document.createElement("div");
     empty.className = "empty";
     empty.textContent = "표시할 최근 기사가 없습니다.";
     list.append(empty);
+    clearIssueIndex("표시할 이슈가 없습니다.");
   } else {
-    data.issues.forEach((issue) => list.append(issueElement(issue)));
+    data.issues.forEach((issue, index) => {
+      const target = issueElement(issue, index);
+      list.append(target);
+      $("#news-issue-index").append(issueIndexElement(issue, target, index));
+    });
   }
   $("#news-message").textContent = `${data.source_name}의 기사 제목을 유사한 이슈별로 묶었습니다.`;
 }
@@ -159,6 +194,7 @@ async function loadNews(query, { hot = false } = {}) {
   }
   $("#news-query").value = hot ? "" : normalized;
   $("#news-message").textContent = "최근 기사를 찾고 있습니다.";
+  clearIssueIndex("뉴스를 불러오는 중입니다.");
   $("#news-list").innerHTML = '<div class="empty">뉴스를 불러오는 중입니다.</div>';
   const url = new URL(window.location.href);
   if (hot) url.searchParams.delete("q");
@@ -171,6 +207,7 @@ async function loadNews(query, { hot = false } = {}) {
     renderDigest(await api(endpoint));
   } catch (error) {
     $("#news-message").textContent = error.message;
+    clearIssueIndex("뉴스를 불러오지 못했습니다.");
     $("#news-list").innerHTML = '<div class="empty"></div>';
     $("#news-list .empty").textContent = error.message;
   }

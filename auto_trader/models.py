@@ -96,6 +96,7 @@ class PaperWorkspaceStatus(BaseModel):
     managed_holdings: list[dict] = Field(default_factory=list)
     holding_management: list[dict] = Field(default_factory=list)
     background_runs: list[dict] = Field(default_factory=list)
+    account_summaries: list[dict] = Field(default_factory=list)
     selected_strategy_id: int | None = None
     selected_strategy_name: str | None = None
     selected_symbol: str | None = None

@@ -13,6 +13,7 @@
 
 현재 구현 범위와 제한은 [문서 안내](docs/README.md)에서 확인할 수 있습니다.
 프로젝트를 만들며 정리한 학습 메모는 [바이브 코딩 학습 노트](docs/VIBE_CODING_NOTES.md)로 분리했습니다.
+자동매매 머신러닝 학습 과정은 [머신러닝 문서](docs/machine-learning/README.md)에 단계별로 정리했습니다.
 
 ## 로컬 실행
 

@@ -10,7 +10,7 @@
   <script src="/static/stock-detail.js" defer></script>
   <script src="/static/header-status.js" defer></script>
 <link rel="icon" type="image/svg+xml" href="/static/favicon.svg"></head>
-<body class="stock-detail-page">
+<body class="section-sidebar-page stock-detail-page">
   <div class="shell">
     <header class="topbar">
       <div><button class="detail-back-button" id="detail-back-button" type="button"><span aria-hidden="true">←</span> 이전</button><p class="eyebrow header-eyebrow">FOLIO · INSIGHT</p><h1>종목 인사이트</h1><p class="subtitle">가격의 흐름부터 기업의 가치까지.</p></div>
@@ -28,7 +28,15 @@
         <a class="workspace-nav-link" href="/settings"><span class="nav-index">06</span><span><strong>설정</strong><small>전략·계정·한도</small></span></a>
       </div>
     </nav>
-    <main>
+    <main class="workspace-page-layout">
+<aside class="workspace-section-sidebar"><div class="workspace-sidebar-brand"><span>FOLIO</span><strong>종목 상세</strong><small>페이지 메뉴</small></div><nav class="workspace-side-tabs detail-section-tabs" id="detail-section-tabs" role="tablist" aria-label="종목 상세 구역">
+        <button type="button" role="tab" aria-selected="true" data-detail-tab="chart" class="active"><span>01</span>차트</button>
+        <button type="button" role="tab" aria-selected="false" data-detail-tab="company"><span>02</span>기업정보</button>
+        <button type="button" role="tab" aria-selected="false" data-detail-tab="long-term" data-long-term-only><span>03</span>장기분석</button>
+        <button type="button" role="tab" aria-selected="false" data-detail-tab="market"><span>04</span>시장정보</button>
+        <button type="button" role="tab" aria-selected="false" data-detail-tab="news"><span>05</span>뉴스</button>
+      </nav></aside>
+<div class="workspace-page-content">
       <section class="panel stock-detail-hero">
         <p class="section-kicker" id="detail-market">DOMESTIC MARKET</p>
         <div class="stock-detail-title"><h2 id="detail-name">종목을 불러오는 중</h2><span class="stock-detail-code" id="detail-symbol">-</span></div>
@@ -39,13 +47,7 @@
           <div><span id="detail-low-label">1일 최저가</span><strong id="detail-low">-</strong><small>선택 기간 저가 기준</small></div>
         </div>
       </section>
-      <nav class="detail-section-tabs" id="detail-section-tabs" role="tablist" aria-label="종목 상세 구역">
-        <button type="button" role="tab" aria-selected="true" data-detail-tab="chart" class="active"><span>01</span>차트</button>
-        <button type="button" role="tab" aria-selected="false" data-detail-tab="company"><span>02</span>기업정보</button>
-        <button type="button" role="tab" aria-selected="false" data-detail-tab="long-term" data-long-term-only><span>03</span>장기분석</button>
-        <button type="button" role="tab" aria-selected="false" data-detail-tab="market"><span>04</span>시장정보</button>
-        <button type="button" role="tab" aria-selected="false" data-detail-tab="news"><span>05</span>뉴스</button>
-      </nav>
+
       <section class="panel company-info-panel detail-section-panel" data-detail-panel="company" hidden>
         <div class="panel-heading"><div><p class="section-kicker">COMPANY PROFILE</p><h2>기업 기본정보</h2><p class="subtitle">상장 정보와 거래 가능 여부를 확인하세요.</p></div><span class="market-badge" id="company-listing-status">-</span></div>
         <div class="company-category-tabs" aria-label="기업정보 구분">
@@ -160,7 +162,7 @@
         <p class="news-disclaimer">기사 제목을 바탕으로 정리한 보도 흐름이며 투자 판단이나 매매 신호가 아닙니다.</p>
       </section>
       <p class="form-message" id="detail-message">토스증권 일봉 데이터를 불러오고 있습니다.</p>
-    </main>
+    </div></main>
     <footer><span>가격 정보는 투자 권유가 아니며 실제 주문 전에 다시 확인하세요.</span></footer>
   </div>
   <div class="modal-backdrop hidden" id="detail-live-auth-modal" role="dialog" aria-modal="true" aria-labelledby="detail-live-auth-title">

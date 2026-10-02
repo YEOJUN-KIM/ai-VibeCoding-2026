@@ -8,7 +8,7 @@
   <script src="/static/stocks.js" defer></script>
   <script src="/static/header-status.js" defer></script>
 <link rel="icon" type="image/svg+xml" href="/static/favicon.svg"></head>
-<body class="stocks-page">
+<body class="section-sidebar-page stocks-page">
   <div class="shell">
     <header class="topbar">
       <div><p class="eyebrow">FOLIO · MARKET</p><h1>마켓</h1>
@@ -32,7 +32,9 @@
       </div>
     </nav>
 
-    <main>
+    <main class="workspace-page-layout">
+      <aside class="workspace-section-sidebar workspace-section-sidebar-empty" aria-label="마켓 사이드바"><div class="workspace-sidebar-brand"><span>FOLIO</span><strong>마켓</strong><small>국내주식 탐색</small></div></aside>
+      <div class="workspace-page-content">
       <section class="market-directory-hero panel">
         <div><p class="section-kicker">KOSPI · KOSDAQ</p><h2>종목 둘러보기</h2><p class="subtitle">시장·유형·거래대금과 기간별 흐름을 기준으로 국내 종목을 비교합니다.</p></div>
         <div class="directory-count"><strong id="stock-total">-</strong><span>검색된 종목</span></div>
@@ -64,7 +66,7 @@
           <button class="button secondary" id="stock-last" type="button">마지막</button>
         </div>
       </section>
-    </main>
+    </div></main>
     <footer><span>시세와 순위는 토스증권 제공 데이터이며 투자 권유가 아닙니다.</span></footer>
   </div>
 </body>

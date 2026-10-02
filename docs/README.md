@@ -14,6 +14,7 @@
 | [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) | 코드 위치와 책임 |
 | [CHANGELOG.md](CHANGELOG.md) | 이미 완료된 변경 이력 |
 | [VIBE_CODING_NOTES.md](VIBE_CODING_NOTES.md) | 프로젝트와 분리해 보관하는 개발 학습 메모 |
+| [machine-learning/](machine-learning/README.md) | 자동매매 머신러닝의 설치·데이터·학습·운영·포트폴리오 과정 |
 
 ## 문서 갱신 규칙
 
@@ -22,4 +23,5 @@
 - 바로 진행할 작업만 `ROADMAP.md`에 둡니다.
 - 보류된 아이디어는 `BACKLOG.md`에 두고 시작할 때 로드맵으로 옮깁니다.
 - PAPER 계산식은 `PAPER_STRATEGY.md`, 저장 방식은 `DATABASE.md`만 기준으로 삼습니다.
+- 머신러닝 학습과 구현 순서는 `machine-learning/README.md`를 기준으로 삼습니다.
 - 과거 구현 과정과 일자별 기록을 PRD나 로드맵에 다시 적지 않습니다.

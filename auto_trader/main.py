@@ -60,7 +60,7 @@ from .live_orders import (auto_position_quantities, cancel_dry_run_order, delete
                           orders_for_reconciliation, real_order_for_user,
                           save_dry_run_order, update_real_order)
 from .live_strategies import delete_strategy, list_strategies, save_strategy
-from .strategy_presets import weekly_preset
+from .strategy_presets import weekly_preset, preset_snapshot_status
 from .long_term import (analyze_long_term, long_term_recommendation_assessment,
                         next_daily_scan_at)
 from .long_term_repository import (add_long_term_watch, fresh_long_term_analysis,
@@ -707,6 +707,11 @@ def live_trading_readiness(_: AuthenticatedUser = Depends(require_user)) -> Live
 @app.get("/settings/strategies", response_model=list[LiveStrategy])
 def list_strategy_settings(user: AuthenticatedUser = Depends(require_user)) -> list[LiveStrategy]:
     return list_strategies(user.id)
+
+
+@app.get("/settings/strategy-preset-status")
+def strategy_preset_status(_: AuthenticatedUser = Depends(require_user)) -> dict:
+    return preset_snapshot_status()
 
 
 @app.get("/settings/strategy-presets/{kind}")
@@ -1375,8 +1380,25 @@ def stocks(_: AuthenticatedUser = Depends(require_user)) -> list[Stock]:
 
 @app.get("/paper/workspace", response_model=PaperWorkspaceStatus)
 def paper_workspace(_: AuthenticatedUser = Depends(require_user)) -> PaperWorkspaceStatus:
+    sessions = {mode: session for mode, session in _paper_sessions.items() if mode != paper_account_mode}
+    sessions[paper_account_mode] = (broker, engine, paper_snapshot_at, paper_source_account_label, paper_selected_strategy)
+    summaries = []
+    for mode in ("LIVE_COPY", "EXPERIMENT"):
+        session = sessions.get(mode)
+        if session is None:
+            summaries.append(dict(account_mode=mode, selected=False, loaded=False))
+            continue
+        account_broker, account_engine, _, _, selected = session
+        account = account_broker.account()
+        strategy = account_engine.status()
+        summaries.append(dict(account_mode=mode, selected=mode == paper_account_mode, loaded=True,
+                              running=strategy.running, emergency_stopped=strategy.emergency_stopped,
+                              strategy_name=selected.name if selected else None, tick_count=strategy.tick_count,
+                              data_message=strategy.data_message, position_count=len(account.positions),
+                              total_asset=str(account.total_asset), total_profit=str(account.total_profit),
+                              strategy_profit=str(strategy.strategy_profit)))
     return PaperWorkspaceStatus(
-        account=broker.account(), account_mode=paper_account_mode,
+        account=broker.account(), account_mode=paper_account_mode, account_summaries=summaries,
         management_scope=broker.management_scope,
         background_runs=[dict(account_mode=mode, strategy_name=session[4].name if session[4] else None,
                               tick_count=session[1].tick_count, data_message=session[1].data_message)

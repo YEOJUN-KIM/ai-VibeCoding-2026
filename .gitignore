@@ -226,3 +226,8 @@ backups/
 # Local server output
 .runtime-logs/
 .backups/
+
+# Generated machine-learning artifacts
+models/
+artifacts/ml/generated/
+.tmp/

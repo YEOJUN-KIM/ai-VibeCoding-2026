@@ -279,3 +279,43 @@ CREATE TABLE IF NOT EXISTS strategy_preset_market (
     candidates JSONB NOT NULL,
     generated_at TIMESTAMPTZ NOT NULL
 );
+
+-- Immutable source observations for reproducible machine-learning datasets.
+CREATE TABLE IF NOT EXISTS ml_collection_runs (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    source TEXT NOT NULL,
+    interval TEXT NOT NULL,
+    requested_symbols JSONB NOT NULL,
+    requested_count INTEGER NOT NULL CHECK (requested_count > 0),
+    status TEXT NOT NULL CHECK (status IN ('RUNNING','COMPLETED','PARTIAL','FAILED')),
+    inserted_rows INTEGER NOT NULL DEFAULT 0 CHECK (inserted_rows >= 0),
+    duplicate_rows INTEGER NOT NULL DEFAULT 0 CHECK (duplicate_rows >= 0),
+    errors JSONB NOT NULL DEFAULT '{}'::jsonb,
+    started_at TIMESTAMPTZ NOT NULL,
+    finished_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS ml_raw_candles (
+    source TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    interval TEXT NOT NULL,
+    event_at TIMESTAMPTZ NOT NULL,
+    available_at TIMESTAMPTZ NOT NULL,
+    collected_at TIMESTAMPTZ NOT NULL,
+    open_price NUMERIC NOT NULL CHECK (open_price > 0),
+    high_price NUMERIC NOT NULL CHECK (high_price > 0),
+    low_price NUMERIC NOT NULL CHECK (low_price > 0),
+    close_price NUMERIC NOT NULL CHECK (close_price > 0),
+    volume NUMERIC NOT NULL CHECK (volume >= 0),
+    collection_run_id BIGINT REFERENCES ml_collection_runs(id) ON DELETE SET NULL,
+    raw_payload JSONB NOT NULL,
+    PRIMARY KEY (source, symbol, interval, event_at),
+    CHECK (event_at <= available_at),
+    CHECK (available_at <= collected_at),
+    CHECK (high_price >= open_price AND high_price >= close_price AND high_price >= low_price),
+    CHECK (low_price <= open_price AND low_price <= close_price AND low_price <= high_price)
+);
+CREATE INDEX IF NOT EXISTS ml_raw_candles_symbol_time
+    ON ml_raw_candles(symbol, interval, event_at);
+CREATE INDEX IF NOT EXISTS ml_raw_candles_available
+    ON ml_raw_candles(symbol, interval, available_at, event_at);

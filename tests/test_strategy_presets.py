@@ -124,3 +124,20 @@ class WeeklyPresetTests(unittest.TestCase):
         with strategy_presets.connect() as conn:
             self.assertEqual(conn.execute('SELECT count(*) AS n FROM strategy_preset_market').fetchone()['n'],1)
             self.assertEqual(conn.execute('SELECT count(*) AS n FROM live_strategies').fetchone()['n'],0)
+
+    def test_status_is_read_only_and_reports_pending_and_current_weeks(self):
+        now=datetime.fromisoformat('2026-10-02T01:00:00+00:00')
+        empty=strategy_presets.preset_snapshot_status(now)
+        self.assertFalse(empty['current'])
+        self.assertIsNone(empty['generated_at'])
+        self.assertEqual(empty['next_refresh_on'],'2026-09-28')
+        self.weekly('2026-10-02T01:00:00',lambda:[candidate('000001')])
+        current=strategy_presets.preset_snapshot_status(now)
+        self.assertTrue(current['current'])
+        self.assertEqual(current['next_refresh_on'],'2026-10-05')
+        stale=strategy_presets.preset_snapshot_status(datetime.fromisoformat('2026-10-04T15:00:00+00:00'))
+        self.assertFalse(stale['current'])
+        self.assertEqual(stale['snapshot_week_start'],'2026-09-28')
+        self.assertEqual(stale['next_refresh_on'],'2026-10-05')
+        with strategy_presets.connect() as conn:
+            self.assertEqual(conn.execute('SELECT week_start FROM strategy_preset_market').fetchone()['week_start'].isoformat(),'2026-09-28')

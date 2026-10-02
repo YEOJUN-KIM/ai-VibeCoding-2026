@@ -5,9 +5,13 @@
 ```text
 ai-VibeCoding-2026/
 ├─ auto_trader/       애플리케이션 코드와 웹 자산
+│  └─ ml/             ML 환경 검증, 원본 데이터 수집과 이후 학습 코드
 ├─ docs/              제품·운영 문서
+│  └─ machine-learning/ 머신러닝 설치·데이터·학습·운영 학습 과정
+├─ scripts/           ML 설치·수집 등 반복 작업 스크립트
 ├─ tests/             자동 테스트
 ├─ .env.example       환경 변수 예시
+├─ requirements-ml.txt ML 패키지와 애플리케이션 의존성
 ├─ requirements.txt   Python 의존성
 └─ README.md          프로젝트 시작 안내
 ```
@@ -33,6 +37,14 @@ ai-VibeCoding-2026/
 - `favorites.py`: 관심종목 저장
 - `long_term.py`: 장기 관찰 점수, 등급과 예약 분석
 - `long_term_repository.py`: 장기 분석·추천·내 후보 저장
+
+## 머신러닝
+
+- `ml/verify_environment.py`: 패키지와 모델 저장·재로딩 확인
+- `ml/data_pipeline.py`: 원본 1분봉 검증·저장, 시점 제한 조회와 품질 통계
+- `ml/collect_candles.py`: 토스 완료 1분봉 수집 명령
+- `scripts/setup-ml.ps1`: 가상환경과 ML 패키지 설치
+- `scripts/collect-ml-data.ps1`: 원본 1분봉 수집 실행
 
 ## PAPER와 전략
 

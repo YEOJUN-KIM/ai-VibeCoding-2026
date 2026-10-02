@@ -59,16 +59,23 @@ class PaperAccountTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(main.broker, same)
 
     async def test_switch_keeps_background_worker_running_and_stop_is_account_specific(self):
-        self.engine.interval_seconds = .01
+        self.engine.interval_seconds = 1
         await self.engine.start()
         try:
             await main.select_paper_account('EXPERIMENT', None)
             ticks = self.engine.tick_count
-            await asyncio.sleep(.03)
+            await asyncio.sleep(1.03)
             self.assertTrue(self.engine.running)
             self.assertGreater(self.engine.tick_count, ticks)
             status = main.paper_workspace(None)
             self.assertEqual(status.background_runs[0]['account_mode'], 'LIVE_COPY')
+            summaries = {item['account_mode']: item for item in status.account_summaries}
+            self.assertTrue(summaries['EXPERIMENT']['selected'])
+            self.assertFalse(summaries['LIVE_COPY']['selected'])
+            self.assertTrue(summaries['LIVE_COPY']['running'])
+            self.assertEqual(summaries['EXPERIMENT']['position_count'], 0)
+            self.assertEqual(D(summaries['LIVE_COPY']['total_profit']), self.broker.account().total_profit)
+
             await main.strategy_stop(None)
             self.assertTrue(self.engine.running)
             self.engine.interval_seconds = 1
