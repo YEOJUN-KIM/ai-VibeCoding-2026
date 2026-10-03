@@ -83,7 +83,7 @@ def postgres_service(names, configured=None):
     if len(names) == 1:
         return names[0]
     if not names:
-        raise LaunchError('PostgreSQL 설치가 필요합니다. docs/INSTALL_WINDOWS.md의 4번을 확인하세요.')
+        raise LaunchError('PostgreSQL 설치가 필요합니다. docs/guides/INSTALL_WINDOWS.md의 3번을 확인하세요.')
     raise LaunchError('PostgreSQL 서비스가 여러 개입니다. .env의 POSTGRES_SERVICE에 사용할 이름을 지정하세요.')
 
 
@@ -213,7 +213,7 @@ def main():
         print(f'실행 안내: {exc}', file=sys.stderr)
         return 1
     except Exception:
-        print('실행 준비에 실패했습니다. DB 설정과 docs/INSTALL_WINDOWS.md를 확인하세요.', file=sys.stderr)
+        print('실행 준비에 실패했습니다. DB 설정과 docs/guides/INSTALL_WINDOWS.md를 확인하세요.', file=sys.stderr)
         return 1
     return 0
 

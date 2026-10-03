@@ -1,6 +1,6 @@
 # 프로젝트 구조
 
-기준일: 2026-10-03. 현재 코드 위치를 안내하며, 휴대폰 앱·외부 접속 모듈은 아직 없습니다.
+기준일: 2026-10-04. 현재 코드 위치를 안내하며, 휴대폰 앱·외부 접속 모듈은 아직 없습니다.
 
 ## 루트
 
@@ -10,7 +10,8 @@ ai-VibeCoding-2026/
 │  └─ ml/             ML 환경 검증, 원본 데이터 수집과 이후 학습 코드
 ├─ docs/              제품·운영 문서
 │  └─ machine-learning/ 머신러닝 설치·데이터·학습·운영 학습 과정
-├─ scripts/           ML 설치·수집 등 반복 작업 스크립트
+├─ FOLIO.cmd          Windows 간편 실행 진입점
+├─ scripts/           실행 준비·ML 설치·수집 등 반복 작업
 ├─ tests/             자동 테스트
 ├─ .env.example       환경 변수 예시
 ├─ requirements-ml.txt ML 패키지와 애플리케이션 의존성
@@ -23,6 +24,7 @@ ai-VibeCoding-2026/
 ## 서버와 공통 기능
 
 - `main.py`: FastAPI 앱, 페이지·API 라우트, 시작 준비 상태와 예약 작업 조합
+- `launcher.py`·`scripts/start.ps1`: 최초 준비, DB 서비스·계정 확인, 서버 실행·중복 재사용·종료
 - `settings.py`: `.env` 기반 설정
 - `models.py`: API 요청·응답 모델
 - `database.py`: PostgreSQL 연결과 스키마 초기화
@@ -44,12 +46,12 @@ ai-VibeCoding-2026/
 - `ai_news.py`: 선택형 AI 뉴스 처리
 - `industries.py`: 종목 업종 분류 보조
 - `favorites.py`: 관심종목 저장
-- `long_term.py`: 장기 관찰 점수, 등급과 예약 분석
-- `long_term_repository.py`: 장기 분석·추천·내 후보 저장
+- `long_term.py`: 장기 리서치 점수, 등급과 예약 분석
+- `long_term_repository.py`: 장기 분석·추천·저장한 기업·메모·저장 해제 상태
 
 ## 머신러닝
 
-- `machine-learning/CURRENT_PROGRESS.md`: 현재 구현·운용·검증 현황과 다음 작업
+- `docs/machine-learning/CURRENT_PROGRESS.md`: 현재 구현·운용·검증 현황과 다음 작업
 - `ml/verify_environment.py`: 패키지와 모델 저장·재로딩 확인
 - `ml/data_pipeline.py`: 종목·시장 지표 원본 1분봉 검증·저장, 시점 제한 조회와 품질 통계
 - `ml/collect_candles.py`: 토스 완료 1분봉 수집 명령
@@ -77,7 +79,7 @@ ai-VibeCoding-2026/
 - `simulator.py`: 시뮬레이션 보조
 - `risk.py`: PAPER/LIVE 공통 위험 한도
 
-상세 동작은 [PAPER_STRATEGY.md](PAPER_STRATEGY.md)를 기준으로 합니다.
+상세 동작은 [PAPER_STRATEGY.md](../specs/PAPER_STRATEGY.md)를 기준으로 합니다.
 
 ## LIVE 주문
 
@@ -98,7 +100,8 @@ ai-VibeCoding-2026/
 - `company-icons.js`·`company-logos/`: 로컬 기업 로고 4개와 짧은 이름 대체 아이콘
 - `stocks`: 국내주식 탐색
 - `stock-detail`: 종목 상세·장기 분석·수동 주문
-- `long-term`: 자동 추천과 내 장기 관찰 후보
+- `long-term`: 추천 기업과 저장한 기업
+- `watch-notes.js`: 사용자별 기업 메모 입력·저장과 목록 검색
 - `news`: 뉴스
 - `settings`: 계정·연결, 자동매매 전략과 투자 한도
 - `settings-account.js`: 계정 정보, 비밀번호·PIN·증권 연결 변경 팝업

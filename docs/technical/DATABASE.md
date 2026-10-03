@@ -1,10 +1,10 @@
 # 데이터 저장과 백업 정책
 
-기준일: 2026-10-03
+기준일: 2026-10-04
 
 ## PostgreSQL
 
-현재 기본 구성은 Windows PostgreSQL 서비스의 `127.0.0.1:5432`, 데이터베이스 `auto_trader`입니다. Windows 시작 시 서비스가 함께 시작하므로 별도 프로젝트 DB 시작 명령은 필요하지 않습니다.
+현재 기본 구성은 Windows PostgreSQL 서비스의 `127.0.0.1:5432`, 데이터베이스 `auto_trader`입니다. 서비스 자동 시작 여부는 Windows 설정에 따릅니다. `FOLIO.cmd`는 연결을 확인하고 꺼진 로컬 서비스를 시작하며, 최초 역할·DB 생성은 설치 안내를 따릅니다.
 
 스키마의 단일 기준은 `auto_trader/schema.sql`입니다. 애플리케이션 시작 시 필요한 테이블과 호환 가능한 컬럼을 확인합니다. 2026-10-03 현재 DB의 public 테이블 34개를 확인했습니다. 테이블 수 확인은 백업·복원 검증을 뜻하지 않습니다.
 
@@ -18,11 +18,11 @@
 - 관심종목: `favorite_stocks`
 - 두 PAPER 계좌의 잔액·보유수량·매입단가·시작 자산·비용·주문 상태·관리 범위·자동매수분의 전략/수량/청산 조건·마지막 선택 전략: `paper_account_state` (계좌별 저장)
 - 전략과 대상 종목: `live_strategies`, `live_strategy_symbols`
-- 기본 프리셋 주간 후보 데이터·주간 기준일·생성 시각: `strategy_preset_market`. 현재 주간 데이터 한 건을 유지하며, 사용자 저장 전략과 분리합니다. 갱신·별도 저장 방식은 [PAPER_STRATEGY.md](PAPER_STRATEGY.md)를 참고합니다.
+- 기본 프리셋 주간 후보 데이터·주간 기준일·생성 시각: `strategy_preset_market`. 현재 주간 데이터 한 건을 유지하며, 사용자 저장 전략과 분리합니다. 갱신·별도 저장 방식은 [PAPER_STRATEGY.md](../specs/PAPER_STRATEGY.md)를 참고합니다.
 - 위험 설정과 일별 스냅샷: `risk_settings`, `risk_daily_snapshots`
 - 브로커 계좌·주문·이벤트: `broker_accounts`, `live_orders`, `live_order_events`
-- 장기 분석·자동 추천·내 후보: `long_term_analyses`, `long_term_recommendations`, `long_term_watchlist`
-- ML 원본 종목·시장 봉, 수집 실행, 거시 지표, 봉별 PAPER 판단, 품질 보고서: `ml_raw_candles`, `ml_market_indicator_candles`, `ml_collection_runs`, `ml_macro_observations`, `ml_strategy_decisions`, `ml_data_quality_reports`. 세부 저장·검증 기준은 [머신러닝 구현 현황](machine-learning/CURRENT_PROGRESS.md)을 참고합니다.
+- 장기 분석·자동 추천·저장한 기업·개인 메모·저장 해제 상태: `long_term_analyses`, `long_term_recommendations`, `long_term_watchlist`, `long_term_watch_notes`, `long_term_watch_exclusions`
+- ML 원본 종목·시장 봉, 수집 실행, 거시 지표, 봉별 PAPER 판단, 품질 보고서: `ml_raw_candles`, `ml_market_indicator_candles`, `ml_collection_runs`, `ml_macro_observations`, `ml_strategy_decisions`, `ml_data_quality_reports`. 세부 저장·검증 기준은 [머신러닝 구현 현황](../machine-learning/CURRENT_PROGRESS.md)을 참고합니다.
 - PAPER 계좌 식별·소유자와 실행·거래 기록 및 호환 테이블: `stocks`, `accounts`, `positions`, `strategy_runs`, `signals`, `orders`, `executions`, `order_events`, `cash_transactions`. 현재 PAPER 복원의 주 저장소는 `paper_account_state`입니다.
 
 ## 메모리와 로컬 파일
@@ -58,13 +58,13 @@ python backup_database.py --verify
 
 ## 운영 절차
 
-- 관찰 목록과 전략을 변경한 날, 앱 업데이트 전에 백업합니다. 정기 자동 실행은 아직 설정하지 않았습니다.
+- 저장한 기업 목록과 전략을 변경한 날, 앱 업데이트 전에 백업합니다. 정기 자동 실행은 아직 설정하지 않았습니다.
 - 백업에는 계정·세션과 거래 정보가 들어 있으므로 개인 저장소에서 관리합니다. `.backups/`는 Git에서 제외됩니다.
 - 최근 7개 일별 백업과 4개 주별 백업을 보관하는 것을 기준으로 합니다. 현재 도구는 기존 백업을 자동 삭제하지 않습니다.
 - `.env`, `.local-secrets/`, `.paper-history/`는 DB 백업에 포함되지 않으므로 별도로 보관합니다. 키 파일 복사만으로 다른 컴퓨터에서 복호화할 수 있다고 가정하지 않습니다. 모의계좌 자산은 DB 백업에 포함되며 자동매매 실행 상태는 복원하지 않습니다.
 - 로컬 디스크 손실에도 대비하려면 백업을 개인 외부 저장소에도 복사해야 합니다. 외부 복사와 암호화는 아직 설정하지 않았습니다.
 
-실제 장애 복구 시에는 앱을 정지하고, 백업을 새 DB에 `pg_restore --exit-on-error --no-owner --no-privileges`로 복원합니다. `.env`의 POSTGRES_DB를 새 DB로 연결한 뒤 계정·전략·관찰 목록을 확인합니다. 기존 DB는 확인이 끝날 때까지 유지합니다. 사용자 역할과 권한은 복구 환경에서 별도 설정합니다.
+실제 장애 복구 시에는 앱을 정지하고, 백업을 새 DB에 `pg_restore --exit-on-error --no-owner --no-privileges`로 복원합니다. `.env`의 POSTGRES_DB를 새 DB로 연결한 뒤 계정·전략·저장한 기업 목록을 확인합니다. 기존 DB는 확인이 끝날 때까지 유지합니다. 사용자 역할과 권한은 복구 환경에서 별도 설정합니다.
 
 ## PAPER 관리 정보
 
