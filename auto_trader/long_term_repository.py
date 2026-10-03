@@ -94,8 +94,10 @@ def long_term_watched_symbols() -> set[str]:
     with connect() as conn:
         rows = conn.execute(
             """
-            SELECT symbol FROM favorite_stocks
+            SELECT f.symbol FROM favorite_stocks f
             WHERE security_type='STOCK' AND is_common_share=true
+              AND NOT EXISTS (SELECT 1 FROM long_term_watch_exclusions x
+                              WHERE x.user_id=f.user_id AND x.symbol=f.symbol)
             UNION
             SELECT symbol FROM long_term_watchlist
             """
@@ -115,6 +117,7 @@ def fresh_long_term_analysis_count() -> int:
 
 def add_long_term_watch(user_id: int, symbol: str, name: str, market: str) -> None:
     with connect() as conn:
+        conn.execute('DELETE FROM long_term_watch_exclusions WHERE user_id=%s AND symbol=%s', (user_id,symbol))
         conn.execute(
             """
             INSERT INTO long_term_watchlist(user_id,symbol,name,market)
@@ -127,10 +130,27 @@ def add_long_term_watch(user_id: int, symbol: str, name: str, market: str) -> No
 
 def remove_long_term_watch(user_id: int, symbol: str) -> None:
     with connect() as conn:
+        conn.execute('''INSERT INTO long_term_watch_exclusions(user_id,symbol)
+            VALUES (%s,%s) ON CONFLICT DO NOTHING''', (user_id,symbol))
         conn.execute(
             "DELETE FROM long_term_watchlist WHERE user_id=%s AND symbol=%s",
             (user_id, symbol),
         )
+
+
+def save_long_term_watch_note(user_id: int, symbol: str, note: str) -> bool:
+    with connect() as conn:
+        row = conn.execute('''INSERT INTO long_term_watch_notes(user_id,symbol,note)
+            SELECT %s,%s,%s WHERE NOT EXISTS (
+                SELECT 1 FROM long_term_watch_exclusions WHERE user_id=%s AND symbol=%s)
+            AND EXISTS (
+                SELECT 1 FROM long_term_watchlist WHERE user_id=%s AND symbol=%s
+                UNION ALL
+                SELECT 1 FROM favorite_stocks WHERE user_id=%s AND symbol=%s
+                    AND security_type='STOCK' AND is_common_share=true)
+            ON CONFLICT(user_id,symbol) DO UPDATE SET note=EXCLUDED.note,updated_at=now()
+            RETURNING symbol''', (user_id,symbol,note,user_id,symbol,user_id,symbol,user_id,symbol)).fetchone()
+    return row is not None
 
 
 def list_long_term_watch(user_id: int) -> list[LongTermWatchCandidate]:
@@ -149,15 +169,18 @@ def list_long_term_watch(user_id: int) -> list[LongTermWatchCandidate]:
                      min(created_at) AS created_at
               FROM candidates GROUP BY symbol
             )
-            SELECT c.*,a.analysis FROM combined c
+            SELECT c.*,a.analysis,coalesce(n.note,'') AS note,n.updated_at AS note_updated_at FROM combined c
             LEFT JOIN long_term_analyses a ON a.symbol=c.symbol
+            LEFT JOIN long_term_watch_notes n ON n.symbol=c.symbol AND n.user_id=%s
+            WHERE NOT EXISTS (SELECT 1 FROM long_term_watch_exclusions x WHERE x.user_id=%s AND x.symbol=c.symbol)
             ORDER BY (a.overall_score IS NULL),a.overall_score DESC,c.created_at DESC
             """,
-            (user_id, user_id),
+            (user_id, user_id, user_id, user_id),
         ).fetchall()
     return [LongTermWatchCandidate(
         symbol=row["symbol"], name=row["name"], market=row["market"],
         is_favorite=row["is_favorite"], added_manually=row["added_manually"],
         created_at=row["created_at"],
+        note=row['note'], note_updated_at=row['note_updated_at'],
         analysis=LongTermAnalysis.model_validate(row["analysis"]) if row["analysis"] else None,
     ) for row in rows]

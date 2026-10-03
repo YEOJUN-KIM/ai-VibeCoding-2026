@@ -26,7 +26,7 @@ class LiveStrategyStoreTests(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
         database.initialize()
-        auth.create_admin("strategyadmin", "test-only-password-2026")
+        auth.create_admin("strategyadmin", "test-password-2026")
         with isolated() as conn:
             self.user_id = conn.execute("SELECT id FROM admin_users").fetchone()["id"]
 
@@ -44,7 +44,7 @@ class LiveStrategyStoreTests(unittest.TestCase):
         created = live_strategies.save_strategy(self.user_id, self.payload(), "삼성전자")
         self.assertFalse(created.enabled)
         self.assertEqual(created.execution_mode, "DRY_RUN")
-        self.assertEqual(created.trading_start, "09:00")
+        self.assertEqual(created.trading_start, "08:00")
         updated = live_strategies.save_strategy(
             self.user_id, self.payload(order_quantity=2, sizing_mode="AMOUNT", order_amount=300000), "삼성전자", strategy_id=created.id
         )

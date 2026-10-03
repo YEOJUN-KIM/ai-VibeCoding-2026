@@ -6,12 +6,12 @@ const source = fs.readFileSync(path.join(__dirname, '../auto_trader/static/app.j
 const nodes = new Map();
 const $ = selector => {
   if (!nodes.has(selector)) nodes.set(selector, {innerHTML:'', textContent:'', value:'', disabled:false, dataset:{},
-    addEventListener(event, handler) {this[event] = handler;}});
+    before(){}, getBoundingClientRect(){return {height:48,top:200};}, closest(){return {getBoundingClientRect(){return {top:200};}};}, addEventListener(event, handler) {this[event] = handler;}});
   return nodes.get(selector);
 };
-const scope = {document:{querySelector:$,querySelectorAll:()=>[]}, Intl, Date};
+const scope = {document:{querySelector:$,querySelectorAll:()=>[],createElement:()=>({})},window:{scrollY:0,scrollTo(){}}, Intl, Date};
 vm.createContext(scope);
-const handlersStart = source.indexOf("$('#order-first').addEventListener");
+const handlersStart = source.indexOf('function changeOrderPage(');
 vm.runInContext(source.slice(0, source.indexOf('async function api(')) +
   source.slice(source.indexOf('const escapeHtml='), source.indexOf('function renderStrategyReturn(')) +
   source.slice(handlersStart, source.indexOf("document.querySelectorAll('.paper-engine-action", handlersStart)), scope);
@@ -166,9 +166,9 @@ vm.runInContext(source.slice(source.indexOf("$('#paper-account-comparison').addE
  assert.equal(picker.value,'1');assert.match($('#paper-action-message').textContent,/변경하지 못/);
  const details=[{open:false},{open:false}];scope.document.querySelectorAll=()=>details;
  const summary={closest:()=>details[0]};let prevented=false;
- $('#paper-account-comparison').click({target:{closest:()=>summary},preventDefault(){prevented=true;}});
- assert.equal(prevented,true);assert.ok(details.every(item=>item.open));
- $('#paper-account-comparison').click({target:{closest:()=>summary},preventDefault(){}});
+ $('#paper-account-comparison').click({target:{closest:selector=>selector.includes('summary')?summary:null},preventDefault(){prevented=true;}});
+ assert.equal(prevented,true);assert.equal(details[0].open,true);assert.equal(details[1].open,false);
+ $('#paper-account-comparison').click({target:{closest:selector=>selector.includes('summary')?summary:null},preventDefault(){}});
  assert.ok(details.every(item=>!item.open));
- console.log('Immediate selection passed: save, duplicate guard, busy start, failure restore; account details expand/collapse together.');
+ console.log('Immediate selection passed: save, duplicate guard, busy start, failure restore; selected account details expand/collapse.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

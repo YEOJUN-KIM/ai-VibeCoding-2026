@@ -6,27 +6,27 @@
   <title>로그인 · FOLIO</title>
   <link rel="stylesheet" href="/static/styles.css">
   <script src="/static/login.js" defer></script>
-<link rel="icon" type="image/svg+xml" href="/static/favicon.svg"></head>
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg"><link rel="stylesheet" href="/static/theme.css?v=20261003"></head>
 <body class="login-page">
   <main class="login-layout">
     <section class="login-intro">
       <p class="eyebrow">FOLIO</p>
-      <h1>나의 투자,<br>하나의 흐름으로.</h1>
-      <p>자산 관리부터 기업 분석, 전략 운용까지. 나의 투자 흐름을 FOLIO에서 이어가세요.</p>
+      <h1>FOLIO</h1>
+      <p>보유 자산, 종목 분석, 자동매매를 관리합니다.</p>
       <div class="security-note">
         <span class="security-icon">✓</span>
-        <div><strong>나만의 투자 공간</strong><small>이 기기에서 나의 계정으로 시작하세요.</small></div>
+        <div><strong>계정 로그인</strong><small>등록한 계정으로 접속하세요.</small></div>
       </div>
     </section>
     <section class="login-card panel">
       <div>
-        <p class="section-kicker">WELCOME TO FOLIO</p>
+        <p class="section-kicker">로그인</p>
         <h2>FOLIO 로그인</h2>
-        <p class="login-help">등록된 관리자 계정으로 개인 워크스페이스에 접속합니다.</p>
+        <p class="login-help">관리자 아이디와 비밀번호를 입력하세요.</p>
       </div>
       <div class="login-readiness checking" id="login-readiness" aria-live="polite">
         <span class="login-readiness-dot" aria-hidden="true"></span>
-        <div><strong id="readiness-title">서비스 연결 확인 중</strong><small id="readiness-detail">계정과 시세 서비스에 연결하고 있습니다.</small></div>
+        <div><strong id="readiness-title">로그인 준비 확인 중</strong><small id="readiness-detail">계정 저장소의 연결을 확인하고 있습니다.</small></div>
         <button class="text-button" id="readiness-retry" type="button" hidden>다시 확인</button>
       </div>
       <form id="login-form" autocomplete="on">

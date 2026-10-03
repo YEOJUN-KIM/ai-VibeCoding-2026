@@ -13,13 +13,9 @@ class PaperAccountTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.broker = PaperBroker(main.market, initial_cash=D(2000000))
         self.engine = MovingAverageEngine(main.market, self.broker)
-        for key, value in {"broker": self.broker, "engine": self.engine,
-                           "paper_account_mode": "LIVE_COPY", "paper_snapshot_at": None,
-                           "paper_source_account_label": None, "paper_selected_strategy": None,
-                           "_paper_sessions": {}}.items():
-            p = patch.object(main, key, value)
-            p.start()
-            self.addCleanup(p.stop)
+        self.state = main.UserWorkspace(None, self.broker, self.engine, main.legacy_workspace.client, main.legacy_workspace.quote_stream)
+        token = main.current_workspace.set(self.state)
+        self.addCleanup(main.current_workspace.reset, token)
         for name in ("initialize", "set_risk_manager"):
             p = patch.object(PaperBroker, name)
             p.start()
@@ -49,15 +45,15 @@ class PaperAccountTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.account.positions, [])
         self.assertTrue(result.snapshot_ready)
         self.assertEqual(main.broker.orders(), [])
-        experiment = main.broker
+        experiment = self.state.broker
         experiment.submit(OrderRequest(symbol=symbol, side=OrderSide.BUY, quantity=2))
         experiment_cash = experiment.account().cash
         await main.select_paper_account("LIVE_COPY", None)
-        self.assertIs(main.broker, self.broker)
+        self.assertIs(self.state.broker, self.broker)
         self.assertEqual(main.broker.account().cash, old_cash)
         self.assertEqual(len(main.broker.orders()), 1)
         await main.select_paper_account("EXPERIMENT", None)
-        self.assertIs(main.broker, experiment)
+        self.assertIs(self.state.broker, experiment)
         self.assertEqual(main.broker.account().cash, experiment_cash)
         main.broker.reset_practice()
         self.assertEqual(main.broker.account().cash, D(10000000))
@@ -69,9 +65,9 @@ class PaperAccountTests(unittest.IsolatedAsyncioTestCase):
         await main.select_paper_account("EXPERIMENT", None)
         with self.assertRaises(HTTPException):
             await main.snapshot_live_account(None)
-        same = main.broker
+        same = self.state.broker
         await main.select_paper_account("EXPERIMENT", None)
-        self.assertIs(main.broker, same)
+        self.assertIs(self.state.broker, same)
 
     async def test_switch_keeps_background_worker_running_and_stop_is_account_specific(self):
         self.engine.interval_seconds = 1
@@ -95,7 +91,7 @@ class PaperAccountTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(self.engine.running)
             self.engine.interval_seconds = 1
             await main.select_paper_account('LIVE_COPY', None)
-            self.assertIs(main.engine, self.engine)
+            self.assertIs(self.state.engine, self.engine)
             self.assertTrue(main.engine.running)
             await main.strategy_stop(None)
             self.assertFalse(self.engine.running)
@@ -105,8 +101,9 @@ class PaperAccountTests(unittest.IsolatedAsyncioTestCase):
     async def test_shutdown_stops_both_account_workers(self):
         await self.engine.start()
         await main.select_paper_account('EXPERIMENT', None)
-        other = main.engine
+        other = self.state.engine
         await other.start()
         await main._stop_all_paper_engines()
         self.assertFalse(other.running)
         self.assertFalse(self.engine.running)
+

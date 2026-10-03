@@ -1,3 +1,4 @@
+let researchSearchSequence=0, researchSearchController=null;
 const $ = (selector) => document.querySelector(selector);
 const won = new Intl.NumberFormat("ko-KR", { style: "currency", currency: "KRW", maximumFractionDigits: 0 });
 let csrfToken = "";
@@ -64,8 +65,10 @@ function renderMyCandidates(items) {
   $("#my-long-term-count").textContent = items.length;
   const query = $("#my-watch-query").value.trim().toLocaleLowerCase();
   const rank = $("#my-watch-rank").value;
-  const filtered = items.filter(item => (!query || `${item.name} ${item.symbol}`.toLocaleLowerCase().includes(query))
+  const filtered = items.filter(item => (!query || `${item.name} ${item.symbol} ${item.note || ""}`.toLocaleLowerCase().includes(query))
     && (!rank || (item.analysis?.rank || "pending") === rank));
+  const sort = $("#my-watch-sort").value;
+  filtered.sort((a,b) => sort === "name" ? a.name.localeCompare(b.name,"ko") : sort === "recent" ? new Date(b.created_at)-new Date(a.created_at) : (b.analysis?.overall_score ?? -1)-(a.analysis?.overall_score ?? -1));
   const pages = Math.max(1, Math.ceil(filtered.length / myPageSize));
   myPage = Math.min(myPage, pages);
   const start = (myPage - 1) * myPageSize;
@@ -74,8 +77,8 @@ function renderMyCandidates(items) {
   $("#my-long-term-candidates").innerHTML = visible.length ? visible.map(item => {
     const analysis = item.analysis;
     const sources = [item.is_favorite ? "관심종목" : "", item.added_manually ? "직접 추가" : ""].filter(Boolean).join(" · ");
-    return `<tr><td><a class="watch-company" data-report-symbol="${escapeHtml(item.symbol)}" data-report-name="${escapeHtml(item.name)}" href="/stocks/${encodeURIComponent(item.symbol)}#long-term" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</a><small class="stock-code">${escapeHtml(item.market)} · ${escapeHtml(item.symbol)}</small></td><td><span class="watch-grade rank-${String(analysis?.rank || "d").toLowerCase()}">${escapeHtml(analysis?.rank || "미분석")}</span></td><td class="watch-score">${analysis?.overall_score ?? "-"}</td><td>${metric(analysis?.revenue_growth_percent)}</td><td>${metric(analysis?.operating_margin_percent)}</td><td>${metric(analysis?.price_return_1y_percent)}</td><td><span>${analysis ? new Date(analysis.generated_at).toLocaleDateString("ko-KR") : "분석 대기"}</span><small class="stock-code">${escapeHtml(sources)}</small></td></tr>`;
-  }).join("") : `<tr><td colspan="7" class="empty">${items.length ? "검색 조건에 맞는 기업이 없습니다." : "관찰할 기업을 추가해 보세요. 관심종목 또는 종목의 장기분석에서 추가할 수 있습니다."}</td></tr>`;
+    return `<tr><td><a class="watch-company" data-report-symbol="${escapeHtml(item.symbol)}" data-report-name="${escapeHtml(item.name)}" href="/stocks/${encodeURIComponent(item.symbol)}#long-term" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</a><small class="stock-code">${escapeHtml(item.market)} · ${escapeHtml(item.symbol)}</small></td><td><span class="watch-grade rank-${String(analysis?.rank || "d").toLowerCase()}">${escapeHtml(analysis?.rank || "미분석")}</span></td><td class="watch-score">${analysis?.overall_score ?? "-"}</td><td>${metric(analysis?.revenue_growth_percent)}</td><td>${metric(analysis?.operating_margin_percent)}</td><td>${metric(analysis?.price_return_1y_percent)}</td><td><span>${analysis ? new Date(analysis.generated_at).toLocaleDateString("ko-KR") : "분석 대기"}</span><small class="stock-code">${escapeHtml(sources)}</small></td><td><button type="button" class="watch-note-button" data-watch-note="${escapeHtml(item.symbol)}" aria-label="${escapeHtml(item.name)} 기업 메모">${item.note ? `<span>${escapeHtml(item.note)}</span><small>메모 수정</small>` : '<span class="muted">관심을 가진 이유를 남겨보세요</span><small>메모 추가</small>'}</button></td><td><a class="watch-news-link" href="/stocks/${encodeURIComponent(item.symbol)}#news" aria-label="${escapeHtml(item.name)} 관련 뉴스">관련 뉴스 ↗</a></td></tr>`;
+  }).join("") : `<tr><td colspan="9" class="empty">${items.length ? "검색 조건에 맞는 기업이 없습니다." : "궁금한 기업을 저장해 보세요. 관심종목 또는 종목의 장기분석에서 추가할 수 있습니다."}</td></tr>`;
   $("#my-watch-page").textContent = `${myPage} / ${pages}`;
   for (const id of ["first", "prev"]) $("#my-watch-" + id).disabled = myPage === 1;
   for (const id of ["next", "last"]) $("#my-watch-" + id).disabled = myPage === pages;
@@ -83,7 +86,7 @@ function renderMyCandidates(items) {
 
 async function loadMyCandidates() {
   try { renderMyCandidates(await api("/research/long-term/watchlist")); }
-  catch (error) { $("#my-long-term-candidates").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`; }
+  catch (error) { $("#my-long-term-candidates").innerHTML = `<tr><td colspan="9" class="empty">${escapeHtml(error.message)}</td></tr>`; }
 }
 
 async function refreshMyCandidates() {
@@ -185,17 +188,28 @@ async function refreshRecommendations() {
   }
 }
 
+function invalidateResearchSearch() {
+  researchSearchSequence++;
+  researchSearchController?.abort();
+  $('#long-term-search-results').innerHTML='';
+  $('#long-term-search-results').classList.add('hidden');
+}
 async function search(query) {
+  invalidateResearchSearch();
+  const sequence=researchSearchSequence;
+  const controller=researchSearchController=new AbortController();
+  const current=()=>sequence===researchSearchSequence && $('#long-term-query').value.trim()===query;
   const box = $("#long-term-search-results");
   box.classList.remove("hidden"); box.innerHTML = '<div class="empty">종목을 찾고 있습니다.</div>';
   try {
-    const page = await api(`/live/stocks/search?q=${encodeURIComponent(query)}&page=1&page_size=8`);
+    const page = await api(`/live/stocks/search?q=${encodeURIComponent(query)}&page=1&page_size=8`,{signal:controller.signal});
+    if(!current())return;
     const items = page.results.filter((item) => item.security_type === "STOCK" && item.is_common_share);
-    box.innerHTML = items.length ? items.map((item) => `<button type="button" data-symbol="${escapeHtml(item.symbol)}"><span><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.symbol)} · ${escapeHtml(item.market)}</small></span><b>${item.price == null ? "-" : won.format(Number(item.price))}</b></button>`).join("") : '<div class="empty">분석 가능한 국내 보통주를 찾지 못했습니다.</div>';
-  } catch (error) { box.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`; }
+    box.innerHTML = items.length ? items.map((item) => `<button type="button" data-symbol="${escapeHtml(item.symbol)}"><span><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.symbol)} · ${escapeHtml(item.market)}</small></span><b>${item.price == null ? "" : won.format(Number(item.price))}</b></button>`).join("") : '<div class="empty">분석 가능한 국내 보통주를 찾지 못했습니다.</div>';
+  } catch (error) { if(!current()||error.name==='AbortError')return; box.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`; }
 }
 
-for (const [id, event] of [["my-watch-query", "input"], ["my-watch-rank", "change"]]) $("#" + id).addEventListener(event, () => { myPage = 1; renderMyCandidates(myCandidates); });
+for (const [id, event] of [["my-watch-query", "input"], ["my-watch-rank", "change"], ["my-watch-sort", "change"]]) $("#" + id).addEventListener(event, () => { myPage = 1; renderMyCandidates(myCandidates); });
 for (const id of ["first", "prev", "next", "last"]) $("#my-watch-" + id).addEventListener("click", () => {
   if (id === "first") myPage = 1;
   else if (id === "prev") myPage = Math.max(1, myPage - 1);
@@ -204,6 +218,7 @@ for (const id of ["first", "prev", "next", "last"]) $("#my-watch-" + id).addEven
   renderMyCandidates(myCandidates);
 });
 
+$('#long-term-query').addEventListener('input',invalidateResearchSearch);
 $("#long-term-search-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("#long-term-query").value.trim(); if (query) search(query); });
 $("#long-term-search-results").addEventListener("click", (event) => { const button = event.target.closest("[data-symbol]"); if (button) window.openResearchReport(button.dataset.symbol, button.querySelector("strong").textContent); });
 $("#long-term-page-tabs").addEventListener("click", (event) => { const button = event.target.closest("[data-long-term-page-tab]"); if (button) selectLongTermPageTab(button.dataset.longTermPageTab); });

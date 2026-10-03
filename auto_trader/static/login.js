@@ -12,17 +12,16 @@ function renderReadiness(data, error = null) {
   servicesReady = Boolean(data?.ready);
   readiness.className = `login-readiness ${servicesReady ? "ready" : "waiting"}`;
   if (servicesReady) {
-    readinessTitle.textContent = "서비스 연결 완료";
-    readinessDetail.textContent = "로그인할 수 있습니다.";
+    readinessTitle.textContent = "로그인 준비 완료";
+    readinessDetail.textContent = "증권 연결이 없어도 로그인 후 설정에서 등록·복구할 수 있습니다.";
     readinessRetry.hidden = true;
     button.disabled = false;
     button.textContent = "로그인";
     return;
   }
   const databaseMessage = data?.database?.message || "저장 서비스에 연결하지 못했습니다.";
-  const tossMessage = data?.toss_api?.message || error?.message || "증권사 연결 상태를 확인하지 못했습니다.";
-  readinessTitle.textContent = "서비스 연결 대기 중";
-  readinessDetail.textContent = `${databaseMessage} · ${tossMessage}`;
+  readinessTitle.textContent = "계정 저장소 연결 대기 중";
+  readinessDetail.textContent = error?.message || databaseMessage;
   readinessRetry.hidden = false;
   button.disabled = true;
   button.textContent = "연결 대기 중...";
@@ -64,7 +63,13 @@ form.addEventListener("submit", async (event) => {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.detail || "로그인에 실패했습니다.");
-    window.location.replace("/live");
+    // This checks local configuration only; broker outages must not delay sign-in.
+    let destination = "/live";
+    try {
+      const connection = await fetch("/live/orders/real/readiness", {cache: "no-store"});
+      if (connection.ok && !(await connection.json()).configured) destination = "/settings#account";
+    } catch { /* A successful login remains usable if the status check fails. */ }
+    window.location.replace(destination);
   } catch (error) {
     message.textContent = error.message;
     document.querySelector("#password").value = "";

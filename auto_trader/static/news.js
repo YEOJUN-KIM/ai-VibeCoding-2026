@@ -1,5 +1,6 @@
 const $ = (selector) => document.querySelector(selector);
 let csrfToken = "";
+let newsSearchSequence=0, newsSearchController=null;
 
 async function api(path, options = {}) {
   const method = (options.method || "GET").toUpperCase();
@@ -192,6 +193,9 @@ async function loadNews(query, { hot = false } = {}) {
     $("#news-query").reportValidity();
     return;
   }
+  newsSearchController?.abort();
+  const sequence=++newsSearchSequence;
+  const controller=newsSearchController=new AbortController();
   $("#news-query").value = hot ? "" : normalized;
   $("#news-message").textContent = "최근 기사를 찾고 있습니다.";
   clearIssueIndex("뉴스를 불러오는 중입니다.");
@@ -204,8 +208,11 @@ async function loadNews(query, { hot = false } = {}) {
     const endpoint = hot
       ? "/research/news?limit=15"
       : `/research/news?q=${encodeURIComponent(normalized)}&limit=15`;
-    renderDigest(await api(endpoint));
+    const digest=await api(endpoint,{signal:controller.signal});
+    if(sequence!==newsSearchSequence)return;
+    renderDigest(digest);
   } catch (error) {
+    if(sequence!==newsSearchSequence||error.name==='AbortError')return;
     $("#news-message").textContent = error.message;
     clearIssueIndex("뉴스를 불러오지 못했습니다.");
     $("#news-list").innerHTML = '<div class="empty"></div>';
@@ -218,7 +225,11 @@ $("#news-search-form").addEventListener("submit", (event) => {
   loadNews($("#news-query").value);
 });
 $("#news-query").addEventListener("input", () => {
+  newsSearchSequence++;newsSearchController?.abort();
   $("#news-query").setCustomValidity("");
+  $("#news-message").textContent="검색어 변경됨 · 검색 버튼을 눌러 조회하세요.";
+  clearIssueIndex("새 검색 대기 중입니다.");
+  $("#news-list").innerHTML='<div class="empty">새 검색 대기 중입니다.</div>';
 });
 document.querySelectorAll("[data-news-query]").forEach((button) => {
   button.addEventListener("click", () => loadNews(button.dataset.newsQuery));

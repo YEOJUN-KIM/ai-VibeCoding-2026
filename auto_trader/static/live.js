@@ -42,7 +42,7 @@ function holdingStockCell(item) {
 
 let privacyHoldings = [];
 function renderPortfolio(data) {
-  AssetPrivacy.write("live-account-label", "account", `${data.account_label} · 5초 자동 갱신`);
+  AssetPrivacy.write("live-account-label", "account", `${data.account_label} · 10초 자동 갱신`);
   AssetPrivacy.write("live-purchase", "purchase", won.format(Number(data.total_purchase_krw)));
   AssetPrivacy.write("live-market-value", "market", won.format(Number(data.market_value)));
   for (const [id, amount, rateId, rate] of [["live-profit", data.profit_loss, "live-profit-rate", data.profit_rate], ["live-daily-profit", data.daily_profit_loss, "live-daily-rate", data.daily_profit_rate]]) {
@@ -89,10 +89,10 @@ function renderCandidates(data) {
   $("#candidate-body").innerHTML = data.candidates.length ? data.candidates.map((item) => {
     const rate = Number(item.change_rate_percent);
     const rateClass = rate > 0 ? "positive" : rate < 0 ? "negative" : "neutral";
-    return `<tr><td>${number.format(item.rank)}위</td><td><a class="candidate-stock-link" href="/stocks/${encodeURIComponent(item.symbol)}?from=live&section=scanner">${stockCell({ ...item, market_country: "KR" })}</a></td>
+    return `<tr><td><div class="scanner-stock"><span class="scanner-rank">${number.format(item.rank)}</span><a class="candidate-stock-link" href="/stocks/${encodeURIComponent(item.symbol)}?from=live&section=scanner">${stockCell({ ...item, market_country: "KR" })}</a></div></td>
       <td>${won.format(Number(item.price))}</td><td class="${rateClass}">${rate.toFixed(2)}%</td>
       <td>${number.format(item.max_quantity)}주</td><td>${escapeHtml(item.reason)}</td></tr>`;
-  }).join("") : `<tr><td class="empty" colspan="6">현재 스캐너 조건에 맞는 종목이 없습니다.</td></tr>`;
+  }).join("") : `<tr><td class="empty" colspan="5">현재 스캐너 조건에 맞는 종목이 없습니다.</td></tr>`;
 }
 
 function favoriteButton(symbol, active, label) {
@@ -179,10 +179,9 @@ async function refreshPortfolio() {
   if (portfolioLoading || document.hidden) return;
   portfolioLoading = true;
   try {
-    const [portfolio, buyingPower] = await Promise.all([
-      api("/live/portfolio"),
-      api("/live/buying-power"),
-    ]);
+    const assets = await api("/live/assets");
+    const portfolio = assets.portfolio, buyingPower = assets.buying_power;
+    LiveAssets.update(assets);
     renderPortfolio(portfolio);
     renderBuyingPower(buyingPower);
     AssetPrivacy.write("live-total-assets", "assets", won.format(
@@ -197,6 +196,7 @@ async function refreshPortfolio() {
     $("#account-dot").classList.remove("online");
     $("#live-connection-status").textContent = "연결 오류";
     $("#live-portfolio-message").textContent = error.message;
+    LiveAssets.error(error.message);
   } finally {
     portfolioLoading = false;
   }
@@ -241,13 +241,13 @@ function refreshActiveLiveSection() {
   if (activeLiveSection === "portfolio") return refreshPortfolio();
   if (activeLiveSection === "favorites") return refreshFavorites();
   if (activeLiveSection === "scanner") return refreshCandidates();
-  if (activeLiveSection === "orders") return refreshDryRunOrders();
+  if (activeLiveSection === "orders") return refreshRealOrders();
   return Promise.resolve();
 }
 
 function setLiveAuthButton(authorized) {
   const button = $("#unlock-live-button");
-  button.textContent = authorized ? "주문 인증 완료" : "주문 잠금 해제";
+  button.textContent = authorized ? "주문 인증 완료" : "주문 인증";
   button.classList.toggle("success", authorized);
   button.classList.toggle("danger", !authorized);
 }
@@ -268,8 +268,9 @@ function renderOrders(orders) {
     const canCancelReal = !order.dry_run && ["SUBMITTED", "PENDING", "PARTIAL_FILLED"].includes(order.status);
     const management = isCancelled
       ? `<span class="cancelled-order-message">취소되었습니다</span>`
-      : `<details class="order-check-details"><summary>검사 결과</summary><ul>${checks || "<li>저장된 검사 결과가 없습니다.</li>"}</ul></details>${order.dry_run ? `<button class="text-button cancel-dry-run-button" type="button" data-cancel-order-id="${order.id}">취소</button>` : (canCancelReal ? `<button class="text-button cancel-dry-run-button" type="button" data-real-cancel-order-id="${order.id}">실제 주문 취소</button>` : "")}`;
-    const statusText = order.dry_run ? (isCancelled ? "취소됨" : "연습 주문") : (order.broker_status || order.status);
+      : `<details class="order-check-details"><summary>검사 결과</summary><ul>${checks || "<li>저장된 검사 결과가 없습니다.</li>"}</ul></details>${canCancelReal ? `<button class="text-button cancel-dry-run-button" type="button" data-real-cancel-order-id="${order.id}">주문 취소</button>` : ""}`;
+    const statusNames = {FILLED:'체결 완료',CANCELED:'취소됨',CANCELLED:'취소됨',SUBMITTED:'접수',PENDING:'대기',PARTIAL_FILLED:'부분 체결',REJECTED:'거절',FAILED:'실패',EXPIRED:'만료'};
+    const statusText = statusNames[order.broker_status || order.status] || order.broker_status || order.status;
     const syncText = !order.dry_run
       ? `<small class="reconciliation-status ${order.reconciliation_status === "MATCHED" ? "matched" : "warning"}">${order.reconciliation_status === "MATCHED" ? "토스 대조 완료" : `대조 ${escapeHtml(order.reconciliation_status)}`}</small>`
       : "";
@@ -277,25 +278,22 @@ function renderOrders(orders) {
       ? `<br><small>체결 ${number.format(Number(order.filled_quantity))}주 · 평균 ${won.format(Number(order.average_filled_price || 0))}</small>`
       : "";
     return `<tr class="${isCancelled ? "cancelled-order-row" : ""}">
+      <td><div class="order-stock"><a class="candidate-stock-link" href="/stocks/${encodeURIComponent(order.symbol)}?from=live&section=orders"><span class="stock-name">${escapeHtml(order.stock_name)}</span><span class="stock-code">${escapeHtml(order.symbol)} · ${escapeHtml(order.account_label)}</span></a><div class="order-stock-description"><span class="${order.side === 'BUY' ? 'positive' : 'negative'}">${formatOrderSide(order.side)} ${number.format(Number(order.quantity))}주</span><small>${order.order_source === "AUTO" ? "자동" : "수동"} · ${conditional ? "목표가 도달" : "일반"} · ${order.order_type === "MARKET" ? "시장가" : "지정가"}</small>${executionText}</div></div></td>
       <td><span class="order-status ${isCancelled ? "cancelled" : "open"}">${escapeHtml(statusText)}</span>${syncText}</td>
-      <td><a class="candidate-stock-link" href="/stocks/${encodeURIComponent(order.symbol)}?from=live&section=orders"><span class="stock-name">${escapeHtml(order.stock_name)}</span><span class="stock-code">${escapeHtml(order.symbol)} · ${escapeHtml(order.account_label)}</span></a></td>
-      <td>${formatOrderSide(order.side)} ${number.format(Number(order.quantity))}주<br><small>${order.dry_run ? "연습" : (order.order_source === "AUTO" ? "자동" : "수동")} · ${conditional ? "목표가 도달" : "일반"} · ${order.order_type === "MARKET" ? "시장가" : "지정가"}</small>${executionText}</td>
       <td>${conditionText}</td><td>${won.format(Number(order.estimated_amount))}</td>
-      <td>${new Date(order.created_at).toLocaleString("ko-KR")}</td>
+      <td class="order-created-at"><time datetime="${escapeHtml(order.created_at)}">${new Date(order.created_at).toLocaleDateString("ko-KR")}<small>${new Date(order.created_at).toLocaleTimeString("ko-KR")}</small></time></td>
       <td>${management}</td>
     </tr>`;
-  }).join("") : `<tr><td class="empty" colspan="7">저장된 연습 주문이 없습니다.</td></tr>`;
+  }).join("") : `<tr><td class="empty" colspan="6">저장된 주문이 없습니다.</td></tr>`;
 }
 
-async function refreshDryRunOrders() {
+async function refreshRealOrders() {
   if (orderLoading) return;
   orderLoading = true;
   try {
-    const [dryOrders, realOrders] = await Promise.all([
-      api("/live/orders/dry-run"), api("/live/orders/real"),
-    ]);
-    renderOrders([...realOrders, ...dryOrders].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)));
-    $("#live-orders-message").textContent = `실제 주문 ${realOrders.length}건 · 연습 주문 ${dryOrders.length}건`;
+    const realOrders = await api("/live/orders/real");
+    renderOrders(realOrders.sort((a, b) => new Date(b.created_at) - new Date(a.created_at)));
+    $("#live-orders-message").textContent = `주문 ${realOrders.length}건`;
   } catch (error) {
     $("#live-orders-message").textContent = error.message;
   } finally {
@@ -365,7 +363,7 @@ $("#live-orders-body").addEventListener("click", async (event) => {
     realButton.disabled = true;
     try {
       await api(`/live/orders/real/${encodeURIComponent(realButton.dataset.realCancelOrderId)}/cancel`, { method: "POST" });
-      await refreshDryRunOrders();
+      await refreshRealOrders();
       $("#live-orders-message").textContent = "토스증권에 실제 주문 취소를 요청했습니다.";
     } catch (error) {
       $("#live-orders-message").textContent = error.message;
@@ -373,33 +371,9 @@ $("#live-orders-body").addEventListener("click", async (event) => {
     }
     return;
   }
-  const button = event.target.closest("[data-cancel-order-id]");
-  if (!button) return;
-  button.disabled = true;
-  try {
-    await api(`/live/orders/dry-run/${encodeURIComponent(button.dataset.cancelOrderId)}/cancel`, { method: "POST" });
-    await refreshDryRunOrders();
-    $("#live-orders-message").textContent = "연습 주문을 취소했습니다.";
-  } catch (error) {
-    $("#live-orders-message").textContent = error.message;
-    button.disabled = false;
-  }
+
 });
 
-$("#delete-today-dry-runs").addEventListener("click", async () => {
-  if (!window.confirm("오늘 생성한 연습 주문을 모두 삭제할까요?")) return;
-  const button = $("#delete-today-dry-runs");
-  button.disabled = true;
-  try {
-    const result = await api("/live/orders/dry-run/today", { method: "DELETE" });
-    await refreshDryRunOrders();
-    $("#live-orders-message").textContent = `오늘 연습 주문 ${result.deleted}건을 삭제했습니다.`;
-  } catch (error) {
-    $("#live-orders-message").textContent = error.message;
-  } finally {
-    button.disabled = false;
-  }
-});
 
 initialize();
 

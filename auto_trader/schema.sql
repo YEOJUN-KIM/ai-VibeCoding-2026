@@ -1,6 +1,7 @@
 CREATE TABLE IF NOT EXISTS stocks (
     symbol TEXT PRIMARY KEY, name TEXT NOT NULL, market TEXT NOT NULL
 );
+
 CREATE TABLE IF NOT EXISTS accounts (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     name TEXT UNIQUE NOT NULL, mode TEXT NOT NULL CHECK (mode = 'PAPER'),
@@ -64,6 +65,23 @@ CREATE TABLE IF NOT EXISTS admin_users (
 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS live_pin_hash TEXT;
 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS pin_failed_attempts INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS pin_locked_until TIMESTAMPTZ;
+CREATE TABLE IF NOT EXISTS application_owner (
+    singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+    user_id BIGINT NOT NULL REFERENCES admin_users(id) ON DELETE RESTRICT
+);
+CREATE TABLE IF NOT EXISTS user_broker_connections (
+    user_id BIGINT PRIMARY KEY REFERENCES admin_users(id) ON DELETE CASCADE,
+    source TEXT NOT NULL CHECK(source IN ('ENV','LOCAL')),
+    account_ref TEXT NOT NULL DEFAULT '',
+    account_label TEXT NOT NULL DEFAULT '',
+    identity_hash TEXT UNIQUE,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS user_id BIGINT REFERENCES admin_users(id) ON DELETE RESTRICT;
+CREATE TABLE IF NOT EXISTS user_paper_preferences (
+    user_id BIGINT PRIMARY KEY REFERENCES admin_users(id) ON DELETE CASCADE,
+    selected_mode TEXT NOT NULL DEFAULT 'LIVE_COPY' CHECK(selected_mode IN ('LIVE_COPY','EXPERIMENT'))
+);
 CREATE TABLE IF NOT EXISTS auth_sessions (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     user_id BIGINT NOT NULL REFERENCES admin_users(id) ON DELETE CASCADE,
@@ -264,6 +282,20 @@ CREATE TABLE IF NOT EXISTS long_term_watchlist (
 CREATE INDEX IF NOT EXISTS long_term_watchlist_user_time
     ON long_term_watchlist(user_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS long_term_watch_notes (
+    user_id BIGINT NOT NULL REFERENCES admin_users(id) ON DELETE CASCADE,
+    symbol TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT '' CHECK (char_length(note) <= 2000),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, symbol)
+);
+
+CREATE TABLE IF NOT EXISTS long_term_watch_exclusions (
+    user_id BIGINT NOT NULL REFERENCES admin_users(id) ON DELETE CASCADE,
+    symbol TEXT NOT NULL,
+    PRIMARY KEY (user_id, symbol)
+);
+
 ALTER TABLE live_strategies ADD COLUMN IF NOT EXISTS sizing_mode TEXT NOT NULL DEFAULT 'QUANTITY' CHECK (sizing_mode IN ('QUANTITY','AMOUNT'));
 ALTER TABLE live_strategies ADD COLUMN IF NOT EXISTS order_amount NUMERIC NOT NULL DEFAULT 100000 CHECK (order_amount > 0);
 
@@ -414,6 +446,8 @@ CREATE INDEX IF NOT EXISTS ml_strategy_decisions_run_time
     ON ml_strategy_decisions(run_id, decision_at);
 CREATE INDEX IF NOT EXISTS ml_strategy_decisions_action_time
     ON ml_strategy_decisions(action, decision_at);
+CREATE INDEX IF NOT EXISTS ml_strategy_decisions_account_time
+    ON ml_strategy_decisions(account_id, decision_at DESC, id DESC);
 
 CREATE TABLE IF NOT EXISTS ml_data_quality_reports (
     report_date DATE PRIMARY KEY,
@@ -431,3 +465,14 @@ ALTER TABLE ml_data_quality_reports
     ADD COLUMN IF NOT EXISTS macro_summary JSONB NOT NULL DEFAULT '{}'::jsonb;
 CREATE INDEX IF NOT EXISTS ml_data_quality_reports_generated
     ON ml_data_quality_reports(generated_at DESC);
+
+CREATE TABLE IF NOT EXISTS live_asset_history (
+    user_id BIGINT NOT NULL REFERENCES admin_users(id) ON DELETE CASCADE,
+    account_label TEXT NOT NULL,
+    observed_minute TIMESTAMPTZ NOT NULL,
+    observed_at TIMESTAMPTZ NOT NULL,
+    market_value NUMERIC NOT NULL,
+    cash NUMERIC NOT NULL,
+    total_assets NUMERIC NOT NULL,
+    PRIMARY KEY (user_id, account_label, observed_minute)
+);

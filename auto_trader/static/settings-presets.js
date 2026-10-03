@@ -54,6 +54,6 @@
     }
     if(event.target.closest('[data-close-preset-preview]')){closePreview();return;}
     if(!event.target.closest('[data-apply-default-preset]')||!draft)return;
-    if(window.applyDefaultPreset(draft)){clearDraft();document.querySelector('#strategy-form').scrollIntoView({behavior:'smooth',block:'start'});status.textContent='아래 입력창에서 이름을 바꿔 저장하면 내 전략으로 유지됩니다. 저장 후 PAPER에서 선택하세요.';}
+    if(window.applyDefaultPreset(draft)){clearDraft();document.querySelector('#default-presets').open=false;document.querySelector('#strategy-form').scrollIntoView({behavior:'smooth',block:'start'});status.textContent='아래 입력창에서 이름을 바꿔 저장하면 내 전략으로 유지됩니다. 저장 후 PAPER에서 선택하세요.';}
   });
 })();

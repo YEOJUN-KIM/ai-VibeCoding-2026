@@ -43,6 +43,7 @@ class MovingAverageEngine:
         clock: Callable[[], datetime] | None = None,
         price_feed: PaperPriceFeed | None = None,
         decision_recorder: Callable[[dict], None] | None = None,
+        market_hours_provider: Callable[[datetime], dict] | None = None,
     ) -> None:
         self.market = market
         self.broker = broker
@@ -60,8 +61,12 @@ class MovingAverageEngine:
         self.cooldown_minutes = cooldown_minutes
         self._clock = clock or (lambda: datetime.now().astimezone())
         self.price_feed = price_feed
+        self.market_hours_provider = market_hours_provider
+        self._market_status = {}
+        self._market_checked_at = None
         self.decision_recorder = decision_recorder
         self.last_data_at = None
+        self.last_decision_at = None
         self.data_message = "시세 수신 대기"
         self._last_bar_at = {}
         self._entry_armed = set()
@@ -89,6 +94,7 @@ class MovingAverageEngine:
         self.strategy_name = None
         self._position_opened_at: dict[str, datetime] = {}
         self._last_order_at: dict[str, datetime] = {}
+        self._last_buy_block_reason: dict[str, str] = {}
         self._strategy_baseline_value = Decimal("0")
         self._strategy_cash_flow = Decimal("0")
         self._strategy_buy_amount = Decimal("0")
@@ -204,8 +210,19 @@ class MovingAverageEngine:
             self.running = False
 
     async def poll_market(self) -> None:
+        if self.market_hours_provider:
+            try:
+                self._market_status = await asyncio.to_thread(self.market_hours_provider, self._clock())
+            except Exception:
+                self._market_status = {'state': 'unknown'}
+            self._market_checked_at = self._clock()
         if not self._within_hours():
-            self.data_message = "운영 시간 외 대기 · 실제 시세 기반 모의매매"
+            self.data_message = {
+                'MARKET_UNKNOWN': '거래 시간 확인 대기 · 확인 전에는 판단과 주문을 대기합니다.',
+                'HOLIDAY': '휴장일 대기 · 다음 거래일에 자동 확인합니다.',
+                'MARKET_CLOSED': '거래 시간 대기 · 단일가 구간에는 모의 체결하지 않습니다.',
+                'WEEKEND': '주말 대기 · 다음 거래일에 자동 확인합니다.',
+            }.get(self._operating_state(), '운영 시간 외 대기 · 실제 시세 기반 모의매매')
             return
         now = self._clock()
         symbols = list(dict.fromkeys((self.target_symbols or [stock.symbol for stock in self.market.stocks()]) + [lot["symbol"] for lot in self.broker.managed_lots()]))
@@ -230,7 +247,8 @@ class MovingAverageEngine:
             if self.market.has_symbol(symbol) and price.is_finite() and price > 0:
                 stock = next(s for s in self.market.stocks() if s.symbol == symbol)
                 self.market.upsert_stock(stock, price)
-        self.last_data_at = self._clock()
+        if prices or candles:
+            self.last_data_at = self._clock()
         self.data_message = "실제 현재가 · 완료된 1분봉 · 모의 체결"
         unavailable = getattr(self.price_feed, "unavailable", {})
         if not isinstance(unavailable, dict):
@@ -244,12 +262,16 @@ class MovingAverageEngine:
                     symbol=symbol, name=stocks.get(symbol, symbol),
                     price=self.market.quote(symbol).price, collected_prices=0, decision=f"시세 대기 · {reason}")
         if not candles:
+            if not unavailable:
+                self.data_message = "완료된 1분봉 대기 · 신규 판단과 체결을 기다립니다."
             return
         self.step(candles=candles)
 
     def step(self, *, candles=None) -> None:
         if self.price_feed is not None and candles is None:
             raise ValueError("실제 시세 모드에는 최신 봉 데이터가 필요합니다.")
+        if self.market_hours_provider and not self._within_hours():
+            return
         self.tick_count += 1
         exited = self._manage_exits(candles)
         quotes = ([self.market.quote(symbol, move=candles is None) for symbol in self.target_symbols]
@@ -339,7 +361,7 @@ class MovingAverageEngine:
                     self._snapshots[quote.symbol].decision = "매수 체결 · 청산 조건 감시"
                     action = "BUY_FILLED"
                 else:
-                    self._snapshots[quote.symbol].decision = "매수 조건 충족 · 주문 제한/잔액 확인"
+                    self._snapshots[quote.symbol].decision = "매수 조건 충족 · " + self._last_buy_block_reason.get(quote.symbol, "주문 제한/잔액 확인")
                     action = "BUY_BLOCKED"
             elif quote.symbol in self._entry_armed and self._above_count.get(quote.symbol, 0) >= 2:
                 self._snapshots[quote.symbol].decision = "2봉 확인 · 가격 추세 확인 대기"
@@ -354,6 +376,7 @@ class MovingAverageEngine:
             )
             self._previous_trend[quote.symbol] = trend
         self._update_drawdown()
+        self.last_decision_at = self._clock()
 
     def _buy_quantity(self, symbol: str) -> int:
         if self.sizing_mode == "QUANTITY":
@@ -383,15 +406,51 @@ class MovingAverageEngine:
                 high = quantity - 1
         return low
 
+    def _entry_block_reason(self, symbol: str) -> str | None:
+        """Explain the smallest eligible buy using the broker's actual cost rules."""
+        from decimal import ROUND_DOWN, ROUND_UP
+        if not self._within_hours():
+            return "전략 운영 시간 밖입니다."
+        now = self._clock()
+        last = self._last_order_at.get(symbol)
+        if last:
+            remaining = last + timedelta(minutes=self.cooldown_minutes) - now
+            if remaining.total_seconds() > 0:
+                minutes = max(1, int((remaining.total_seconds() + 59) // 60))
+                return f"재매수 대기 · 약 {minutes}분 남음"
+        today = now.astimezone(KST).date()
+        if (not self.broker.ignore_daily_order_limit and self.daily_order_limit > 0
+                and self._daily_orders.get(today, 0) >= self.daily_order_limit):
+            return f"전략 하루 주문 한도 {self.daily_order_limit}회에 도달했습니다."
+        quantity = self.order_quantity if self.sizing_mode == "QUANTITY" else 1
+        price = self.market.quote(symbol).price * (1 + self.broker.slippage_rate)
+        amount = price * quantity
+        fee = (amount * self.broker.fee_rate).quantize(Decimal('1'), rounding=ROUND_DOWN)
+        required = amount + fee
+        cost_text = f"{required.quantize(Decimal('1'), rounding=ROUND_UP):,}원"
+        if self.sizing_mode == "AMOUNT" and required > self.order_amount:
+            return f"1주 예상 매수 비용 {cost_text}이 매수 예산 {self.order_amount:,.0f}원을 초과합니다."
+        if required > self.broker.cash_balance():
+            return f"{quantity}주 예상 매수 비용 {cost_text}에 비해 주문 가능 현금이 부족합니다."
+        if self.broker.risk_manager:
+            return self.broker.risk_manager.check_buy(symbol=symbol, amount=amount, fee=fee,
+                ignore_min_cash_ratio=self.broker.ignore_min_cash_ratio,
+                ignore_daily_order_limit=self.broker.ignore_daily_order_limit)
+        return None
+
     def _buy(self, symbol: str, price: Decimal) -> bool:
+        self._last_buy_block_reason.pop(symbol, None)
         if not self._can_order(symbol):
+            self._last_buy_block_reason[symbol] = self._entry_block_reason(symbol) or "주문 가능 시간을 확인하세요."
             return False
         today = self._clock().astimezone(KST).date()
         if (not self.broker.ignore_daily_order_limit and self.daily_order_limit > 0
                 and self._daily_orders.get(today, 0) >= self.daily_order_limit):
+            self._last_buy_block_reason[symbol] = f"전략 하루 주문 한도 {self.daily_order_limit}회에 도달했습니다."
             return False
         quantity = self._buy_quantity(symbol)
         if quantity < 1:
+            self._last_buy_block_reason[symbol] = self._entry_block_reason(symbol) or "매수 가능한 수량이 없습니다."
             return False
         reason = "상향 교차 후 2봉 확인 · 가격 추세 확인"
         self._record_signal(symbol, OrderSide.BUY, reason)
@@ -410,6 +469,7 @@ class MovingAverageEngine:
             if before == 0:
                 self._position_opened_at[symbol] = now
             return True
+        self._last_buy_block_reason[symbol] = order.message
         return False
 
     def _sell(self, symbol: str, reason: str, *, lot_id=None) -> bool:
@@ -450,8 +510,29 @@ class MovingAverageEngine:
         return not last_order or now - last_order >= timedelta(minutes=self.cooldown_minutes)
 
     def _within_hours(self) -> bool:
+        return self._operating_state() == 'OPEN'
+
+    def _operating_state(self) -> str:
         now = self._clock().astimezone(KST)
-        return now.weekday() < 5 and self.trading_start <= now.time().replace(tzinfo=None) <= self.trading_end
+        if self.market_hours_provider:
+            saved = self._market_status
+            if (not self._market_checked_at or not timedelta(0) <= now - self._market_checked_at < timedelta(seconds=90)
+                    or saved.get('calendar_date') != now.date().isoformat() or saved.get('state') == 'unknown'):
+                return 'MARKET_UNKNOWN'
+            if saved.get('holiday'):
+                return 'WEEKEND' if now.weekday() >= 5 else 'HOLIDAY'
+            if saved.get('state') != 'open':
+                return 'MARKET_CLOSED'
+            try:
+                start = datetime.fromisoformat(saved['opens_at'])
+                end = datetime.fromisoformat(saved['closes_at'])
+                if not start <= now < end:
+                    return 'MARKET_CLOSED'
+            except (KeyError, TypeError, ValueError):
+                return 'MARKET_UNKNOWN'
+        elif now.weekday() >= 5:
+            return 'WEEKEND'
+        return 'OPEN' if self.trading_start <= now.time().replace(tzinfo=None) <= self.trading_end else 'OUTSIDE_HOURS'
 
     def _exit_reason(self, symbol: str, price: Decimal) -> str | None:
         quantity = self.broker.strategy_quantity(symbol)
@@ -546,6 +627,7 @@ class MovingAverageEngine:
         self.reset_performance_baseline(scope=scope)
         self._snapshots.clear()
         self.last_data_at = None
+        self.last_decision_at = None
         self.data_message = '관리 범위 적용 완료 · 시작하면 시세를 조회합니다.'
 
     def _record_signal(self, symbol: str, side: OrderSide, reason: str) -> None:
@@ -569,6 +651,7 @@ class MovingAverageEngine:
         self._peak_profit = self._max_drawdown = Decimal(0)
         self._position_opened_at = {s: self._clock() for s in self.target_symbols if self.broker.strategy_quantity(s)}
         self._last_order_at.clear()
+        self._last_buy_block_reason.clear()
         self._signals.clear()
         self._last_bar_at.clear()
         self._entry_armed.clear()
@@ -620,6 +703,7 @@ class MovingAverageEngine:
         self._previous_trend.clear()
         self._snapshots.clear()
         self.last_data_at = None
+        self.last_decision_at = None
         self.data_message = "전략 적용 완료 · 시작하면 새 종목의 시세를 조회합니다."
         now = self._clock()
         self._position_opened_at = {
@@ -638,6 +722,17 @@ class MovingAverageEngine:
         self.tick_count = 0
 
     def status(self) -> StrategyStatus:
+        snapshots = []
+        now = self._clock()
+        for snapshot in self._snapshots.values():
+            reason = None
+            if (self.running and self._within_hours() and snapshot.data_at
+                    and timedelta(0) <= now - snapshot.data_at <= timedelta(minutes=3)
+                    and not snapshot.decision.startswith('시세 대기')
+                    and not self.broker.strategy_quantity(snapshot.symbol)
+                    and not any(lot['symbol'] == snapshot.symbol for lot in self.broker.managed_lots())):
+                reason = self._entry_block_reason(snapshot.symbol)
+            snapshots.append(snapshot.model_copy(update={'entry_block_reason': reason}))
         current_strategy_value = self.broker.strategy_value()
         strategy_profit = current_strategy_value + self._strategy_cash_flow - self._strategy_baseline_value - self.broker._management_external_flow
         strategy_basis = self._strategy_baseline_value + self._strategy_buy_amount + self.broker._management_external_flow
@@ -654,10 +749,13 @@ class MovingAverageEngine:
             strategy_return_percent=(strategy_profit / strategy_basis * 100 if strategy_basis else None),
             data_source="TOSS" if self.price_feed else "SIMULATED",
             last_data_at=self.last_data_at, data_message=self.data_message,
+            last_decision_at=self.last_decision_at, checked_at=now,
+            operating_state=self._operating_state(),
+            market_next_open_at=self._market_status.get('next_open_at'),
             realized_profit=self._realized_profit, trading_costs=self._trading_costs,
             completed_trades=self._completed_trades, winning_trades=self._winning_trades,
             max_drawdown_percent=self._max_drawdown, run_id=self.broker.run_id,
-            snapshots=list(self._snapshots.values()),
+            snapshots=snapshots,
             recent_signals=list(reversed(self._signals[-20:])),
         )
 

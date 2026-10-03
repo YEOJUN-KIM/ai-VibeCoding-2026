@@ -2,9 +2,9 @@
   const dialog = document.createElement('dialog');
   dialog.className = 'research-dialog';
   dialog.setAttribute('aria-labelledby', 'research-popup-title');
-  dialog.innerHTML = `<div class="research-popup-header"><div><p class="section-kicker">FOLIO · RESEARCH</p><h2 id="research-popup-title">기업 분석</h2></div><button class="button secondary" data-report-close aria-label="분석 창 닫기">닫기 ×</button></div><div data-report-body></div><div class="research-popup-actions"><p role="status" data-report-message></p><a class="button secondary" data-report-detail>차트·주문 보기</a><button class="button primary" data-report-watch>관찰 목록에 추가</button></div>`;
+  dialog.innerHTML = `<div class="research-popup-header"><div><p class="section-kicker">FOLIO · RESEARCH</p><h2 id="research-popup-title">기업 분석</h2></div><button class="button secondary" data-report-close aria-label="분석 창 닫기">닫기 ×</button></div><div data-report-body></div><div class="research-popup-actions"><p role="status" data-report-message></p><a class="button secondary" data-report-detail>차트·주문 보기</a><button class="button primary" data-report-watch>기업 저장</button></div>`;
   document.body.append(dialog);
-  let sequence = 0, symbol = '', opener = null;
+  let sequence = 0, symbol = '', opener = null, saved = false;
   const body = dialog.querySelector('[data-report-body]');
   const watch = dialog.querySelector('[data-report-watch]');
   const message = dialog.querySelector('[data-report-message]');
@@ -38,7 +38,8 @@
     body.innerHTML = '<p class="empty" role="status">기업 분석을 불러오는 중입니다.</p>';
     message.textContent = '';
     watch.disabled = true;
-    watch.textContent = '관찰 목록에 추가';
+    saved = false;
+    watch.textContent = '기업 저장';
     if (!dialog.open) { dialog.showModal(); document.body.classList.add('research-popup-open'); }
     dialog.scrollTop = 0;
     try {
@@ -46,9 +47,9 @@
       if (request !== sequence || !dialog.open) return;
       dialog.querySelector('#research-popup-title').textContent = data.name;
       render(data);
-      const existing = items.some(item => item.symbol === code);
-      watch.disabled = existing;
-      watch.textContent = existing ? '✓ 관찰 중' : '관찰 목록에 추가';
+      saved = items.some(item => item.symbol === code);
+      watch.disabled = false;
+      watch.textContent = saved ? '✓ 저장됨 · 저장 해제' : '기업 저장';
     } catch (error) {
       if (request === sequence && dialog.open) body.innerHTML = `<p class="empty">${escapeHtml(error.message)}</p>`;
     }
@@ -57,13 +58,19 @@
   dialog.addEventListener('click', event => { if (event.target === dialog) { const r = dialog.getBoundingClientRect(); if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) dialog.close(); } });
   dialog.addEventListener('close', () => { sequence++; document.body.classList.remove('research-popup-open'); if (opener?.isConnected) opener.focus({preventScroll:true}); });
   watch.addEventListener('click', async () => {
-    const request = sequence, code = symbol;
+    if (watch.disabled) return;
+    const request = sequence, code = symbol, remove = saved;
     watch.disabled = true;
     try {
-      await api(`/research/long-term/watchlist/${encodeURIComponent(code)}`, {method:'POST'});
+      await api(`/research/long-term/watchlist/${encodeURIComponent(code)}`, {method:remove?'DELETE':'POST'});
+      if (request === sequence && dialog.open) {
+        saved = !remove;
+        watch.textContent = saved ? '✓ 저장됨 · 저장 해제' : '기업 저장';
+        message.textContent = remove ? '저장한 기업에서 해제했습니다. 관심종목과 메모는 유지됩니다.' : '기업을 저장했습니다.';
+      }
       await loadMyCandidates();
       if (request !== sequence || !dialog.open) return;
-      watch.textContent = '✓ 관찰 중'; message.textContent = '관찰 목록에 추가했습니다.';
+      watch.disabled = false;
     } catch (error) { if (request === sequence && dialog.open) { message.textContent = error.message; watch.disabled = false; } }
   });
 })();

@@ -185,7 +185,7 @@ def list_real_orders(user_id: int, limit: int = 20) -> list[LiveDryRunOrder]:
     return [_order_from_row(row) for row in rows]
 
 
-def orders_for_reconciliation(account_ref: str, *, active_only: bool = False) -> list[LiveDryRunOrder]:
+def orders_for_reconciliation(account_ref: str, *, active_only: bool = False, user_id: int | None = None) -> list[LiveDryRunOrder]:
     active = ("SUBMITTING", "SUBMITTED", "PENDING", "PARTIAL_FILLED", "PENDING_CANCEL", "UNKNOWN")
     with connect() as conn:
         rows = conn.execute(
@@ -193,8 +193,9 @@ def orders_for_reconciliation(account_ref: str, *, active_only: bool = False) ->
                JOIN broker_accounts ba ON ba.id=lo.broker_account_id
                WHERE lo.dry_run=false AND ba.external_account_ref=%s
                  AND (%s=false OR lo.status=ANY(%s))
+                 AND (%s::bigint IS NULL OR lo.user_id=%s)
                ORDER BY lo.created_at DESC LIMIT 100""",
-            (account_ref, active_only, list(active)),
+            (account_ref, active_only, list(active), user_id, user_id),
         ).fetchall()
     return [_order_from_row(row) for row in rows]
 

@@ -10,23 +10,29 @@ class Request:
 
 class MarketStreamTests(unittest.IsolatedAsyncioTestCase):
     async def test_twenty_symbols_share_batch_and_cleanup(self):
+        await self.check_batch_size(20)
+
+    async def test_hundred_symbols_share_batch_and_cleanup(self):
+        await self.check_batch_size(100)
+
+    async def check_batch_size(self, count):
         hub=QuoteStream(Mock(),"wss://example.invalid")
         async def idle(): await asyncio.Event().wait()
         hub.run=idle
-        codes=[f"{i:06}" for i in range(20)]
+        codes=[f"{i:06}" for i in range(count)]
         with patch.object(main,'quote_stream',hub), patch.object(main,'require_user',return_value=Mock()):
             response=await main.live_market_stream(Request(),','.join(codes),None)
             iterator=response.body_iterator
             await anext(iterator)
-            self.assertEqual(len(hub.listeners),20)
+            self.assertEqual(len(hub.listeners),count)
             for code in codes: hub.publish(code,{'type':'message','topic':'trade:kr:'+code,'data':{'price':100}})
             batch=await anext(iterator)
-            self.assertEqual(batch.count('"type": "message"'),20)
+            self.assertEqual(batch.count('"type": "message"'),count)
             await iterator.aclose()
             self.assertEqual(hub.listeners,{})
             self.assertIsNone(hub.task)
 
     async def test_invalid_codes_rejected(self):
-        for codes in ('','../bad',','.join(f"{i:06}" for i in range(21))):
+        for codes in ('','../bad',','.join(f"{i:06}" for i in range(101))):
             with self.assertRaises(HTTPException):
                 await main.live_market_stream(Request(),codes,None)

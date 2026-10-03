@@ -47,6 +47,42 @@ class StrategyEngineTests(unittest.TestCase):
         self.assertFalse(self.engine._buy("005930", D(10000)))
         self.assertEqual(len(self.broker.orders()), 0)
 
+    def test_entry_reason_includes_costs_when_one_share_exceeds_budget(self):
+        self.market._prices['005930'] = D(10000)
+        self.configure(sizing_mode='AMOUNT', order_amount=D(10000))
+        self.assertIn('매수 예산', self.engine._entry_block_reason('005930'))
+        self.assertFalse(self.engine._buy('005930', D(10000)))
+        self.assertIn('예상 매수 비용', self.engine._last_buy_block_reason['005930'])
+
+    def test_entry_reason_distinguishes_cash_risk_and_cooldown(self):
+        self.market._prices['005930'] = D(10000)
+        self.broker._cash = D(9000)
+        self.assertIn('현금이 부족', self.engine._entry_block_reason('005930'))
+        self.broker._cash = D(100000)
+        self.broker.risk_manager = Mock()
+        self.broker.risk_manager.check_buy.return_value = '최소 현금 보유 비율 아래로 내려갑니다.'
+        self.assertIn('최소 현금', self.engine._entry_block_reason('005930'))
+        self.engine._last_order_at['005930'] = self.now - timedelta(minutes=5)
+        self.assertIn('약 25분', self.engine._entry_block_reason('005930'))
+
+    def test_entry_reason_reports_strategy_daily_order_limit(self):
+        self.engine.daily_order_limit = 2
+        self.engine._daily_orders[self.now.date()] = 2
+        self.assertIn('2회', self.engine._entry_block_reason('005930'))
+
+    def test_status_does_not_attach_constraints_to_old_or_stopped_snapshots(self):
+        from auto_trader.models import StrategySnapshot
+        self.market._prices['005930'] = D(10000)
+        self.configure(sizing_mode='AMOUNT', order_amount=D(5000))
+        self.engine._snapshots['005930'] = StrategySnapshot(symbol='005930', name='삼성전자',
+            price=D(10000), collected_prices=3, data_at=self.now-timedelta(minutes=1))
+        self.assertIsNone(self.engine.status().snapshots[0].entry_block_reason)
+        self.engine.running = True
+        self.assertIn('매수 예산', self.engine.status().snapshots[0].entry_block_reason)
+        self.now += timedelta(minutes=5)
+        self.assertIsNone(self.engine.status().snapshots[0].entry_block_reason)
+        self.assertIsNone(self.engine._snapshots['005930'].entry_block_reason)
+
     def test_amount_sizing_respects_risk_limit_and_sells_all(self):
         self.market._prices["005930"] = D(10000)
         self.configure(sizing_mode="AMOUNT", order_amount=D(300000))
@@ -67,6 +103,39 @@ class StrategyEngineTests(unittest.TestCase):
         self.assertEqual(self.engine.tick_count, 0)
         self.assertIn("요청 한도 대기", self.engine.data_message)
         self.assertNotIn("exc_info", logger.return_value.warning.call_args.kwargs)
+
+    def test_status_separates_weekend_and_configured_hours(self):
+        self.assertEqual(self.engine.status().operating_state, 'OPEN')
+        self.now = self.now.replace(hour=22)
+        self.assertEqual(self.engine.status().operating_state, 'OUTSIDE_HOURS')
+        self.now += timedelta(days=3)
+        self.assertEqual(self.engine.status().operating_state, 'WEEKEND')
+
+    def test_decision_timestamp_is_not_refresh_time_and_resets_with_strategy(self):
+        self.assertIsNone(self.engine.status().last_decision_at)
+        self.engine.step()
+        confirmed = self.now
+        self.now += timedelta(seconds=30)
+        self.assertEqual(self.engine.status().last_decision_at, confirmed)
+        self.assertEqual(self.engine.status().checked_at, self.now)
+        self.configure()
+        self.assertIsNone(self.engine.status().last_decision_at)
+
+    def test_failed_and_empty_feed_does_not_advance_success_timestamps(self):
+        self.engine.price_feed = Mock()
+        self.engine.last_data_at = self.now - timedelta(minutes=1)
+        self.engine.last_decision_at = self.now - timedelta(minutes=1)
+        original = self.engine.last_data_at
+        self.engine.price_feed.read.side_effect = TossApiError('limited', status_code=429)
+        with patch('auto_trader.strategy.logging.getLogger'):
+            asyncio.run(self.engine.poll_market())
+        self.assertEqual(self.engine.last_data_at, original)
+        self.assertEqual(self.engine.last_decision_at, original)
+        self.engine.price_feed.read.side_effect = None
+        self.engine.price_feed.read.return_value = ({}, {})
+        asyncio.run(self.engine.poll_market())
+        self.assertEqual(self.engine.last_data_at, original)
+        self.assertEqual(self.engine.last_decision_at, original)
 
     def test_stop_loss_bypasses_cooldown_and_exits_all(self):
         self.engine.order_quantity = 10

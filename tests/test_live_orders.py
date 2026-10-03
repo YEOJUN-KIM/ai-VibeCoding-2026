@@ -35,7 +35,7 @@ class LiveOrderStoreTests(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
         database.initialize()
-        auth.create_admin("liveorderadmin", "test-only-password-2026")
+        auth.create_admin("liveorderadmin", "test-password-2026")
         with self.connect() as conn:
             self.user_id = conn.execute("SELECT id FROM admin_users").fetchone()["id"]
 

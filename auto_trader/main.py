@@ -21,6 +21,8 @@ from .auth import (
     SESSION_COOKIE,
     AuthenticatedUser,
     authenticate,
+    account_profile,
+    change_credential,
     delete_session,
     live_pin_status,
     lock_session,
@@ -37,7 +39,7 @@ from .models import (Account, DeletedOrderCount, FavoriteStockCreate, LiveBuying
                      LiveOrderPreview, LiveOrderPreviewCheck, LiveOrderPreviewRequest,
                      LivePinRequest, LivePinStatus, LivePortfolio,
                      LiveCompanyProfile, LiveRealOrderConfirmRequest, LiveStockDetail, LongTermAnalysis,
-                     LongTermWatchCandidate,
+                     LongTermWatchCandidate, LongTermWatchNoteWrite,
                      LiveStockSearchPage, LiveStrategy, LiveStrategyWrite, LiveTradingReadiness,
                      LoginRequest, NewsDigest, Order, OrderRequest, PaperWorkspaceStatus, PaperManagementUpdate,
                      Quote, RiskSettings, RiskSettingsUpdate, RiskStatus, SessionInfo, Stock,
@@ -50,7 +52,12 @@ from .strategy import MovingAverageEngine
 from .quote_stream import QuoteStream
 from .risk import RiskManager
 from .toss import TossApiError, TossClient
+from .user_connections import UserConnections, initialize_ownership
+from .user_workspace import UserWorkspace, UserWorkspaces, ScopedProxy, current_workspace
 from .database import connect, initialize
+from .asset_history import record_and_read as record_asset_history
+from .decision_history import read_decision_history
+from .market_hours import MarketHours
 from .favorites import add_favorite, favorite_symbols, list_favorites, remove_favorite
 from .news import NewsFeedError, news_service
 from .ai_news import ai_news_service
@@ -64,7 +71,7 @@ from .strategy_presets import weekly_preset, preset_snapshot_status
 from .long_term import (analyze_long_term, long_term_recommendation_assessment,
                         next_daily_scan_at)
 from .long_term_repository import (add_long_term_watch, fresh_long_term_analysis,
-                                   list_long_term_watch,
+                                   list_long_term_watch, save_long_term_watch_note,
                                    long_term_watched_symbols,
                                    ranked_long_term_analyses, remove_long_term_watch,
                                    replace_long_term_recommendations,
@@ -117,24 +124,72 @@ ml_macro_worker = MacroCollectionWorker(
     enabled=settings.ml_data_collection_enabled,
 )
 watchlist_source = "fallback"
-paper_snapshot_at = None
-paper_source_account_label = None
-paper_selected_strategy: LiveStrategy | None = None
-paper_account_mode = "LIVE_COPY"
-_paper_sessions = {}
-_paper_change_lock = asyncio.Lock()
+broker.risk_manager = risk_manager
+connections = UserConnections()
+legacy_workspace = UserWorkspace(None, broker, engine, toss_client, quote_stream)
+workspaces = UserWorkspaces(legacy_workspace, lambda user_id: _create_user_workspace(user_id))
+broker = ScopedProxy(workspaces, 'broker')
+engine = ScopedProxy(workspaces, 'engine')
+risk_manager = ScopedProxy(workspaces, 'risk')
+toss_client = ScopedProxy(workspaces, 'client')
+quote_stream = ScopedProxy(workspaces, 'quote_stream')
+market_hours = MarketHours(toss_client)
+legacy_workspace.engine.market_hours_provider = lambda now: market_hours.status(
+    'KR', legacy_workspace.engine.price_feed.client, now=now, trading=True)
+
+
+def paper_state():
+    return workspaces.current()
+
+
+def _create_paper_session(user_id, mode, client):
+    owner = user_id == legacy_workspace.user_id
+    name = ('paper-default' if mode == 'LIVE_COPY' else 'paper-experiment') if owner else f'user-{user_id}-paper-{mode.lower()}'
+    new_broker = PaperBroker(market, initial_cash=settings.paper_initial_cash if mode == 'LIVE_COPY' else Decimal('10000000'),
+        account_name=name, user_id=user_id,
+        fee_rate=settings.paper_fee_rate, sell_tax_rate=settings.paper_sell_tax_rate,
+        slippage_rate=settings.paper_slippage_rate,
+        ignore_min_cash_ratio=settings.paper_ignore_min_cash_ratio,
+        ignore_daily_order_limit=settings.paper_ignore_daily_order_limit,
+        journal_path=Path(__file__).parent.parent / '.paper-history' / f'user-{user_id}' / f'{mode.lower()}.jsonl')
+    new_broker.initialize()
+    new_broker.set_risk_manager(RiskManager(market))
+    new_engine = MovingAverageEngine(market, new_broker, price_feed=PaperPriceFeed(client),
+                                    decision_recorder=ml_decision_recorder.record)
+    new_engine.market_hours_provider = lambda now: market_hours.status(
+        'KR', new_engine.price_feed.client, now=now, trading=True)
+    metadata = new_broker.snapshot_metadata or {}
+    stamp = datetime.fromisoformat(metadata['snapshot_at']) if metadata.get('snapshot_at') else None
+    if mode == 'EXPERIMENT':
+        stamp = stamp or datetime.now().astimezone()
+    return new_broker, new_engine, stamp, metadata.get('source_label') or ('실험계좌' if mode == 'EXPERIMENT' else None), _restore_paper_strategy(new_broker, new_engine)
+
+
+def _create_user_workspace(user_id):
+    client = connections.client(user_id)
+    session = _create_paper_session(user_id, 'LIVE_COPY', client)
+    state = UserWorkspace(user_id, session[0], session[1], client, QuoteStream(client, settings.toss_ws_url),
+                          snapshot_at=session[2], source_label=session[3], selected_strategy=session[4])
+    with connect() as conn:
+        preference = conn.execute('SELECT selected_mode FROM user_paper_preferences WHERE user_id=%s', (user_id,)).fetchone()
+    if preference and preference['selected_mode'] == 'EXPERIMENT':
+        state.sessions['LIVE_COPY'] = session
+        state.broker, state.engine, state.snapshot_at, state.source_label, state.selected_strategy = _create_paper_session(user_id, 'EXPERIMENT', client)
+        state.mode = 'EXPERIMENT'
+    return state
 
 
 def _serialize_paper_change(function):
     @wraps(function)
     async def serialized(*args, **kwargs):
-        async with _paper_change_lock:
+        async with paper_state().lock:
             return await function(*args, **kwargs)
     return serialized
 
 
 async def _stop_all_paper_engines():
-    workers = {engine, *(session[1] for session in _paper_sessions.values())}
+    states = list(workspaces.items.values()) + [paper_state()]
+    workers = {worker for state in states for worker in [state.engine, *(session[1] for session in state.sessions.values())]}
     await asyncio.gather(*(worker.stop() for worker in workers))
 
 
@@ -204,7 +259,7 @@ def _local_order_status(broker_status: str, fallback: str) -> str:
 
 def reconcile_saved_real_orders(*, active_only: bool = False) -> int:
     account = toss_client.selected_account()
-    orders = orders_for_reconciliation(str(account["accountSeq"]), active_only=active_only)
+    orders = orders_for_reconciliation(str(account["accountSeq"]), active_only=active_only, user_id=paper_state().user_id)
     reconciled = 0
     history_cache: dict[str, dict[str, dict]] = {}
     for order in orders:
@@ -325,15 +380,15 @@ async def refresh_long_term_candidates(
                         eligible.append(analysis)
                     else:
                         excluded += 1
-                status.update(completed=processed, selected=min(len(eligible), target_count), excluded=excluded, failed=failed, phase="running")
+                status.update(completed=processed, selected=min(len(eligible), max_count), excluded=excluded, failed=failed, phase="running")
                 status["message"] = (
-                    f"후보 {processed}개 검토 · 추천 기준 통과 {min(len(eligible), target_count)}개"
+                    f"후보 {processed}개 검토 · 추천 기준 통과 {min(len(eligible), max_count)}개"
                 )
             selected = sorted(
                 eligible,
                 key=lambda item: (item.overall_score or -1, item.generated_at),
                 reverse=True,
-            )[:target_count]
+            )[:max_count]
             if selected:
                 await asyncio.to_thread(
                     replace_long_term_recommendations, [item.symbol for item in selected]
@@ -424,10 +479,18 @@ async def long_term_candidate_worker(stock_directory_task: asyncio.Task | None) 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    global watchlist_source, paper_snapshot_at, paper_source_account_label, paper_selected_strategy
+    global watchlist_source
     stock_directory_warm_task: asyncio.Task | None = None
     long_term_candidate_task: asyncio.Task | None = None
     initialize()
+    owner = initialize_ownership()
+    legacy_workspace.user_id = owner
+    legacy_workspace.broker.user_id = owner
+    if owner is not None:
+        legacy_workspace.client = connections.client(owner)
+        legacy_workspace.quote_stream = QuoteStream(legacy_workspace.client, settings.toss_ws_url)
+        legacy_workspace.engine.price_feed = PaperPriceFeed(legacy_workspace.client)
+        workspaces.items[owner] = legacy_workspace
     await ml_decision_recorder.start()
     if toss_client.configured:
         readiness = await asyncio.to_thread(_startup_readiness, force=True)
@@ -447,10 +510,17 @@ async def lifespan(_: FastAPI):
             logger.warning("Startup real-order reconciliation failed: %s", exc)
     broker.initialize()
     if broker.snapshot_metadata:
-        paper_snapshot_at = datetime.fromisoformat(broker.snapshot_metadata['snapshot_at'])
-        paper_source_account_label = broker.snapshot_metadata.get('source_label')
-    broker.set_risk_manager(risk_manager)
-    paper_selected_strategy = _restore_paper_strategy(broker, engine)
+        paper_state().snapshot_at = datetime.fromisoformat(broker.snapshot_metadata['snapshot_at'])
+        paper_state().source_label = broker.snapshot_metadata.get('source_label')
+    broker.set_risk_manager(legacy_workspace.broker.risk_manager)
+    paper_state().selected_strategy = _restore_paper_strategy(broker, engine)
+    if owner is not None:
+        with connect() as conn:
+            preference = conn.execute('SELECT selected_mode FROM user_paper_preferences WHERE user_id=%s', (owner,)).fetchone()
+        if preference and preference['selected_mode'] == 'EXPERIMENT':
+            await select_paper_account('EXPERIMENT', None)
+        for worker in (ml_collection_worker, ml_quality_worker, ml_macro_worker):
+            worker.client = legacy_workspace.client
     if toss_client.configured:
         async def warm_stock_directory() -> None:
             try:
@@ -486,7 +556,7 @@ async def lifespan(_: FastAPI):
         await ml_macro_worker.stop()
         await _stop_all_paper_engines()
         await ml_decision_recorder.stop()
-        await quote_stream.close()
+        await asyncio.gather(*(state.quote_stream.close() for state in list(workspaces.items.values()) or [legacy_workspace]))
 
 
 app = FastAPI(
@@ -515,6 +585,21 @@ async def security_headers(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
     return response
+
+
+@app.middleware('http')
+async def user_account_scope(request: Request, call_next):
+    if SESSION_COOKIE not in request.cookies or request.url.path.startswith('/static/'):
+        return await call_next(request)
+    user = await asyncio.to_thread(session_from_request, request)
+    if user is None:
+        return await call_next(request)
+    state = await asyncio.to_thread(workspaces.get, user.id)
+    token = current_workspace.set(state)
+    try:
+        return await call_next(request)
+    finally:
+        current_workspace.reset(token)
 
 
 @app.get("/", include_in_schema=False, response_model=None)
@@ -628,6 +713,79 @@ def lock_current_session(
     )
 
 
+@app.get("/settings/account")
+def settings_account(user: AuthenticatedUser = Depends(require_user)) -> dict:
+    return account_profile(user)
+
+
+@app.put("/settings/account/{kind}")
+async def update_account_credential(kind: str, request: Request, user: AuthenticatedUser = Depends(require_csrf)) -> Response:
+    try:
+        payload = await request.json()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="입력 내용을 확인하세요.")
+    if not isinstance(payload, dict) or any(not isinstance(payload.get(key), str) for key in ("current_password", "new_value")):
+        raise HTTPException(status_code=400, detail="현재 비밀번호와 변경할 값을 입력하세요.")
+    try:
+        await asyncio.to_thread(change_credential, user, payload["current_password"], payload["new_value"], kind)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    response = JSONResponse({"message": "비밀번호를 변경했습니다. 다시 로그인하세요." if kind == "password" else "PIN을 변경했습니다. 주문 인증을 다시 진행하세요."})
+    if kind == "password":
+        response.delete_cookie(SESSION_COOKIE, path="/")
+    return response
+
+
+@app.get("/settings/connection")
+def settings_connection(_: AuthenticatedUser = Depends(require_user)) -> dict:
+    if not toss_client.configured:
+        return {"connected": False, "accounts": [], "message": "연결 정보가 없거나 로컬 키 파일을 읽을 수 없습니다. 연결 등록·변경에서 API 키와 Secret을 등록하세요. 컴퓨터를 옮겼다면 키를 다시 등록해야 합니다."}
+    try:
+        accounts = toss_client.accounts()
+        selected = toss_client.selected_account()
+        return {"connected": True, "accounts": [
+            {"label": "*" * max(0, len(str(a.get("accountNo", ""))) - 4) + str(a.get("accountNo", ""))[-4:] or "증권 계좌",
+             "selected": str(a["accountSeq"]) == str(selected["accountSeq"])} for a in accounts
+        ], "message": "토스증권에 연결되었습니다."}
+    except TossApiError:
+        return {"connected": False, "accounts": [], "message": "연결을 확인하지 못했습니다. 토스 API 인증 정보와 서버의 사용 계좌 설정을 확인하세요."}
+
+
+@app.put('/settings/connection')
+@_serialize_paper_change
+async def save_settings_connection(payload: dict, user: AuthenticatedUser = Depends(require_csrf)):
+    client_id = payload.get('client_id')
+    secret = payload.get('client_secret')
+    if not all(isinstance(value, str) and 1 <= len(value.strip()) <= 2048 for value in (client_id, secret)):
+        raise HTTPException(status_code=422, detail='API 키와 Secret을 입력하세요.')
+    state = paper_state()
+    if any(worker.running for worker in [state.engine, *(session[1] for session in state.sessions.values())]):
+        raise HTTPException(status_code=409, detail='모의매매 전략을 모두 정지한 뒤 연결을 변경하세요.')
+    with connect() as conn:
+        pending = conn.execute("SELECT 1 FROM live_orders WHERE user_id=%s AND dry_run=false AND status NOT IN ('FILLED','CANCELED','REJECTED') LIMIT 1", (user.id,)).fetchone()
+    if pending:
+        raise HTTPException(status_code=409, detail='진행 중인 실제 주문을 확인한 뒤 연결을 변경하세요.')
+    try:
+        client = await asyncio.to_thread(connections.save, user.id, client_id.strip(), secret.strip())
+    except TossApiError:
+        raise HTTPException(status_code=400, detail='연결하지 못했습니다. API 키와 허용 IP를 확인하세요.') from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    except OSError:
+        raise HTTPException(status_code=500, detail='로컬 연결 정보를 저장하지 못했습니다.') from None
+    await state.quote_stream.close()
+    state.client = client
+    state.quote_stream = QuoteStream(client, settings.toss_ws_url)
+    for worker in [state.engine, *(session[1] for session in state.sessions.values())]:
+        worker.price_feed = PaperPriceFeed(client)
+    if state is legacy_workspace:
+        for worker in (ml_collection_worker, ml_quality_worker, ml_macro_worker):
+            worker.client = client
+    return {'message': '이 계정에 증권 계좌를 연결했습니다. 주문 인증을 다시 진행하세요.'}
+
+
 @app.post("/auth/unlock", response_model=SessionInfo)
 def unlock_current_session(
     payload: LivePinRequest, request: Request,
@@ -706,7 +864,19 @@ def health(_: AuthenticatedUser = Depends(require_user)) -> dict[str, str]:
 
 @app.get("/startup/readiness")
 def startup_readiness() -> dict:
-    return _startup_readiness()
+    # Signing in needs the local database, not the owner's broker connection.
+    # Never make an external broker request on this public login endpoint.
+    try:
+        with connect() as conn:
+            conn.execute("SELECT 1")
+        connected = True
+        message = "계정 저장소에 연결되었습니다."
+    except Exception:
+        connected = False
+        message = "계정 저장소에 연결하지 못했습니다. 프로그램과 DB 실행 상태를 확인하세요."
+    from .launcher import workspace_id
+    return {"application": "FOLIO", "workspace_id": workspace_id(),
+            "ready": connected, "database": {"connected": connected, "message": message}}
 
 
 @app.get("/ml/data-collection/status")
@@ -874,6 +1044,23 @@ def live_buying_power(_: AuthenticatedUser = Depends(require_user)) -> LiveBuyin
         return toss_client.buying_power()
     except TossApiError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.get("/live/assets")
+def live_assets(user: AuthenticatedUser = Depends(require_user)):
+    portfolio = live_portfolio(user)
+    try:
+        buying_power = toss_client.buying_power()
+    except TossApiError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    try:
+        history = record_asset_history(user.id, portfolio, buying_power)
+        history_error = None
+    except Exception:
+        logging.exception("Live asset history could not be saved")
+        history, history_error = [], "자산 이력을 저장하지 못했습니다. 잠시 후 다시 조회하세요."
+    return {"portfolio": portfolio, "buying_power": buying_power,
+            "history": history, "history_error": history_error}
 
 
 def _preview_live_order(
@@ -1132,7 +1319,7 @@ def live_stock_search(
     user: AuthenticatedUser = Depends(require_user),
 ) -> LiveStockSearchPage:
     try:
-        result = toss_client.search_domestic_stocks(q, page, page_size)
+        result = toss_client.search_domestic_stocks(q, page, page_size, include_quotes=False)
         saved = favorite_symbols(user.id)
         return result.model_copy(update={
             "results": [item.model_copy(update={"is_favorite": item.symbol in saved})
@@ -1149,13 +1336,14 @@ def live_stock_list(
     security_type: str = Query(default="ALL", pattern=r"^(ALL|COMMON|STOCK|ETF|ETN)$"),
     sort: str = Query(default="POPULAR", pattern=r"^(POPULAR|NAME|CODE)$"),
     page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=10, le=50),
+    page_size: int = Query(default=20, ge=10, le=100),
+    include_quotes: bool = Query(default=True),
     user: AuthenticatedUser = Depends(require_user),
 ) -> LiveStockSearchPage:
     try:
         result = toss_client.list_domestic_stocks(
             query=q, market=market, security_type=security_type,
-            sort=sort, page=page, page_size=page_size,
+            sort=sort, page=page, page_size=page_size, include_quotes=include_quotes,
         )
         saved = favorite_symbols(user.id)
         return result.model_copy(update={
@@ -1184,11 +1372,11 @@ def live_stock_sparklines(
 
 
 @app.get("/live/stocks/stream")
-async def live_market_stream(request: Request, symbols: str = Query(max_length=139),
+async def live_market_stream(request: Request, symbols: str = Query(max_length=699),
                              _: AuthenticatedUser = Depends(require_user)):
     codes = list(dict.fromkeys(symbols.split(",")))
-    if not 1 <= len(codes) <= 20 or any(len(code) != 6 or not code.isalnum() for code in codes):
-        raise HTTPException(status_code=422, detail="국내 종목 코드를 최대 20개까지 지정하세요.")
+    if not 1 <= len(codes) <= 100 or any(len(code) != 6 or not code.isalnum() for code in codes):
+        raise HTTPException(status_code=422, detail="국내 종목 코드를 최대 100개까지 지정하세요.")
 
     async def events():
         subscriptions = []
@@ -1328,6 +1516,15 @@ def long_term_watchlist(user: AuthenticatedUser = Depends(require_user)) -> list
     return list_long_term_watch(user.id)
 
 
+@app.put('/research/long-term/watchlist/{symbol}/note')
+def write_long_term_watch_note(symbol: str, payload: LongTermWatchNoteWrite,
+                              user: AuthenticatedUser = Depends(require_csrf)):
+    code = symbol.strip().zfill(6)
+    if not save_long_term_watch_note(user.id, code, payload.note.strip()):
+        raise HTTPException(status_code=404, detail='내 관찰 목록에 있는 기업만 메모할 수 있습니다.')
+    return {'saved': True}
+
+
 @app.post("/research/long-term/watchlist/{symbol}")
 def add_long_term_watchlist_symbol(
     symbol: str, user: AuthenticatedUser = Depends(require_csrf),
@@ -1430,6 +1627,24 @@ def delete_live_favorite(
     return Response(status_code=204)
 
 
+@app.get("/paper/decisions/history")
+def paper_decision_history(
+    account_id: int | None = Query(None, ge=1),
+    strategy_id: int | None = Query(None, ge=1),
+    symbol: str = Query("", max_length=50), action: str = Query("", max_length=20),
+    start: date | None = None, end: date | None = None,
+    page: int = Query(1, ge=1, le=1000000), page_size: int = Query(20, ge=20, le=100),
+    before_id: int | None = Query(None, ge=0),
+    user: AuthenticatedUser = Depends(require_user),
+):
+    try:
+        return read_decision_history(user.id, account_id=account_id, strategy_id=strategy_id,
+                                     symbol=symbol, action=action, start=start, end=end,
+                                     page=page, page_size=page_size, before_id=before_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @app.get("/paper/stocks", response_model=list[Stock])
 def stocks(_: AuthenticatedUser = Depends(require_user)) -> list[Stock]:
     return market.stocks()
@@ -1437,8 +1652,8 @@ def stocks(_: AuthenticatedUser = Depends(require_user)) -> list[Stock]:
 
 @app.get("/paper/workspace", response_model=PaperWorkspaceStatus)
 def paper_workspace(_: AuthenticatedUser = Depends(require_user)) -> PaperWorkspaceStatus:
-    sessions = {mode: session for mode, session in _paper_sessions.items() if mode != paper_account_mode}
-    sessions[paper_account_mode] = (broker, engine, paper_snapshot_at, paper_source_account_label, paper_selected_strategy)
+    sessions = {mode: session for mode, session in paper_state().sessions.items() if mode != paper_state().mode}
+    sessions[paper_state().mode] = (paper_state().broker, paper_state().engine, paper_state().snapshot_at, paper_state().source_label, paper_state().selected_strategy)
     summaries = []
     for mode in ("LIVE_COPY", "EXPERIMENT"):
         session = sessions.get(mode)
@@ -1448,27 +1663,27 @@ def paper_workspace(_: AuthenticatedUser = Depends(require_user)) -> PaperWorksp
         account_broker, account_engine, _, _, selected = session
         account = account_broker.account()
         strategy = account_engine.status()
-        summaries.append(dict(account_mode=mode, selected=mode == paper_account_mode, loaded=True,
+        summaries.append(dict(account_mode=mode, selected=mode == paper_state().mode, loaded=True,
                               running=strategy.running, emergency_stopped=strategy.emergency_stopped,
                               strategy_name=selected.name if selected else None, tick_count=strategy.tick_count,
                               data_message=strategy.data_message, position_count=len(account.positions),
                               total_asset=str(account.total_asset), total_profit=str(account.total_profit),
                               strategy_profit=str(strategy.strategy_profit)))
     return PaperWorkspaceStatus(
-        account=broker.account(), account_mode=paper_account_mode, account_summaries=summaries,
+        account=broker.account(), account_mode=paper_state().mode, account_summaries=summaries,
         management_scope=broker.management_scope,
         background_runs=[dict(account_mode=mode, strategy_name=session[4].name if session[4] else None,
                               tick_count=session[1].tick_count, data_message=session[1].data_message)
-                         for mode, session in _paper_sessions.items()
-                         if mode != paper_account_mode and session[1].running],
+                         for mode, session in paper_state().sessions.items()
+                         if mode != paper_state().mode and session[1].running],
         managed_holdings=broker.managed_lots(),
         holding_management=broker.holding_management(),
-        snapshot_ready=paper_snapshot_at is not None,
-        snapshot_at=paper_snapshot_at, source_account_label=paper_source_account_label,
-        selected_strategy_id=paper_selected_strategy.id if paper_selected_strategy else None,
-        selected_strategy_name=paper_selected_strategy.name if paper_selected_strategy else None,
-        selected_symbol=paper_selected_strategy.symbol if paper_selected_strategy else None,
-        selected_symbols=[target.symbol for target in paper_selected_strategy.targets] if paper_selected_strategy else [],
+        snapshot_ready=paper_state().snapshot_at is not None,
+        snapshot_at=paper_state().snapshot_at, source_account_label=paper_state().source_label,
+        selected_strategy_id=paper_state().selected_strategy.id if paper_state().selected_strategy else None,
+        selected_strategy_name=paper_state().selected_strategy.name if paper_state().selected_strategy else None,
+        selected_symbol=paper_state().selected_strategy.symbol if paper_state().selected_strategy else None,
+        selected_symbols=[target.symbol for target in paper_state().selected_strategy.targets] if paper_state().selected_strategy else [],
     )
 
 
@@ -1485,48 +1700,31 @@ async def paper_management(payload: PaperManagementUpdate, user: AuthenticatedUs
 @app.post("/paper/accounts/{mode}/select", response_model=PaperWorkspaceStatus)
 @_serialize_paper_change
 async def select_paper_account(mode: str, user: AuthenticatedUser = Depends(require_csrf)) -> PaperWorkspaceStatus:
-    global broker, engine, paper_account_mode, paper_snapshot_at
-    global paper_source_account_label, paper_selected_strategy
     if mode not in {"EXPERIMENT", "LIVE_COPY"}:
         raise HTTPException(status_code=422, detail="지원하지 않는 모의계좌입니다.")
-    if mode == paper_account_mode:
+    if mode == paper_state().mode:
         return paper_workspace(user)
     # Switching the displayed account does not interrupt either account worker.
     # Preserve both portfolios and their separate strategy performance in memory.
-    current = (broker, engine, paper_snapshot_at, paper_source_account_label, paper_selected_strategy)
-    target = _paper_sessions.get(mode)
+    current = (paper_state().broker, paper_state().engine, paper_state().snapshot_at, paper_state().source_label, paper_state().selected_strategy)
+    target = paper_state().sessions.get(mode)
     if target is None:
         if mode != "EXPERIMENT":
             raise HTTPException(status_code=409, detail="기존 모의계좌가 준비되지 않았습니다.")
-        new_broker = PaperBroker(
-            market, initial_cash=Decimal("10000000"), account_name="paper-experiment",
-            fee_rate=settings.paper_fee_rate, sell_tax_rate=settings.paper_sell_tax_rate,
-            slippage_rate=settings.paper_slippage_rate,
-            ignore_min_cash_ratio=settings.paper_ignore_min_cash_ratio,
-            ignore_daily_order_limit=settings.paper_ignore_daily_order_limit,
-            journal_path=broker.journal_path,
-        )
-        await asyncio.to_thread(new_broker.initialize)
-        await asyncio.to_thread(new_broker.set_risk_manager, RiskManager(market))
-        new_engine = MovingAverageEngine(
-            market,
-            new_broker,
-            price_feed=PaperPriceFeed(toss_client),
-            decision_recorder=ml_decision_recorder.record,
-        )
-        target = (new_broker, new_engine, datetime.now().astimezone(), "실험계좌",
-                  _restore_paper_strategy(new_broker, new_engine))
-    _paper_sessions[paper_account_mode] = current
-    broker, engine, paper_snapshot_at, paper_source_account_label, paper_selected_strategy = target
-    paper_account_mode = mode
+        target = await asyncio.to_thread(_create_paper_session, paper_state().user_id, mode, paper_state().client)
+    if paper_state().user_id is not None:
+        with connect() as conn:
+            conn.execute('INSERT INTO user_paper_preferences(user_id,selected_mode) VALUES (%s,%s) ON CONFLICT(user_id) DO UPDATE SET selected_mode=EXCLUDED.selected_mode', (paper_state().user_id, mode))
+    paper_state().sessions[paper_state().mode] = current
+    paper_state().broker, paper_state().engine, paper_state().snapshot_at, paper_state().source_label, paper_state().selected_strategy = target
+    paper_state().mode = mode
     return paper_workspace(user)
 
 
 @app.post("/paper/snapshot/live", response_model=PaperWorkspaceStatus)
 @_serialize_paper_change
 async def snapshot_live_account(_: AuthenticatedUser = Depends(require_csrf)) -> PaperWorkspaceStatus:
-    global paper_snapshot_at, paper_source_account_label
-    if paper_account_mode == "EXPERIMENT":
+    if paper_state().mode == "EXPERIMENT":
         raise HTTPException(status_code=409, detail="기존 모의계좌로 돌아간 뒤 실제 자산을 복사하세요.")
     await engine.stop()
     try:
@@ -1553,8 +1751,8 @@ async def snapshot_live_account(_: AuthenticatedUser = Depends(require_csrf)) ->
     broker.load_snapshot(cash=buying_power.krw_cash_buying_power, positions=positions,
                          metadata={'snapshot_at': snapshot_at.isoformat(), 'source_label': portfolio.account_label})
     engine.reset_performance_baseline()
-    paper_snapshot_at = snapshot_at
-    paper_source_account_label = portfolio.account_label
+    paper_state().snapshot_at = snapshot_at
+    paper_state().source_label = portfolio.account_label
     return paper_workspace(_)
 
 
@@ -1578,7 +1776,7 @@ def _configure_paper_strategy(target_engine, strategy):
 
 def _restore_paper_strategy(target_broker, target_engine):
     selection = target_broker.last_strategy_selection
-    if not selection:
+    if not selection or (target_broker.user_id is not None and selection['user_id'] != target_broker.user_id):
         return None
     strategy = next((item for item in list_strategies(selection['user_id'])
                      if item.id == selection['strategy_id'] and item.execution_mode == 'DRY_RUN'), None)
@@ -1593,7 +1791,6 @@ def _restore_paper_strategy(target_broker, target_engine):
 async def select_paper_strategy(
     strategy_id: int, user: AuthenticatedUser = Depends(require_csrf),
 ) -> PaperWorkspaceStatus:
-    global paper_selected_strategy
     await engine.stop()
     strategy = next((item for item in list_strategies(user.id) if item.id == strategy_id), None)
     if strategy is None:
@@ -1612,7 +1809,7 @@ async def select_paper_strategy(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     await asyncio.to_thread(broker.remember_strategy, user.id, strategy.id, target_symbols)
     _configure_paper_strategy(engine, strategy)
-    paper_selected_strategy = strategy
+    paper_state().selected_strategy = strategy
     return paper_workspace(user)
 
 
@@ -1700,9 +1897,9 @@ def strategy_settings(
 @app.post("/strategy/start", response_model=StrategyStatus)
 @_serialize_paper_change
 async def strategy_start(_: AuthenticatedUser = Depends(require_csrf)) -> StrategyStatus:
-    if paper_snapshot_at is None:
+    if paper_state().snapshot_at is None:
         raise HTTPException(status_code=409, detail="먼저 현재 실제 자산을 모의계좌에 복사하세요.")
-    if paper_selected_strategy is None:
+    if paper_state().selected_strategy is None:
         raise HTTPException(status_code=409, detail="검증할 저장 전략을 먼저 선택하세요.")
     await engine.start()
     return engine.status()
@@ -1720,3 +1917,13 @@ async def strategy_stop(_: AuthenticatedUser = Depends(require_csrf)) -> Strateg
 async def strategy_emergency_stop(_: AuthenticatedUser = Depends(require_csrf)) -> StrategyStatus:
     await engine.stop(emergency=True)
     return engine.status()
+
+
+@app.get('/market-hours')
+async def read_market_hours(user: AuthenticatedUser = Depends(require_user)):
+    client = paper_state().client
+    kr, us = await asyncio.gather(
+        asyncio.to_thread(market_hours.status, 'KR', client),
+        asyncio.to_thread(market_hours.status, 'US', client),
+    )
+    return {'KR': kr, 'US': us, 'checked_at': datetime.now(timezone.utc).isoformat()}

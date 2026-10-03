@@ -25,7 +25,7 @@ class AuthTests(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
         database.initialize()
-        self.password = 'test-only-password-2026'
+        self.password = 'test-password-2026'
         auth.create_admin('testadmin', self.password)
 
     def cleanup_schema(self):
@@ -45,6 +45,62 @@ class AuthTests(unittest.TestCase):
         self.assertTrue(auth.verify_password(self.password, row['password_hash']))
         with self.assertRaises(ValueError):
             auth.create_admin('second', self.password)
+
+    def test_password_length_boundaries(self):
+        for length in (8, 20):
+            password = 'a' * length
+            self.assertTrue(auth.verify_password(password, auth.hash_password(password)))
+        for length in (7, 21):
+            with self.assertRaises(ValueError):
+                auth.hash_password('a' * length)
+
+    def test_password_change_revokes_every_session(self):
+        token, user = auth.authenticate('testadmin', self.password)
+        other, _ = auth.authenticate('testadmin', self.password)
+        auth.change_credential(user, self.password, 'new-password-2026', 'password')
+        self.assertIsNone(auth.session_from_request(self.request(token)))
+        self.assertIsNone(auth.session_from_request(self.request(other)))
+        self.assertIsNone(auth.authenticate('testadmin', self.password))
+        self.assertIsNotNone(auth.authenticate('testadmin', 'new-password-2026'))
+
+    def test_pin_change_keeps_session_and_revokes_order_authorization(self):
+        auth.set_live_pin('123456')
+        token, user = auth.authenticate('testadmin', self.password)
+        other, other_user = auth.authenticate('testadmin', self.password)
+        auth.verify_live_pin(self.request(token), user, '123456')
+        auth.verify_live_pin(self.request(other), other_user, '123456')
+        auth.change_credential(user, self.password, '654321', 'pin')
+        self.assertIsNotNone(auth.session_from_request(self.request(token)))
+        self.assertIsNone(auth.live_pin_status(self.request(token), user)[1])
+        self.assertIsNone(auth.live_pin_status(self.request(other), other_user)[1])
+        self.assertIsNotNone(auth.verify_live_pin(self.request(token), user, '654321'))
+
+    def test_credential_change_failures_persist_and_lock(self):
+        _, user = auth.authenticate('testadmin', self.password)
+        for _ in range(auth.settings.login_max_failures):
+            with self.assertRaises(PermissionError):
+                auth.change_credential(user, 'wrong', '654321', 'pin')
+        with self.connect() as conn:
+            self.assertIsNotNone(conn.execute('SELECT locked_until FROM admin_users').fetchone()['locked_until'])
+        with self.assertRaises(PermissionError):
+            auth.change_credential(user, self.password, '654321', 'pin')
+
+    def test_invalid_credentials_do_not_change_account(self):
+        _, user = auth.authenticate('testadmin', self.password)
+        for value, kind in [('short', 'password'), ('１２３４５６', 'pin'), ('123', 'pin'), (self.password, 'password')]:
+            with self.assertRaises(ValueError):
+                auth.change_credential(user, self.password, value, kind)
+        self.assertIsNotNone(auth.authenticate('testadmin', self.password))
+
+    def test_credential_change_only_changes_current_user(self):
+        _, user = auth.authenticate('testadmin', self.password)
+        with self.connect() as conn:
+            conn.execute('INSERT INTO admin_users(username,password_hash,live_pin_hash) VALUES (%s,%s,%s)',
+                         ('another', auth.hash_password(self.password), auth.hash_live_pin('123456')))
+        auth.change_credential(user, self.password, '654321', 'pin')
+        with self.connect() as conn:
+            row = conn.execute("SELECT live_pin_hash FROM admin_users WHERE username='another'").fetchone()
+        self.assertTrue(auth.verify_password('123456', row['live_pin_hash']))
 
     def test_lock_and_unlock(self):
         for _ in range(auth.settings.login_max_failures):

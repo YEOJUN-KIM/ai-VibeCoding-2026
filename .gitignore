@@ -231,3 +231,4 @@ backups/
 models/
 artifacts/ml/generated/
 .tmp/
+.local-secrets/

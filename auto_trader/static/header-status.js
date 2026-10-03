@@ -111,7 +111,7 @@
 
   let csrfToken = '';
   const setLiveStatus = status => {
-    liveLink.textContent = status.authorized ? '주문 인증 완료' : '주문 잠금 해제';
+    liveLink.textContent = status.authorized ? '주문 인증 완료' : '주문 인증';
     liveLink.classList.toggle('live-ready', Boolean(status.authorized));
     liveLink.classList.toggle('danger', !status.authorized);
     if (status.authorized && status.authorized_until) {

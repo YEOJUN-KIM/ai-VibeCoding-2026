@@ -13,6 +13,7 @@ from urllib.request import Request, urlopen
 from decimal import Decimal
 
 from .settings import settings
+from .stock_search import normalize as normalize_stock_query, stock_match_rank
 from .chart_candles import CHART_RANGES, chart_candles
 from .models import (LiveBuyingPower, LiveCandidateList, LiveFavoriteStock, LiveHolding,
                      LivePortfolio, LiveStockCandle, LiveStockCandidate, LiveStockDetail, LiveStockSearchPage,
@@ -36,10 +37,11 @@ class TossConnectionResult:
 class TossClient:
     def __init__(self, *, base_url: str | None = None, client_id: str | None = None,
                  client_secret: str | None = None, timeout: float = 10,
-                 live_trading_enabled: bool | None = None) -> None:
+                 live_trading_enabled: bool | None = None, account_ref: str | None = None) -> None:
         self.base_url = (base_url or settings.toss_api_base_url).rstrip("/")
         self.client_id = settings.toss_client_id if client_id is None else client_id
         self.client_secret = settings.toss_client_secret if client_secret is None else client_secret
+        self.account_ref = settings.toss_account if account_ref is None else account_ref
         self.timeout = timeout
         self.live_trading_enabled = (
             settings.live_trading_enabled if live_trading_enabled is None else live_trading_enabled
@@ -390,8 +392,8 @@ class TossClient:
         accounts = self.accounts()
         if not accounts:
             raise TossApiError("연결된 토스증권 계좌가 없습니다.")
-        if settings.toss_account:
-            selected = next((item for item in accounts if str(item.get("accountSeq")) == settings.toss_account), None)
+        if self.account_ref:
+            selected = next((item for item in accounts if str(item.get("accountSeq")) == self.account_ref), None)
             if not selected:
                 raise TossApiError("TOSS_ACCOUNT와 일치하는 계좌를 찾지 못했습니다.")
             return selected
@@ -667,9 +669,9 @@ class TossClient:
         return stock_count, len(rankings)
 
     def search_domestic_stocks(self, query: str, page: int = 1,
-                               page_size: int = 8) -> LiveStockSearchPage:
+                               page_size: int = 8, *, include_quotes: bool = True) -> LiveStockSearchPage:
         return self.list_domestic_stocks(
-            query=query, page=page, page_size=page_size, sort="POPULAR"
+            query=query, page=page, page_size=page_size, sort="POPULAR", include_quotes=include_quotes
         )
 
     def strategy_preset_candidates(self):
@@ -680,13 +682,14 @@ class TossClient:
 
     def list_domestic_stocks(self, *, query: str = "", market: str = "ALL",
                              security_type: str = "ALL", sort: str = "POPULAR",
-                             page: int = 1, page_size: int = 20) -> LiveStockSearchPage:
-        normalized = query.strip().casefold()
+                             page: int = 1, page_size: int = 20, include_quotes: bool = True) -> LiveStockSearchPage:
+        normalized = normalize_stock_query(query)
+        universe = self._domestic_stock_universe()
+        match_ranks = {str(item.get("symbol", "")): stock_match_rank(item, normalized) for item in universe}
         matches = [
-            item for item in self._domestic_stock_universe()
-            if (not normalized
-                or normalized in str(item.get("name", "")).casefold()
-                or normalized in str(item.get("symbol", "")).casefold())
+            item for item in universe
+            if (normalized or not query.strip())
+            and match_ranks[str(item.get("symbol", ""))] is not None
             and (market == "ALL" or str(item.get("market", "")) == market)
             and (
                 security_type == "ALL"
@@ -694,7 +697,11 @@ class TossClient:
                 or str(item.get("securityType", "")) == security_type
             )
         ]
-        _, rankings = self._domestic_trading_amount_rankings()
+        if include_quotes:
+            _, rankings = self._domestic_trading_amount_rankings()
+        else:
+            # Selection needs identities, not fresh pricing or ranking requests.
+            rankings = self._domestic_rankings_cache[1] if self._domestic_rankings_cache else []
         ranking_by_symbol = {str(item.get("symbol", "")): item for item in rankings}
         if sort == "NAME":
             matches.sort(key=lambda item: (str(item.get("name", "")).casefold(),
@@ -707,6 +714,8 @@ class TossClient:
                 str(item.get("name", "")).casefold(),
                 str(item.get("symbol", "")),
             ))
+        # Stable sort keeps the selected directory order within each match quality.
+        matches.sort(key=lambda item: match_ranks[str(item.get("symbol", ""))])
         total = len(matches)
         total_pages = max(1, (total + page_size - 1) // page_size)
         page = min(page, total_pages)
@@ -714,7 +723,7 @@ class TossClient:
         matches = matches[start:start + page_size]
         prices = {}
         details = {}
-        if matches:
+        if matches and include_quotes:
             symbols = [str(item.get("symbol", "")) for item in matches]
             price_query = urlencode({"symbols": ",".join(symbols)})
             payload = self._authorized_json_request(f"{self.base_url}/api/v1/prices?{price_query}")
@@ -722,17 +731,25 @@ class TossClient:
             if not isinstance(result, list):
                 raise TossApiError("토스 API 현재가 응답 형식이 예상과 다릅니다.")
             prices = {str(item.get("symbol", "")): item for item in result}
-            detail_payload = self._authorized_json_request(
-                f"{self.base_url}/api/v1/stocks?{price_query}"
-            )
-            detail_rows = detail_payload.get("result")
-            if not isinstance(detail_rows, list):
-                raise TossApiError("토스 API 종목 기본정보 응답 형식이 예상과 다릅니다.")
-            details = {str(item.get("symbol", "")): item for item in detail_rows}
+            now = monotonic()
             with self._stock_info_lock:
-                expires_at = monotonic() + 43200
-                for symbol, detail in details.items():
-                    self._stock_info_cache[symbol] = (expires_at, detail)
+                details = {symbol: cached[1] for symbol in symbols
+                           if (cached := self._stock_info_cache.get(symbol)) and now < cached[0]}
+            missing = [symbol for symbol in symbols if symbol not in details]
+            if missing:
+                detail_query = urlencode({"symbols": ",".join(missing)})
+                detail_payload = self._authorized_json_request(
+                    f"{self.base_url}/api/v1/stocks?{detail_query}"
+                )
+                detail_rows = detail_payload.get("result")
+                if not isinstance(detail_rows, list):
+                    raise TossApiError("토스 API 종목 기본정보 응답 형식이 예상과 다릅니다.")
+                fetched = {str(item.get("symbol", "")): item for item in detail_rows}
+                details.update(fetched)
+                with self._stock_info_lock:
+                    expires_at = monotonic() + 43200
+                    for symbol, detail in fetched.items():
+                        self._stock_info_cache[symbol] = (expires_at, detail)
         results = []
         for item in matches:
             symbol = str(item.get("symbol", ""))

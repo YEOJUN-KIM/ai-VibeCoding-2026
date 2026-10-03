@@ -29,8 +29,8 @@ class AuthenticatedUser:
 
 
 def hash_password(password: str) -> str:
-    if not 12 <= len(password) <= 128:
-        raise ValueError("비밀번호는 12자 이상 128자 이하로 입력하세요.")
+    if not 8 <= len(password) <= 20:
+        raise ValueError("비밀번호는 8자 이상 20자 이하로 입력하세요.")
     salt = secrets.token_bytes(16)
     digest = hashlib.scrypt(
         password.encode("utf-8"), salt=salt, n=SCRYPT_N, r=SCRYPT_R, p=SCRYPT_P, dklen=32
@@ -48,7 +48,7 @@ def hash_password(password: str) -> str:
 
 
 def hash_live_pin(pin: str) -> str:
-    if len(pin) != 6 or not pin.isdigit():
+    if len(pin) != 6 or not pin.isascii() or not pin.isdigit():
         raise ValueError("LIVE PIN은 숫자 6자리여야 합니다.")
     # 로그인 비밀번호와 같은 강도의 해시를 사용하되 입력 규칙만 별도로 둔다.
     salt = secrets.token_bytes(16)
@@ -282,3 +282,47 @@ def delete_session(request: Request) -> None:
     token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
     with connect() as conn:
         conn.execute("DELETE FROM auth_sessions WHERE token_hash=%s", (token_hash,))
+
+
+def account_profile(user: AuthenticatedUser) -> dict:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT username,created_at,last_login_at,live_pin_hash IS NOT NULL AS pin_configured FROM admin_users WHERE id=%s",
+            (user.id,),
+        ).fetchone()
+    return dict(row) if row else {}
+
+
+def change_credential(user: AuthenticatedUser, current_password: str, new_value: str, kind: str) -> None:
+    if kind not in ("password", "pin"):
+        raise ValueError("변경할 항목이 올바르지 않습니다.")
+    encoded = hash_password(new_value) if kind == "password" else hash_live_pin(new_value)
+    if not isinstance(current_password, str) or not 1 <= len(current_password) <= 128:
+        raise ValueError("현재 비밀번호를 입력하세요.")
+    error = None
+    now = datetime.now(timezone.utc)
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM admin_users WHERE id=%s FOR UPDATE", (user.id,)).fetchone()
+        if not row:
+            error = "계정을 확인할 수 없습니다."
+        elif row["locked_until"] and row["locked_until"] > now:
+            error = "비밀번호 입력이 잠겼습니다. 잠시 후 다시 시도하세요."
+        elif not verify_password(current_password, row["password_hash"]):
+            failures = row["failed_attempts"] + 1
+            until = None
+            if failures >= settings.login_max_failures:
+                until = now + timedelta(minutes=settings.login_lock_minutes)
+                failures = 0
+            conn.execute("UPDATE admin_users SET failed_attempts=%s,locked_until=%s WHERE id=%s", (failures, until, user.id))
+            error = "현재 비밀번호가 올바르지 않습니다."
+        elif kind == "password":
+            if verify_password(new_value, row["password_hash"]):
+                raise ValueError("현재와 다른 비밀번호를 입력하세요.")
+            conn.execute("UPDATE admin_users SET password_hash=%s,failed_attempts=0,locked_until=NULL WHERE id=%s", (encoded, user.id))
+            conn.execute("DELETE FROM auth_sessions WHERE user_id=%s", (user.id,))
+        else:
+            conn.execute("UPDATE admin_users SET live_pin_hash=%s,pin_failed_attempts=0,pin_locked_until=NULL,failed_attempts=0,locked_until=NULL WHERE id=%s", (encoded, user.id))
+            conn.execute("UPDATE auth_sessions SET live_authorized_until=NULL WHERE user_id=%s", (user.id,))
+    # Raise after the transaction commits so failed attempts cannot disappear on rollback.
+    if error:
+        raise PermissionError(error)

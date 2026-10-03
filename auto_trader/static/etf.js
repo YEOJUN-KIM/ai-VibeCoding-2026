@@ -1,6 +1,6 @@
 (() => {
   let page = 1, pages = 1, sequence = 0, loaded = false, loading = false;
-  let items = [], detailSequence = 0;
+  let items = [], detailSequence = 0, searchController = null;
   const compact = value => value == null ? '-' : Math.abs(Number(value)) >= 1e12 ? `${(Number(value)/1e12).toFixed(1)}조원` : `${(Number(value)/1e8).toFixed(1)}억원`;
   function render() {
     $('#etf-body').innerHTML = items.length ? items.map(item => `<tr><td><button type="button" class="favorite-button ${item.is_favorite?'active':''}" data-etf-favorite="${escapeHtml(item.symbol)}" aria-label="${escapeHtml(item.name)} 관심종목 ${item.is_favorite?'제거':'추가'}">${item.is_favorite?'♥':'♡'}</button></td><td><button class="etf-name" type="button" data-etf-detail="${escapeHtml(item.symbol)}">${escapeHtml(item.name)}</button><small class="stock-code">${escapeHtml(item.symbol)} · ${escapeHtml(item.market)}</small></td><td>${item.price==null?'-':won.format(item.price)}</td><td class="${Number(item.change_rate_percent)>0?'positive':'negative'}">${metric(item.change_rate_percent)}</td><td>${compact(item.trading_amount)}</td><td>${compact(item.market_cap)}</td></tr>`).join('') : '<tr><td colspan="6" class="empty">조건에 맞는 ETF가 없습니다.</td></tr>';
@@ -10,24 +10,35 @@
   }
   async function load(force = false) {
     if ((loaded || loading) && !force) return;
+    searchController?.abort();
+    const controller=searchController=new AbortController();
     loading = true;
     const request = ++sequence;
+    items=[];
+    $('#etf-body').innerHTML='<tr><td colspan="6" class="empty">ETF를 찾고 있습니다.</td></tr>';
     $('#etf-state').textContent = 'ETF를 불러오는 중입니다.';
     $('#etf-prev').disabled = $('#etf-next').disabled = true;
     $('#etf-body').setAttribute('aria-busy','true');
     try {
       const query = new URLSearchParams({security_type:'ETF',page:String(page),page_size:'10',q:$('#etf-query').value.trim(),sort:$('#etf-sort').value});
-      const data = await api(`/live/stocks/list?${query}`);
+      const data = await api(`/live/stocks/list?${query}`,{signal:controller.signal});
       if (request !== sequence) return;
       items = data.results.filter(item => item.security_type === 'ETF');
       page = data.page; pages = data.total_pages; loaded = true;
       render();
       $('#etf-state').textContent = `국내 상장 ETF ${data.total}개 · 10개씩 표시 · ${new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'})} 조회`;
     } catch (error) {
-      if (request !== sequence) return;
+      if (request !== sequence || error.name==='AbortError') return;
       loaded = false; items = []; render(); $('#etf-state').textContent = error.message;
     } finally { if (request === sequence) { loading = false; $('#etf-body').removeAttribute('aria-busy'); } }
   }
+  $('#etf-query').addEventListener('input',()=>{
+    sequence++;searchController?.abort();loaded=false;loading=false;items=[];
+    $('#etf-body').innerHTML='<tr><td colspan="6" class="empty">검색 버튼을 눌러 새 조건으로 조회하세요.</td></tr>';
+    $('#etf-body').removeAttribute('aria-busy');
+    $('#etf-state').textContent='검색어 변경됨 · 검색 대기';
+    $('#etf-prev').disabled=$('#etf-next').disabled=true;
+  });
   window.loadEtfs = load;
   $('#etf-search-form').addEventListener('submit',event=>{event.preventDefault();page=1;load(true);});
   $('#etf-sort').addEventListener('change',()=>{page=1;load(true);});

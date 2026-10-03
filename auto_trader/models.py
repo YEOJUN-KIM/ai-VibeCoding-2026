@@ -113,6 +113,7 @@ class StrategySnapshot(BaseModel):
     long_average: Decimal | None = None
     trend: str = "COLLECTING"
     decision: str = "가격 수집 중"
+    entry_block_reason: str | None = None
 
 
 class SignalEvent(BaseModel):
@@ -138,6 +139,10 @@ class StrategyStatus(BaseModel):
     data_source: str = "SIMULATED"
     bar_interval: str = "1m"
     last_data_at: datetime | None = None
+    last_decision_at: datetime | None = None
+    checked_at: datetime | None = None
+    operating_state: str = "UNKNOWN"
+    market_next_open_at: datetime | None = None
     data_message: str = "시세 수신 대기"
     realized_profit: Decimal = Decimal("0")
     trading_costs: Decimal = Decimal("0")
@@ -458,6 +463,12 @@ class LongTermWatchCandidate(BaseModel):
     added_manually: bool = False
     created_at: datetime
     analysis: LongTermAnalysis | None = None
+    note: str = ''
+    note_updated_at: datetime | None = None
+
+
+class LongTermWatchNoteWrite(BaseModel):
+    note: str = Field(max_length=2000)
 
 
 class LiveTradingReadiness(BaseModel):

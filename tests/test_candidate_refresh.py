@@ -10,7 +10,7 @@ from auto_trader.toss import TossApiError
 
 
 class CandidateRefreshTests(unittest.IsolatedAsyncioTestCase):
-    async def run_scan(self, failures, *, count=1, watched=None):
+    async def run_scan(self, failures, *, count=1, watched=None, max_count=10):
         # 실행 서버/DB 없이 스캔의 진행·재시도 흐름만 검증한다.
         source = ast.parse((Path(__file__).resolve().parents[1] / 'auto_trader/main.py').read_text(encoding='utf-8'))
         function = next(n for n in source.body if isinstance(n, ast.AsyncFunctionDef) and n.name == 'refresh_long_term_candidates')
@@ -28,7 +28,7 @@ class CandidateRefreshTests(unittest.IsolatedAsyncioTestCase):
                      long_term_recommendation_assessment=lambda _: (True, []), replace_long_term_recommendations=replace,
                      logger=Mock(), TossApiError=TossApiError)
         exec(compile(ast.Module(body=[function], type_ignores=[]), '<scan>', 'exec'), scope)
-        await scope['refresh_long_term_candidates'](force=True)
+        await scope['refresh_long_term_candidates'](force=True, max_count=max_count)
         return status, sleep, replace, client
 
     async def test_success_has_no_fixed_delay(self):
@@ -36,6 +36,15 @@ class CandidateRefreshTests(unittest.IsolatedAsyncioTestCase):
         sleep.assert_not_awaited()
         replace.assert_called_once_with(['460860'])
         self.assertFalse(status['running'])
+        self.assertEqual(status['phase'], 'complete')
+
+    async def test_configured_recommendation_limit_completes_scan(self):
+        status, _, replace, client = await self.run_scan([], count=8, max_count=3)
+        self.assertEqual(status['completed'],8)
+        self.assertEqual(status['phase'],'complete')
+        self.assertEqual(status['selected'],3)
+        self.assertEqual(len(replace.call_args.args[0]),3)
+        self.assertEqual(client.domestic_stock_detail.call_count,8)
 
     async def test_rate_limit_retries_same_candidate(self):
         status, sleep, replace, client = await self.run_scan([TossApiError('limited', status_code=429)])

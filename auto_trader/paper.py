@@ -51,7 +51,7 @@ class PaperBroker:
                  account_name="paper-default", fee_rate=Decimal("0"),
                  sell_tax_rate=Decimal("0"), ignore_min_cash_ratio=False,
                  ignore_daily_order_limit=False, slippage_rate=Decimal("0"),
-                 journal_path: Path | None = None):
+                 journal_path: Path | None = None, user_id: int | None = None):
         for rate in (fee_rate, sell_tax_rate, slippage_rate):
             if not rate.is_finite() or not Decimal(0) <= rate <= Decimal(1):
                 raise ValueError("비용률은 0부터 1 사이의 유한한 값이어야 합니다.")
@@ -69,6 +69,7 @@ class PaperBroker:
         self.initial_cash = Decimal(initial_cash)
         self.account_name = account_name
         self.account_id = None
+        self.user_id = user_id
         self.risk_manager = None
         self.snapshot_metadata = {}
         self._last_strategy_selection = {}
@@ -103,11 +104,13 @@ class PaperBroker:
             for stock in SAMPLE_STOCKS:
                 conn.execute("INSERT INTO stocks VALUES (%s,%s,%s) ON CONFLICT DO NOTHING",
                              (stock.symbol, stock.name, stock.market))
-            conn.execute("""INSERT INTO accounts(name,mode,initial_cash,cash)
-                VALUES (%s,'PAPER',%s,%s) ON CONFLICT(name) DO NOTHING""",
-                (self.account_name, self.initial_cash, self.initial_cash))
-            self.account_id = conn.execute("SELECT id FROM accounts WHERE name=%s",
-                                           (self.account_name,)).fetchone()["id"]
+            conn.execute("""INSERT INTO accounts(name,mode,initial_cash,cash,user_id)
+                VALUES (%s,'PAPER',%s,%s,%s) ON CONFLICT(name) DO NOTHING""",
+                (self.account_name, self.initial_cash, self.initial_cash, self.user_id))
+            account = conn.execute("SELECT id,user_id FROM accounts WHERE name=%s", (self.account_name,)).fetchone()
+            if self.user_id is not None and account['user_id'] != self.user_id:
+                raise ValueError('다른 사용자의 모의계좌에 접근할 수 없습니다.')
+            self.account_id = account['id']
             saved = conn.execute("SELECT state FROM paper_account_state WHERE account_id=%s",
                                  (self.account_id,)).fetchone()
         if saved:

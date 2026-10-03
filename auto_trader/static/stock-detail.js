@@ -290,20 +290,14 @@ async function loadLongTermAnalysis(symbol) {
 function renderLongTermWatchButton() {
   const button = $("#detail-long-term-watch-button");
   if (!longTermWatchState) {
-    button.textContent = "내 관찰 후보에 추가";
+    button.textContent = "기업 저장";
     button.classList.remove("active");
     button.disabled = false;
     return;
   }
-  if (longTermWatchState.added_manually) {
-    button.textContent = "내 관찰 후보에서 제거";
-    button.classList.add("active");
-    button.disabled = false;
-  } else if (longTermWatchState.is_favorite) {
-    button.textContent = "♥ 관심종목으로 관찰 중";
-    button.classList.add("active");
-    button.disabled = true;
-  }
+  button.textContent = "✓ 저장됨 · 저장 해제";
+  button.classList.add("active");
+  button.disabled = false;
 }
 
 async function loadLongTermWatchState(symbol) {
@@ -354,31 +348,6 @@ function currentOrderPayload() {
 }
 
 function formatOrderSide(side) { return side === "BUY" ? "매수" : "매도"; }
-
-async function loadDryRunHistory() {
-  const list = $("#dry-run-history-list");
-  try {
-    const orders = await api("/live/orders/dry-run");
-    list.replaceChildren();
-    if (!orders.length) {
-      const empty = document.createElement("span");
-      empty.textContent = "아직 저장된 연습 주문이 없습니다.";
-      list.append(empty);
-      return;
-    }
-    orders.slice(0, 3).forEach((order) => {
-      const row = document.createElement("div");
-      const title = document.createElement("strong");
-      const meta = document.createElement("small");
-      title.textContent = `${order.stock_name} · ${formatOrderSide(order.side)} ${integer.format(Number(order.quantity))}주`;
-      meta.textContent = `${won.format(Number(order.estimated_amount))} · ${new Date(order.created_at).toLocaleString("ko-KR")}`;
-      row.append(title, meta);
-      list.append(row);
-    });
-  } catch (error) {
-    list.textContent = error.message;
-  }
-}
 
 function financialKrw(value) {
   const amount = Number(String(value ?? "").replaceAll(",", ""));
@@ -998,32 +967,6 @@ $("#cancel-dry-run-confirm").addEventListener("click", closeDryRunConfirmModal);
 $("#dry-run-confirm-modal").addEventListener("click", (event) => {
   if (event.target === $("#dry-run-confirm-modal")) closeDryRunConfirmModal();
 });
-$("#confirm-dry-run-order").addEventListener("click", async () => {
-  if (!approvedOrderPayload || !pendingClientOrderId) return;
-  const button = $("#confirm-dry-run-order");
-  const status = $("#dry-run-confirm-status");
-  button.disabled = true;
-  status.textContent = "주문 조건을 확인하고 저장하는 중입니다.";
-  try {
-    const order = await api("/live/orders/dry-run", {
-      method: "POST",
-      body: JSON.stringify({ ...approvedOrderPayload, client_order_id: pendingClientOrderId }),
-    });
-    closeDryRunConfirmModal();
-    const result = $("#order-preview-result");
-    result.hidden = false;
-    result.className = "order-preview-result approved";
-    result.textContent = `연습 주문 #${order.id}을 저장했습니다.`;
-    approvedOrderPayload = null;
-    approvedOrderPreview = null;
-    pendingClientOrderId = null;
-    await loadDryRunHistory();
-  } catch (error) {
-    status.textContent = error.message;
-  } finally {
-    button.disabled = false;
-  }
-});
 $("#real-order-confirm-checkbox").addEventListener("change", (event) => {
   $("#confirm-real-order").disabled = !event.target.checked;
 });
@@ -1033,7 +976,7 @@ $("#confirm-real-order").addEventListener("click", async () => {
   const button = $("#confirm-real-order");
   const status = $("#dry-run-confirm-status");
   button.disabled = true;
-  $("#confirm-dry-run-order").disabled = true;
+
   status.textContent = "주문 조건을 확인하고 전송하는 중입니다.";
   try {
     const order = await api("/live/orders/real", {
@@ -1054,7 +997,7 @@ $("#confirm-real-order").addEventListener("click", async () => {
     status.textContent = error.message;
   } finally {
     button.disabled = !$("#real-order-confirm-checkbox").checked;
-    $("#confirm-dry-run-order").disabled = false;
+
   }
 });
 function closeDetailPinModal() {
@@ -1111,11 +1054,11 @@ $("#detail-long-term-watch-button").addEventListener("click", async () => {
   const button = $("#detail-long-term-watch-button");
   button.disabled = true;
   try {
-    const remove = Boolean(longTermWatchState?.added_manually);
+    const remove = Boolean(longTermWatchState);
     await api(`/research/long-term/watchlist/${encodeURIComponent(lastDetailData.symbol)}`, { method: remove ? "DELETE" : "POST" });
     await loadLongTermWatchState(lastDetailData.symbol);
     $("#detail-long-term-message").textContent = remove
-      ? "내 관찰 후보에서 제거했습니다." : "내 관찰 후보에 추가했습니다.";
+      ? "저장한 기업에서 해제했습니다. 관심종목과 메모는 유지됩니다." : "기업을 저장했습니다.";
   } catch (error) {
     $("#detail-long-term-message").textContent = error.message;
     button.disabled = false;

@@ -417,6 +417,40 @@ class TossClientTests(unittest.TestCase):
         self.assertIs(result, client.affordable_domestic_candidates())
         self.assertEqual(mocked.call_count, 6)
 
+    def test_identity_search_uses_directory_without_quote_or_ranking_requests(self):
+        client = TossClient(client_id="id", client_secret="secret")
+        directory = [{"symbol": "005930", "name": "삼성전자", "market": "KOSPI",
+                      "securityType": "STOCK", "isCommonShare": True}]
+        with patch.object(client, "_domestic_stock_universe", return_value=directory), \
+                patch.object(client, "_authorized_json_request") as request, \
+                patch.object(client, "_domestic_trading_amount_rankings") as ranking:
+            by_name = client.search_domestic_stocks(" 삼성 ", include_quotes=False)
+            by_code = client.search_domestic_stocks("0059", include_quotes=False)
+        self.assertEqual(by_name.results[0].symbol, "005930")
+        self.assertEqual(by_code.results[0].name, "삼성전자")
+        self.assertIsNone(by_name.results[0].price)
+        request.assert_not_called()
+        ranking.assert_not_called()
+
+    def test_directory_reuses_basic_info_but_refreshes_prices(self):
+        client = TossClient(client_id="id", client_secret="secret")
+        directory = [{"symbol": "005930", "name": "삼성전자", "market": "KOSPI",
+                      "securityType": "STOCK", "isCommonShare": True}]
+        with patch.object(client, "_domestic_stock_universe", return_value=directory), \
+                patch.object(client, "_domestic_trading_amount_rankings", return_value=(None, [])), \
+                patch.object(client, "_authorized_json_request", side_effect=[
+                    {"result": [{"symbol": "005930", "lastPrice": "70000"}]},
+                    {"result": [{"symbol": "005930", "sharesOutstanding": "100"}]},
+                    {"result": [{"symbol": "005930", "lastPrice": "71000"}]},
+                ]) as request:
+            first = client.list_domestic_stocks()
+            second = client.list_domestic_stocks()
+        self.assertEqual(first.results[0].price, 70000)
+        self.assertEqual(second.results[0].price, 71000)
+        self.assertEqual(second.results[0].market_cap, 7100000)
+        self.assertEqual(request.call_count, 3)
+        self.assertIn("/api/v1/prices?", request.call_args_list[-1].args[0])
+
     @patch("auto_trader.toss.sleep")
     @patch("auto_trader.toss.urlopen")
     def test_domestic_stock_search_matches_partial_name(self, mocked, mocked_sleep):

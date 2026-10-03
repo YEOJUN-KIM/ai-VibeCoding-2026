@@ -5,8 +5,11 @@ let csrfToken = "";
 let activePage = 1;
 let totalPages = 1;
 let loading = false;
+let stockListSequence = 0;
+let stockListController = null;
 let searchTimer = null;
 let sparklineSequence = 0;
+let sparklineController = null;
 const latestPrices = new Map();
 const marketItems = new Map();
 const marketTickTimes = new Map();
@@ -163,17 +166,19 @@ function sparklineSvg(values, symbol, period) {
 
 async function loadSparklines(symbols) {
   if (!symbols.length) return;
+  sparklineController?.abort();
+  const controller=sparklineController=new AbortController();
   const sequence = ++sparklineSequence;
   const period = $("#stock-period").value;
   const chunks = [];
   for (let index = 0; index < symbols.length; index += 5) chunks.push(symbols.slice(index, index + 5));
   let nextChunk = 0;
   const worker = async () => {
-    while (nextChunk < chunks.length) {
+    while (nextChunk < chunks.length && sequence===sparklineSequence && !controller.signal.aborted) {
       const chunk = chunks[nextChunk++];
       try {
-        const data = await api(`/live/stocks/sparklines?symbols=${encodeURIComponent(chunk.join(","))}&period=${period}`);
-        if (sequence !== sparklineSequence) return;
+        const data = await api(`/live/stocks/sparklines?symbols=${encodeURIComponent(chunk.join(","))}&period=${period}`,{signal:controller.signal});
+        if (sequence !== sparklineSequence || controller.signal.aborted) return;
         for (const symbol of chunk) {
           const container = document.querySelector(`[data-sparkline-symbol="${CSS.escape(symbol)}"]`);
           if (container) {
@@ -187,7 +192,7 @@ async function loadSparklines(symbols) {
           }
         }
       } catch (error) {
-        if (sequence !== sparklineSequence) return;
+        if (sequence !== sparklineSequence || controller.signal.aborted) return;
         for (const symbol of chunk) {
           const container = document.querySelector(`[data-sparkline-symbol="${CSS.escape(symbol)}"]`);
           if (container) container.innerHTML = `<span class="sparkline-empty">불러오기 실패</span>`;
@@ -195,7 +200,7 @@ async function loadSparklines(symbols) {
       }
     }
   };
-  await Promise.all(Array.from({ length: Math.min(3, chunks.length) }, worker));
+  await Promise.all(Array.from({ length: Math.min(1, chunks.length) }, worker));
 }
 
 function renderRows(items) {
@@ -224,21 +229,34 @@ function renderRows(items) {
   openMarketStream();
 }
 
+function invalidateStockList() {
+  stockListSequence++;
+  stockListController?.abort();
+  sparklineSequence++;
+  sparklineController?.abort();
+  closeMarketStream();
+  marketItems.clear();
+  $('#stock-list-body').innerHTML='<tr><td class="empty" colspan="8">종목을 찾고 있습니다.</td></tr>';
+  for(const id of ['first','prev','next','last']) $('#stock-'+id).disabled=true;
+}
 async function loadStocks(page = 1) {
-  if (loading) return;
+  clearTimeout(searchTimer);
+  invalidateStockList();
+  const sequence=stockListSequence;
+  const controller=stockListController=new AbortController();
   loading = true;
   $("#stock-list-message").textContent = "국내 종목과 현재가를 불러오는 중입니다.";
   const params = new URLSearchParams({
     q: $("#stock-query").value.trim(), market: $("#stock-market").value,
     security_type: $("#stock-security-type").value, sort: $("#stock-sort").value,
-    page: String(page), page_size: "20",
+    page: String(page), page_size: $('#stock-page-size').value || "20",
   });
   try {
-    const data = await api(`/live/stocks/list?${params}`);
+    const data = await api(`/live/stocks/list?${params}&include_quotes=false`, {signal:controller.signal});
+    if(sequence!==stockListSequence)return;
     activePage = data.page;
     totalPages = data.total_pages;
     renderRows(data.results);
-    loadSparklines(data.results.map((item) => item.symbol));
     $("#stock-total").textContent = integer.format(data.total);
     $("#stock-page").textContent = `${integer.format(activePage)} / ${integer.format(totalPages)}`;
     $("#stock-first").disabled = activePage <= 1;
@@ -250,12 +268,34 @@ async function loadStocks(page = 1) {
       : "조건에 맞는 국내 종목이 없습니다.";
     $("#market-data-status").textContent = "토스 연결됨";
     $("#server-dot").classList.add("online");
+    if(data.results.length){
+      $('#stock-list-message').textContent += ' · 현재가 갱신 중';
+      try {
+        // Let typing settle before starting the slower external quote request.
+        await new Promise(resolve=>{
+          const timer=setTimeout(resolve,300);
+          controller.signal.addEventListener('abort',()=>{clearTimeout(timer);resolve();},{once:true});
+        });
+        if(sequence!==stockListSequence)return;
+        const priced=await api(`/live/stocks/list?${params}`,{signal:controller.signal});
+        if(sequence!==stockListSequence)return;
+        // The rank can change between requests; keep the already displayed identities.
+        const bySymbol=new Map(priced.results.map(item=>[item.symbol,item]));
+        renderRows(data.results.map(item=>bySymbol.get(item.symbol)||item));
+        $('#stock-list-message').textContent=$('#stock-list-message').textContent.replace(' · 현재가 갱신 중','');
+      } catch(error) {
+        if(sequence!==stockListSequence||error.name==='AbortError')return;
+        $('#stock-list-message').textContent=$('#stock-list-message').textContent.replace(' · 현재가 갱신 중',' · 현재가 조회 실패');
+      }
+      if(sequence===stockListSequence)loadSparklines(data.results.map(item=>item.symbol));
+    }
   } catch (error) {
+    if(sequence!==stockListSequence||error.name==='AbortError')return;
     $("#stock-list-message").textContent = error.message;
     $("#market-data-status").textContent = "연결 오류";
     $("#server-dot").classList.remove("online");
   } finally {
-    loading = false;
+    if(sequence===stockListSequence)loading = false;
   }
 }
 
@@ -293,18 +333,30 @@ $("#stock-period").addEventListener("change", () => {
   document.querySelectorAll("[data-sparkline-symbol]").forEach((item) => { item.innerHTML = `<span class="sparkline-loading">차트 로딩</span>`; });
   loadSparklines(symbols);
 });
-$("#stock-query").addEventListener("input", () => {
+$("#stock-query").addEventListener("input", (event) => {
   clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => loadStocks(1), 350);
+  invalidateStockList();
+  $("#stock-list-message").textContent="종목을 찾고 있습니다.";
+  searchTimer=setTimeout(()=>loadStocks(1),120);
 });
+$("#stock-query").addEventListener("compositionend",()=>$("#stock-query").dispatchEvent(new Event('input')));
 $("#stock-list-body").addEventListener("click", (event) => {
   const button = event.target.closest("[data-favorite-symbol]");
   if (button) toggleFavorite(button);
 });
-$("#stock-first").addEventListener("click", () => loadStocks(1));
-$("#stock-prev").addEventListener("click", () => loadStocks(Math.max(1, activePage - 1)));
-$("#stock-next").addEventListener("click", () => loadStocks(Math.min(totalPages, activePage + 1)));
-$("#stock-last").addEventListener("click", () => loadStocks(totalPages));
+async function changeStockPage(page){
+  await loadStocks(page);
+  if(activePage===page){
+    const table=$('#stock-list-body').closest('.table-wrap');
+    const filterHeight=$('#stock-filter-form').getBoundingClientRect().height;
+    window.scrollTo({top:window.scrollY+table.getBoundingClientRect().top-filterHeight});
+  }
+}
+$("#stock-first").addEventListener("click", () => changeStockPage(1));
+$('#stock-page-size').addEventListener('change',()=>loadStocks(1));
+$("#stock-prev").addEventListener("click", () => changeStockPage(Math.max(1, activePage - 1)));
+$("#stock-next").addEventListener("click", () => changeStockPage(Math.min(totalPages, activePage + 1)));
+$("#stock-last").addEventListener("click", () => changeStockPage(totalPages));
 $("#logout-button").addEventListener("click", async () => {
   try { await api("/auth/logout", { method: "POST" }); } finally { window.location.replace("/login"); }
 });

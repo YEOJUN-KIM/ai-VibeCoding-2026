@@ -1,0 +1,13 @@
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const nodes=new Map();const $=selector=>{if(!nodes.has(selector))nodes.set(selector,{value:'',textContent:'',innerHTML:''});return nodes.get(selector);};
+const source=fs.readFileSync('auto_trader/static/long-term.js','utf8');
+const scope={document:{querySelector:$},Intl,Date};vm.createContext(scope);
+vm.runInContext(source.slice(0,source.indexOf('async function api('))+source.slice(source.indexOf('function metric('),source.indexOf('async function loadCandidates('))+source.slice(source.indexOf('let myCandidates'),source.indexOf('async function loadMyCandidates(')),scope);
+scope.items=[{symbol:'005930',name:'삼성전자',market:'KOSPI',note:'<관찰> 분기 실적',created_at:'2026-10-01',analysis:{rank:'A',overall_score:85,generated_at:'2026-10-01'}},{symbol:'000660',name:'SK하이닉스',market:'KOSPI',note:'',created_at:'2026-10-02',analysis:null}];
+const render=()=>vm.runInContext('renderMyCandidates(items)',scope);
+render();assert.match($('#my-long-term-candidates').innerHTML,/&lt;관찰&gt;/);assert.match($('#my-long-term-candidates').innerHTML,/\/stocks\/005930#news/);
+$('#my-watch-query').value='분기';render();assert.match($('#my-watch-summary').textContent,/1–1 \/ 1개/);assert.doesNotMatch($('#my-long-term-candidates').innerHTML,/SK하이닉스/);
+$('#my-watch-query').value='';$('#my-watch-sort').value='recent';render();assert.ok($('#my-long-term-candidates').innerHTML.indexOf('SK하이닉스')<$('#my-long-term-candidates').innerHTML.indexOf('삼성전자'));
+$('#my-watch-sort').value='score';render();assert.ok($('#my-long-term-candidates').innerHTML.indexOf('삼성전자')<$('#my-long-term-candidates').innerHTML.indexOf('SK하이닉스'));
+$('#my-watch-rank').value='pending';render();assert.doesNotMatch($('#my-long-term-candidates').innerHTML,/삼성전자/);
+console.log('Watch list: note escaping and search, sorting, unanalysed filter and news links passed.');
