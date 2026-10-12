@@ -83,7 +83,9 @@ from .ml.quality_worker import QualityReportWorker
 from .ml.macro_worker import MacroCollectionWorker
 
 
-market = MarketSimulator(symbols=settings.watch_symbols)
+# ML collection may include any domestic stock. The disconnected simulator has
+# only sample prices; PAPER selection adds its targets with broker prices.
+market = MarketSimulator()
 broker = PaperBroker(market, initial_cash=settings.paper_initial_cash,
                      fee_rate=settings.paper_fee_rate, sell_tax_rate=settings.paper_sell_tax_rate,
                      slippage_rate=settings.paper_slippage_rate,
@@ -969,8 +971,8 @@ def _strategy_stock_name(symbol: str) -> str:
 
 def _strategy_targets(payload: LiveStrategyWrite) -> list[tuple[str, str]]:
     symbols = list(dict.fromkeys(symbol.upper() for symbol in (payload.symbols or [payload.symbol])))
-    if not symbols or len(symbols) > 20:
-        raise HTTPException(status_code=422, detail="전략 대상 종목은 1개 이상 20개 이하로 선택하세요.")
+    if not symbols or len(symbols) > 30:
+        raise HTTPException(status_code=422, detail="전략 대상 종목은 1개 이상 30개 이하로 선택하세요.")
     targets = []
     for symbol in symbols:
         if not symbol.isdigit() or len(symbol) != 6:

@@ -1,24 +1,23 @@
 """실제 현재가와 완료된 1분봉을 읽는 모의매매 전용 입력. 주문 API는 사용하지 않는다."""
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from .toss import TossApiError, TossClient
 
 
 class PaperPriceFeed:
-    def __init__(self, client: TossClient):
+    def __init__(self, client: TossClient, *, clock=None):
         self.client = client
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self.prices_requested_at = None
         self._bars_cache = {}
         self.unavailable = {}
 
     def read(self, symbols: list[str], valuation_symbols: list[str], period: int, now: datetime):
-        prices = self.client.current_prices(list(dict.fromkeys(symbols + valuation_symbols)))
+        self.prices_requested_at = None
         def read_bars(symbol):
-            price = prices.get(symbol)
-            if price is None or not price.is_finite() or price <= 0:
-                raise TossApiError(f"{symbol}: 유효한 현재가가 없습니다.")
             cached = self._bars_cache.get(symbol, [])
             latest_completed = now.replace(second=0, microsecond=0) - timedelta(minutes=1)
             if len(cached) >= period and cached[-1].timestamp >= latest_completed:
@@ -52,4 +51,17 @@ class PaperPriceFeed:
                 except TossApiError as exc:
                     unavailable[symbol] = str(exc)
             self.unavailable = unavailable
+        # Chart requests share a rate limit and a large basket can take longer
+        # than the quote freshness window. Fetch execution prices afterwards.
+        self.prices_requested_at = self._clock()
+        prices = self.client.current_prices(list(dict.fromkeys(symbols + valuation_symbols)))
+        received_at = self._clock()
+        for symbol, bars in list(candles.items()):
+            price = prices.get(symbol)
+            if price is None or not price.is_finite() or price <= 0:
+                self.unavailable[symbol] = f"{symbol}: 유효한 현재가가 없습니다."
+                del candles[symbol]
+            elif received_at - bars[-1].timestamp > timedelta(minutes=3):
+                self.unavailable[symbol] = f"{symbol}: 최신 완료 봉이 없습니다. 휴장·시세 지연 여부를 확인하세요."
+                del candles[symbol]
         return prices, candles

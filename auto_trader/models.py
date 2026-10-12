@@ -495,7 +495,7 @@ class LiveStrategyWrite(BaseModel):
     trading_end: str = Field(default="20:00", pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
     daily_order_limit: int = Field(default=0, ge=0, le=100)
     cooldown_minutes: int = Field(default=30, ge=0, le=10080)
-    symbols: list[str] = Field(default_factory=list, max_length=20)
+    symbols: list[str] = Field(default_factory=list, max_length=30)
 
 
 class LiveStrategyTarget(BaseModel):

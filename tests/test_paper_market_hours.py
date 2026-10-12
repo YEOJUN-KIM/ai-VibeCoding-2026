@@ -1,6 +1,7 @@
 import asyncio
 import unittest
 from datetime import datetime, timedelta
+from decimal import Decimal
 from unittest.mock import Mock, patch
 
 from auto_trader.market_hours import MarketHours, trading_status
@@ -115,6 +116,28 @@ class EngineCalendarTests(unittest.TestCase):
         self.assertEqual(self.engine.status().operating_state, 'MARKET_CLOSED')
         self.engine._manage_exits.assert_not_called()
         self.records.assert_not_called()
+        self.assertIsNone(self.engine.last_data_at)
+
+    def test_slow_charts_with_recent_prices_can_resume_judgments(self):
+        def read(*args):
+            self.now += timedelta(seconds=75)
+            self.feed.prices_requested_at = self.now
+            return {'005930': Decimal(70000)}, {'005930': []}
+        self.feed.read.side_effect = read
+        self.engine.step = Mock()
+        self.poll()
+        self.engine.step.assert_called_once()
+        self.assertEqual(self.engine.last_data_at, self.now)
+
+    def test_slow_execution_price_request_still_blocks_judgments(self):
+        def read(*args):
+            self.feed.prices_requested_at = self.now
+            self.now += timedelta(seconds=31)
+            return {'005930': Decimal(70000)}, {'005930': []}
+        self.feed.read.side_effect = read
+        self.engine.step = Mock()
+        self.poll()
+        self.engine.step.assert_not_called()
         self.assertIsNone(self.engine.last_data_at)
 
 

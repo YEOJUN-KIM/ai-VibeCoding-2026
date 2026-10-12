@@ -73,3 +73,14 @@ class LiveStrategyStoreTests(unittest.TestCase):
         self.assertEqual(created.symbols, ["005930", "000660"])
         loaded = live_strategies.list_strategies(self.user_id)[0]
         self.assertEqual([item.stock_name for item in loaded.targets], ["삼성전자", "SK하이닉스"])
+
+    def test_collection_strategy_preserves_twenty_two_targets(self):
+        targets = [(f"{index:06d}", f"종목 {index}") for index in range(1, 23)]
+        created = live_strategies.save_strategy(
+            self.user_id, self.payload(symbol=targets[0][0], symbols=[item[0] for item in targets]),
+            targets[0][1], targets=targets,
+        )
+        loaded = live_strategies.list_strategies(self.user_id)[0]
+        self.assertEqual(loaded.id, created.id)
+        self.assertEqual(loaded.symbols, [item[0] for item in targets])
+        self.assertEqual([item.stock_name for item in loaded.targets], [item[1] for item in targets])

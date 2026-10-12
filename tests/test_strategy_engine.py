@@ -242,7 +242,7 @@ class StrategyEngineTests(unittest.TestCase):
         client = Mock()
         client.current_prices.return_value = {"005930": D(70000)}
         client._domestic_candles.return_value = self.bars([70000, 70010, 70020])
-        feed = PaperPriceFeed(client)
+        feed = PaperPriceFeed(client, clock=lambda: self.now)
         feed.read(["005930"], [], 3, self.now)
         feed.read(["005930"], [], 3, self.now+timedelta(seconds=10))
         self.assertEqual(client._domestic_candles.call_count, 1)
@@ -314,7 +314,7 @@ class StrategyEngineTests(unittest.TestCase):
         client = Mock()
         client.current_prices.return_value = {"005930": D(70000)}
         client._domestic_candles.return_value = self.bars([70000, 70010, 99999], self.now)
-        feed = PaperPriceFeed(client)
+        feed = PaperPriceFeed(client, clock=lambda: self.now)
         _, bars = feed.read(["005930"], [], 3, self.now)
         self.assertEqual(bars["005930"][-1].close_price, D(70010))
         client._domestic_candles.return_value = self.bars([70000], self.now-timedelta(days=1))

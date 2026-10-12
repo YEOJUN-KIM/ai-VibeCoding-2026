@@ -239,8 +239,12 @@ class MovingAverageEngine:
             self.data_message = "시세 오류·지연 또는 휴장: 신규 판단과 체결을 대기합니다."
             logging.getLogger(__name__).warning("Paper market data unavailable", exc_info=True)
             return
-        # 중지/설정 변경 중 끝난 조회나 지나치게 오래 걸린 조회를 체결에 사용하지 않는다.
-        if not self._within_hours() or self._clock() - now > timedelta(seconds=30):
+        # Slow chart loading must not age execution prices: the live feed reads
+        # current prices last. Other feeds retain the whole-request deadline.
+        prices_requested_at = getattr(self.price_feed, "prices_requested_at", None)
+        if not isinstance(prices_requested_at, datetime):
+            prices_requested_at = now
+        if not self._within_hours() or self._clock() - prices_requested_at > timedelta(seconds=30):
             self.data_message = "시세 조회 지연 또는 운영 종료: 다음 시세를 기다립니다."
             return
         for symbol, price in prices.items():
