@@ -1,3 +1,5 @@
+import auto_trader.api.paper as _api_paper
+import auto_trader.auth as _dep_auth
 import unittest
 import asyncio
 from datetime import date, datetime, timedelta, timezone
@@ -100,15 +102,15 @@ class DecisionHistoryEndpointTests(unittest.TestCase):
 
     def test_login_required_and_invalid_inputs(self):
         self.assertEqual(self.request('/paper/decisions/history'),401)
-        main.app.dependency_overrides[main.require_user]=lambda:SimpleNamespace(id=11)
-        self.addCleanup(main.app.dependency_overrides.pop,main.require_user)
+        main.app.dependency_overrides[_dep_auth.require_user]=lambda:SimpleNamespace(id=11)
+        self.addCleanup(main.app.dependency_overrides.pop,_dep_auth.require_user)
         for query in ('page=0','page_size=101','start=oops','account_id=-1','action=UNKNOWN','start=2026-10-03&end=2026-10-02'):
             self.assertEqual(self.request('/paper/decisions/history?'+query),422)
 
     def test_user_and_filters_are_forwarded(self):
-        main.app.dependency_overrides[main.require_user]=lambda:SimpleNamespace(id=11)
-        self.addCleanup(main.app.dependency_overrides.pop,main.require_user)
-        with patch.object(main,'read_decision_history',return_value={'total':0,'items':[]}) as read:
+        main.app.dependency_overrides[_dep_auth.require_user]=lambda:SimpleNamespace(id=11)
+        self.addCleanup(main.app.dependency_overrides.pop,_dep_auth.require_user)
+        with patch.object(_api_paper,'read_decision_history',return_value={'total':0,'items':[]}) as read:
             response=self.request('/paper/decisions/history?account_id=2&symbol=005930&start=2026-10-02&page_size=50&before_id=42')
             self.assertEqual(response,200)
             self.assertEqual(read.call_args.args,(11,))

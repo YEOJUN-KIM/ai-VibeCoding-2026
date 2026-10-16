@@ -1,3 +1,4 @@
+
 import ast
 import asyncio
 import unittest
@@ -12,7 +13,7 @@ from auto_trader.toss import TossApiError
 class CandidateRefreshTests(unittest.IsolatedAsyncioTestCase):
     async def run_scan(self, failures, *, count=1, watched=None, max_count=10):
         # 실행 서버/DB 없이 스캔의 진행·재시도 흐름만 검증한다.
-        source = ast.parse((Path(__file__).resolve().parents[1] / 'auto_trader/main.py').read_text(encoding='utf-8'))
+        source = ast.parse((Path(__file__).resolve().parents[1] / 'auto_trader/services/research.py').read_text(encoding='utf-8'))
         function = next(n for n in source.body if isinstance(n, ast.AsyncFunctionDef) and n.name == 'refresh_long_term_candidates')
         analysis = SimpleNamespace(overall_score=76, generated_at=datetime.now(timezone.utc), symbol='460860')
         client = Mock()
@@ -23,7 +24,7 @@ class CandidateRefreshTests(unittest.IsolatedAsyncioTestCase):
         replace = Mock()
         scope = dict(asyncio=SimpleNamespace(to_thread=asyncio.to_thread, gather=asyncio.gather, sleep=sleep, CancelledError=asyncio.CancelledError),
                      datetime=datetime, timezone=timezone, _long_term_scan_status=status, _long_term_scan_lock=asyncio.Lock(),
-                     toss_client=client, dart_client=Mock(), long_term_watched_symbols=lambda: watched or set(),
+                     runtime=SimpleNamespace(toss_client=client), dart_client=Mock(), long_term_watched_symbols=lambda: watched or set(),
                      analyze_long_term=lambda *_: analysis, save_long_term_analysis=Mock(),
                      long_term_recommendation_assessment=lambda _: (True, []), replace_long_term_recommendations=replace,
                      logger=Mock(), TossApiError=TossApiError)
@@ -78,7 +79,7 @@ class CandidateRefreshTests(unittest.IsolatedAsyncioTestCase):
 
 class WatchRefreshTests(unittest.IsolatedAsyncioTestCase):
     def load_function(self, name, scope):
-        source = ast.parse((Path(__file__).resolve().parents[1] / 'auto_trader/main.py').read_text(encoding='utf-8'))
+        source = ast.parse((Path(__file__).resolve().parents[1] / 'auto_trader/services/research.py').read_text(encoding='utf-8'))
         function = next(n for n in source.body if isinstance(n, ast.AsyncFunctionDef) and n.name == name)
         exec(compile(ast.Module(body=[function], type_ignores=[]), '<watch>', 'exec'), scope)
         return scope[name]

@@ -23,7 +23,11 @@ ai-VibeCoding-2026/
 
 ## 서버와 공통 기능
 
-- `main.py`: FastAPI 앱, 페이지·API 라우트, 시작 준비 상태와 예약 작업 조합
+- `main.py`: FastAPI 앱 생성, 도메인 라우터와 미들웨어 등록
+- `api/`: 페이지·인증·시장·PAPER·LIVE·리서치·설정·ML HTTP 라우터
+- `runtime.py`: 공용 의존성 생성, 사용자별 계좌·엔진·연결 조립
+- `lifecycle.py`·`middleware.py`: 시작·종료 작업과 요청별 사용자 범위·보안 처리
+- `services/`: LIVE 주문, PAPER 계좌 작업, 연결 변경, 준비 상태와 리서치 예약 분석
 - `launcher.py`·`scripts/start.ps1`: 최초 준비, DB 서비스·계정 확인, 서버 실행·중복 재사용·종료
 - `settings.py`: `.env` 기반 설정
 - `models.py`: API 요청·응답 모델
@@ -39,7 +43,8 @@ ai-VibeCoding-2026/
 
 ## 시장 데이터와 분석
 
-- `toss.py`: 토스증권 인증, 계좌, 시세와 차트 API
+- `toss.py`: 기존 `TossClient`·`TossApiError` import 경로를 유지하는 호환 모듈
+- `brokers/toss/`: facade 생성자, 통신·인증, 계좌, 주문, 시장 데이터 구현
 - `quote_stream.py`: 사용자 연결별 토스 WebSocket 구독과 상세 페이지 시세 전달
 - `dart.py`: OpenDART 기업·공시·재무 데이터
 - `news.py`: 뉴스 수집과 유사 기사 그룹화
@@ -74,17 +79,22 @@ ai-VibeCoding-2026/
 
 - `paper_feed.py`: PAPER용 실제 시세와 완료 봉 공급
 - `paper.py`: 모의 계좌, 체결, 비용, 기록과 손익·마지막 선택 전략 저장
-- `strategy.py`: 이동평균 신호, 실행 제어와 청산 조건
+- `strategy.py`: 기존 `MovingAverageEngine` import를 유지하는 호환 모듈
+- `trading/engine.py`: 시세 수집·실행 제어·주문·성과·ML 기록 조립
+- `trading/strategies/`: 교체 가능한 신호 인터페이스와 기존 이동평균 진입·청산 판단
+- `trading/sizing.py`·`trading/exits.py`: 기존 수량 산정과 보유분 청산 관리
 - `strategy_presets.py`: 기본 인기·가성비 후보 선별, 주간 데이터 저장·재사용과 새 전략 초안
 - `simulator.py`: 시뮬레이션 보조
-- `risk.py`: PAPER/LIVE 공통 위험 한도
+- `risk.py`: PAPER 위험 설정 저장과 손실·횟수·투자 한도 검사
+- `risk_policy.py`: PAPER 검사와 LIVE 미리보기에서 공통으로 사용하는 한도 계산
 
 상세 동작은 [PAPER_STRATEGY.md](../specs/PAPER_STRATEGY.md)를 기준으로 합니다.
 
 ## LIVE 주문
 
 - `live_strategies.py`: 저장 전략과 대상 종목
-- `live_orders.py`: 실제 주문 검증, 멱등성, 저장과 브로커 대조
+- `live_orders.py`: 주문 저장, 멱등성 예약, 조회와 대조 대상 DB 접근
+- `services/live_order_service.py`: 주문 미리보기·실제 전송·취소·브로커 대조의 검증 순서와 조립
 - `set_live_pin.py`: LIVE 주문 PIN 설정 도구
 
 ## 웹 자산
@@ -111,3 +121,5 @@ ai-VibeCoding-2026/
 ## 테스트
 
 `tests/`에는 인증, 준비 상태, 토스·DART·뉴스, 관심종목, 장기 분석, PAPER, 전략, LIVE 주문·전략과 사용자별 연결·로컬 키 파일·자산 이력·검색·시장 상태·백테스트 검증이 있습니다. Python 확인은 `python -m unittest discover -s tests -v`, JavaScript 확인은 해당 `tests/test_*.js`를 Node.js로 실행합니다. 문서 갱신만으로 전체 테스트를 다시 실행한 것으로 간주하지 않습니다.
+
+2026-10-16 구조 변경의 분석·이동 내역·호환성 검증·남은 제약은 [리팩터링 보고서](ARCHITECTURE_REFACTOR.md)에 기록했습니다.

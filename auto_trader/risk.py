@@ -5,6 +5,7 @@ from decimal import Decimal
 
 from .database import connect
 from .models import RiskPreset, RiskSettings, RiskSettingsUpdate, RiskStatus
+from .risk_policy import RiskPolicy
 
 
 PRESETS = {
@@ -130,13 +131,13 @@ class RiskManager:
         if reason:
             return reason
         symbol_value = self.broker.position_value(symbol)
-        if amount + fee > config.max_order_amount:
+        if not RiskPolicy.order_amount_allowed(config, amount, fee):
             return "1회 최대 주문 금액을 초과했습니다."
-        if symbol_value + amount > config.max_symbol_amount:
+        if not RiskPolicy.symbol_amount_allowed(config, symbol_value, amount):
             return "종목별 최대 투자 금액을 초과했습니다."
-        if invested + amount > config.max_total_investment:
+        if not RiskPolicy.total_investment_allowed(config, invested, amount):
             return "전체 최대 투자 금액을 초과했습니다."
         remaining_cash = cash - amount - fee
-        if not ignore_min_cash_ratio and total_asset and remaining_cash / total_asset * 100 < config.min_cash_ratio:
+        if not ignore_min_cash_ratio and total_asset and RiskPolicy.cash_ratio(remaining_cash, total_asset) < config.min_cash_ratio:
             return "최소 현금 보유 비율 아래로 내려갑니다."
         return None

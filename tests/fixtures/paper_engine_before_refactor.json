@@ -1,0 +1,459 @@
+{
+  "cross_and_exit": {
+    "orders": [
+      {
+        "id": 2,
+        "symbol": "005930",
+        "side": "SELL",
+        "quantity": 2,
+        "price": "104.895",
+        "status": "FILLED",
+        "message": "가상 체결 완료",
+        "source": "STRATEGY",
+        "run_id": "refactor-regression",
+        "reason": "현재 전략 · 이동평균 하향 교차",
+        "fee": "0",
+        "tax": "0",
+        "slippage": "0.210",
+        "realized_profit": "-2.422"
+      },
+      {
+        "id": 1,
+        "symbol": "005930",
+        "side": "BUY",
+        "quantity": 2,
+        "price": "106.106",
+        "status": "FILLED",
+        "message": "가상 체결 완료",
+        "source": "STRATEGY",
+        "run_id": "refactor-regression",
+        "reason": "상향 교차 후 2봉 확인 · 가격 추세 확인",
+        "fee": "0",
+        "tax": "0",
+        "slippage": "0.212",
+        "realized_profit": null
+      }
+    ],
+    "final_observation": {
+      "status": {
+        "running": false,
+        "emergency_stopped": false,
+        "tick_count": 12,
+        "interval_seconds": 10,
+        "short_period": 2,
+        "long_period": 3,
+        "order_quantity": 2,
+        "sizing_mode": "QUANTITY",
+        "order_amount": "100000",
+        "strategy_basis_amount": "212.212",
+        "strategy_profit": "-2.422",
+        "strategy_return_percent": "-1.141311518670009236046971896",
+        "data_source": "SIMULATED",
+        "bar_interval": "1m",
+        "last_data_at": null,
+        "last_decision_at": "2026-09-30T10:12:00+09:00",
+        "checked_at": "2026-09-30T10:12:00+09:00",
+        "operating_state": "OPEN",
+        "market_next_open_at": null,
+        "data_message": "전략 적용 완료 · 시작하면 새 종목의 시세를 조회합니다.",
+        "realized_profit": "-2.422",
+        "trading_costs": "0.422",
+        "completed_trades": 1,
+        "winning_trades": 0,
+        "max_drawdown_percent": "4.640909090909090909090909091",
+        "run_id": "refactor-regression",
+        "snapshots": [
+          {
+            "symbol": "005930",
+            "name": "삼성전자",
+            "price": "99",
+            "collected_prices": 3,
+            "data_at": "2026-09-30T10:11:00+09:00",
+            "short_average": "100.5",
+            "long_average": "102",
+            "trend": "BELOW",
+            "decision": "단기선 열세 · 상향 교차 대기",
+            "entry_block_reason": null
+          }
+        ],
+        "recent_signals": [
+          {
+            "symbol": "005930",
+            "side": "SELL",
+            "reason": "현재 전략 · 이동평균 하향 교차"
+          },
+          {
+            "symbol": "005930",
+            "side": "BUY",
+            "reason": "상향 교차 후 2봉 확인 · 가격 추세 확인"
+          }
+        ]
+      },
+      "account": {
+        "initial_cash": "100000",
+        "total_profit": "-2.422",
+        "realized_profit": "-2.422",
+        "unrealized_profit": "0",
+        "return_percent": "-0.00242200",
+        "total_fees": "0",
+        "total_taxes": "0",
+        "fee_rate": "0.00015",
+        "sell_tax_rate": "0.002",
+        "mode": "PAPER",
+        "cash": "99997.578",
+        "total_asset": "99997.578",
+        "positions": []
+      }
+    },
+    "observations_sha256": "26df990ca406aa44a48ce8eb293bc690082bdfedcbcfa2f151d30946fda7dfb7",
+    "ml_decisions_sha256": "77baa83a9835f999ab01344670eae5488642b0de48b0c1c89afda959ee8c876f"
+  },
+  "costs_and_profit": {
+    "orders": [
+      {
+        "id": 2,
+        "symbol": "005930",
+        "side": "SELL",
+        "quantity": 2,
+        "price": "107.892",
+        "status": "FILLED",
+        "message": "가상 체결 완료",
+        "source": "STRATEGY",
+        "run_id": "refactor-regression",
+        "reason": "현재 전략 · 익절률 도달",
+        "fee": "0",
+        "tax": "0",
+        "slippage": "0.216",
+        "realized_profit": "3.572"
+      },
+      {
+        "id": 1,
+        "symbol": "005930",
+        "side": "BUY",
+        "quantity": 2,
+        "price": "106.106",
+        "status": "FILLED",
+        "message": "가상 체결 완료",
+        "source": "STRATEGY",
+        "run_id": "refactor-regression",
+        "reason": "상향 교차 후 2봉 확인 · 가격 추세 확인",
+        "fee": "0",
+        "tax": "0",
+        "slippage": "0.212",
+        "realized_profit": null
+      }
+    ],
+    "final_observation": {
+      "status": {
+        "running": false,
+        "emergency_stopped": false,
+        "tick_count": 12,
+        "interval_seconds": 10,
+        "short_period": 2,
+        "long_period": 3,
+        "order_quantity": 2,
+        "sizing_mode": "QUANTITY",
+        "order_amount": "100000",
+        "strategy_basis_amount": "212.212",
+        "strategy_profit": "3.572",
+        "strategy_return_percent": "1.683222437939419071494543193",
+        "data_source": "SIMULATED",
+        "bar_interval": "1m",
+        "last_data_at": null,
+        "last_decision_at": "2026-09-30T10:12:00+09:00",
+        "checked_at": "2026-09-30T10:12:00+09:00",
+        "operating_state": "OPEN",
+        "market_next_open_at": null,
+        "data_message": "전략 적용 완료 · 시작하면 새 종목의 시세를 조회합니다.",
+        "realized_profit": "3.572",
+        "trading_costs": "0.428",
+        "completed_trades": 1,
+        "winning_trades": 1,
+        "max_drawdown_percent": "0.09990009990009990009990009990",
+        "run_id": "refactor-regression",
+        "snapshots": [
+          {
+            "symbol": "005930",
+            "name": "삼성전자",
+            "price": "99",
+            "collected_prices": 3,
+            "data_at": "2026-09-30T10:11:00+09:00",
+            "short_average": "100.5",
+            "long_average": "102",
+            "trend": "BELOW",
+            "decision": "단기선 열세 · 상향 교차 대기",
+            "entry_block_reason": null
+          }
+        ],
+        "recent_signals": [
+          {
+            "symbol": "005930",
+            "side": "SELL",
+            "reason": "현재 전략 · 익절률 도달"
+          },
+          {
+            "symbol": "005930",
+            "side": "BUY",
+            "reason": "상향 교차 후 2봉 확인 · 가격 추세 확인"
+          }
+        ]
+      },
+      "account": {
+        "initial_cash": "100000",
+        "total_profit": "3.572",
+        "realized_profit": "3.572",
+        "unrealized_profit": "0",
+        "return_percent": "0.00357200",
+        "total_fees": "0",
+        "total_taxes": "0",
+        "fee_rate": "0.00015",
+        "sell_tax_rate": "0.002",
+        "mode": "PAPER",
+        "cash": "100003.572",
+        "total_asset": "100003.572",
+        "positions": []
+      }
+    },
+    "observations_sha256": "6009a8d7f7b1c701a11878264b433916dfa4cf6da4212f6345f8de45883b8f18",
+    "ml_decisions_sha256": "a1a820dee119435b7c134e0c4159ed837356ad9790ca39f4e4061f877c3f5bc8"
+  },
+  "stop_loss": {
+    "orders": [
+      {
+        "id": 2,
+        "symbol": "005930",
+        "side": "SELL",
+        "quantity": 2,
+        "price": "104.895",
+        "status": "FILLED",
+        "message": "가상 체결 완료",
+        "source": "STRATEGY",
+        "run_id": "refactor-regression",
+        "reason": "현재 전략 · 손절률 도달",
+        "fee": "0",
+        "tax": "0",
+        "slippage": "0.210",
+        "realized_profit": "-2.422"
+      },
+      {
+        "id": 1,
+        "symbol": "005930",
+        "side": "BUY",
+        "quantity": 2,
+        "price": "106.106",
+        "status": "FILLED",
+        "message": "가상 체결 완료",
+        "source": "STRATEGY",
+        "run_id": "refactor-regression",
+        "reason": "상향 교차 후 2봉 확인 · 가격 추세 확인",
+        "fee": "0",
+        "tax": "0",
+        "slippage": "0.212",
+        "realized_profit": null
+      }
+    ],
+    "final_observation": {
+      "status": {
+        "running": false,
+        "emergency_stopped": false,
+        "tick_count": 12,
+        "interval_seconds": 10,
+        "short_period": 2,
+        "long_period": 3,
+        "order_quantity": 2,
+        "sizing_mode": "QUANTITY",
+        "order_amount": "100000",
+        "strategy_basis_amount": "212.212",
+        "strategy_profit": "-2.422",
+        "strategy_return_percent": "-1.141311518670009236046971896",
+        "data_source": "SIMULATED",
+        "bar_interval": "1m",
+        "last_data_at": null,
+        "last_decision_at": "2026-09-30T10:12:00+09:00",
+        "checked_at": "2026-09-30T10:12:00+09:00",
+        "operating_state": "OPEN",
+        "market_next_open_at": null,
+        "data_message": "전략 적용 완료 · 시작하면 새 종목의 시세를 조회합니다.",
+        "realized_profit": "-2.422",
+        "trading_costs": "0.422",
+        "completed_trades": 1,
+        "winning_trades": 0,
+        "max_drawdown_percent": "4.640909090909090909090909091",
+        "run_id": "refactor-regression",
+        "snapshots": [
+          {
+            "symbol": "005930",
+            "name": "삼성전자",
+            "price": "99",
+            "collected_prices": 3,
+            "data_at": "2026-09-30T10:11:00+09:00",
+            "short_average": "100.5",
+            "long_average": "102",
+            "trend": "BELOW",
+            "decision": "단기선 열세 · 상향 교차 대기",
+            "entry_block_reason": null
+          }
+        ],
+        "recent_signals": [
+          {
+            "symbol": "005930",
+            "side": "SELL",
+            "reason": "현재 전략 · 손절률 도달"
+          },
+          {
+            "symbol": "005930",
+            "side": "BUY",
+            "reason": "상향 교차 후 2봉 확인 · 가격 추세 확인"
+          }
+        ]
+      },
+      "account": {
+        "initial_cash": "100000",
+        "total_profit": "-2.422",
+        "realized_profit": "-2.422",
+        "unrealized_profit": "0",
+        "return_percent": "-0.00242200",
+        "total_fees": "0",
+        "total_taxes": "0",
+        "fee_rate": "0.00015",
+        "sell_tax_rate": "0.002",
+        "mode": "PAPER",
+        "cash": "99997.578",
+        "total_asset": "99997.578",
+        "positions": []
+      }
+    },
+    "observations_sha256": "d53a3137b7b9f49c45d627b0f0c89182dc6734cf378da04da47cd708bf58c929",
+    "ml_decisions_sha256": "b0dde787663caa168432058c820ce062479c66eb45d75773eacadf59daa2d939"
+  },
+  "insufficient_cash": {
+    "orders": [
+      {
+        "id": 3,
+        "symbol": "005930",
+        "side": "BUY",
+        "quantity": 2,
+        "price": "110.110",
+        "status": "REJECTED",
+        "message": "가상 계좌의 주문 가능 금액이 부족합니다.",
+        "source": "STRATEGY",
+        "run_id": "refactor-regression",
+        "reason": "상향 교차 후 2봉 확인 · 가격 추세 확인",
+        "fee": "0",
+        "tax": "0",
+        "slippage": "0",
+        "realized_profit": null
+      },
+      {
+        "id": 2,
+        "symbol": "005930",
+        "side": "BUY",
+        "quantity": 2,
+        "price": "108.108",
+        "status": "REJECTED",
+        "message": "가상 계좌의 주문 가능 금액이 부족합니다.",
+        "source": "STRATEGY",
+        "run_id": "refactor-regression",
+        "reason": "상향 교차 후 2봉 확인 · 가격 추세 확인",
+        "fee": "0",
+        "tax": "0",
+        "slippage": "0",
+        "realized_profit": null
+      },
+      {
+        "id": 1,
+        "symbol": "005930",
+        "side": "BUY",
+        "quantity": 2,
+        "price": "106.106",
+        "status": "REJECTED",
+        "message": "가상 계좌의 주문 가능 금액이 부족합니다.",
+        "source": "STRATEGY",
+        "run_id": "refactor-regression",
+        "reason": "상향 교차 후 2봉 확인 · 가격 추세 확인",
+        "fee": "0",
+        "tax": "0",
+        "slippage": "0",
+        "realized_profit": null
+      }
+    ],
+    "final_observation": {
+      "status": {
+        "running": false,
+        "emergency_stopped": false,
+        "tick_count": 12,
+        "interval_seconds": 10,
+        "short_period": 2,
+        "long_period": 3,
+        "order_quantity": 2,
+        "sizing_mode": "QUANTITY",
+        "order_amount": "100000",
+        "strategy_basis_amount": "0",
+        "strategy_profit": "0",
+        "strategy_return_percent": null,
+        "data_source": "SIMULATED",
+        "bar_interval": "1m",
+        "last_data_at": null,
+        "last_decision_at": "2026-09-30T10:12:00+09:00",
+        "checked_at": "2026-09-30T10:12:00+09:00",
+        "operating_state": "OPEN",
+        "market_next_open_at": null,
+        "data_message": "전략 적용 완료 · 시작하면 새 종목의 시세를 조회합니다.",
+        "realized_profit": "0",
+        "trading_costs": "0",
+        "completed_trades": 0,
+        "winning_trades": 0,
+        "max_drawdown_percent": "0",
+        "run_id": "refactor-regression",
+        "snapshots": [
+          {
+            "symbol": "005930",
+            "name": "삼성전자",
+            "price": "99",
+            "collected_prices": 3,
+            "data_at": "2026-09-30T10:11:00+09:00",
+            "short_average": "100.5",
+            "long_average": "102",
+            "trend": "BELOW",
+            "decision": "단기선 열세 · 상향 교차 대기",
+            "entry_block_reason": null
+          }
+        ],
+        "recent_signals": [
+          {
+            "symbol": "005930",
+            "side": "BUY",
+            "reason": "상향 교차 후 2봉 확인 · 가격 추세 확인"
+          },
+          {
+            "symbol": "005930",
+            "side": "BUY",
+            "reason": "상향 교차 후 2봉 확인 · 가격 추세 확인"
+          },
+          {
+            "symbol": "005930",
+            "side": "BUY",
+            "reason": "상향 교차 후 2봉 확인 · 가격 추세 확인"
+          }
+        ]
+      },
+      "account": {
+        "initial_cash": "1",
+        "total_profit": "0",
+        "realized_profit": "0",
+        "unrealized_profit": "0",
+        "return_percent": "0",
+        "total_fees": "0",
+        "total_taxes": "0",
+        "fee_rate": "0.00015",
+        "sell_tax_rate": "0.002",
+        "mode": "PAPER",
+        "cash": "1",
+        "total_asset": "1",
+        "positions": []
+      }
+    },
+    "observations_sha256": "508e2e08f9e9c9f230b77f3d89293fa91097acbff03cce24dffcdab17d39b52a",
+    "ml_decisions_sha256": "97ec8c6bef5bf9c12d3f06bb7bcb9c6fd9c500e4b717e57ed8236335287808cb"
+  }
+}

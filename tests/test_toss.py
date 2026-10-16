@@ -25,7 +25,7 @@ class FakeResponse:
 
 
 class TossClientTests(unittest.TestCase):
-    @patch("auto_trader.toss.urlopen")
+    @patch("auto_trader.brokers.toss.transport.urlopen")
     def test_rate_limit_blocks_follow_up_requests_during_backoff(self, mocked):
         error = HTTPError("https://example.test", 429, "Too Many Requests", {"Retry-After": "20"}, None)
         error.read = lambda: json.dumps({
@@ -41,7 +41,7 @@ class TossClientTests(unittest.TestCase):
 
         self.assertEqual(mocked.call_count, 1)
 
-    @patch("auto_trader.toss.urlopen")
+    @patch("auto_trader.brokers.toss.transport.urlopen")
     def test_rate_limit_uses_server_reset_for_only_that_group(self, mocked):
         def limited(*_args, **_kwargs):
             error = HTTPError("https://example.test", 429, "Too Many Requests", {"X-RateLimit-Reset": "2"}, None)
@@ -63,7 +63,7 @@ class TossClientTests(unittest.TestCase):
         client._group_rate_limit_until["MARKET_DATA_CHART"] = 12
         error = TossApiError("limited", status_code=429)
         with patch.object(client, "_json_request_once", side_effect=[error, {"ok": True}]) as request, \
-             patch("auto_trader.toss.monotonic", return_value=10), \
+             patch("auto_trader.brokers.toss.transport.monotonic", return_value=10), \
              patch.object(client._request_waiter, "wait") as wait:
             result = client._json_request(Request("https://x/api/v1/candles"))
         self.assertEqual(result, {"ok": True})
@@ -150,7 +150,7 @@ class TossClientTests(unittest.TestCase):
         self.assertIn("baseCurrency=USD", request.call_args.args[0])
         self.assertIn("quoteCurrency=KRW", request.call_args.args[0])
 
-    @patch("auto_trader.toss.urlopen")
+    @patch("auto_trader.brokers.toss.transport.urlopen")
     def test_token_is_cached_and_accounts_are_read(self, mocked):
         mocked.side_effect = [FakeResponse({"access_token": "secret-token", "expires_in": 3600}),
                               FakeResponse({"result": [{"accountSeq": 1}]})]
@@ -160,7 +160,7 @@ class TossClientTests(unittest.TestCase):
         self.assertEqual(client.access_token(), "secret-token")
         self.assertEqual(mocked.call_count, 2)
 
-    @patch("auto_trader.toss.urlopen")
+    @patch("auto_trader.brokers.toss.transport.urlopen")
     def test_current_prices_batches_symbols_in_one_market_data_request(self, mocked):
         mocked.side_effect = [
             FakeResponse({"access_token": "token", "expires_in": 3600}),
@@ -197,7 +197,7 @@ class TossClientTests(unittest.TestCase):
                 price=Decimal("70000"), client_order_id="live-order-001",
             )
 
-    @patch("auto_trader.toss.urlopen")
+    @patch("auto_trader.brokers.toss.transport.urlopen")
     def test_live_limit_order_uses_fixed_safe_shape(self, mocked):
         mocked.side_effect = [
             FakeResponse({"access_token": "token", "expires_in": 3600}),
@@ -221,7 +221,7 @@ class TossClientTests(unittest.TestCase):
             "clientOrderId": "live-order-001", "confirmHighValueOrder": False,
         })
 
-    @patch("auto_trader.toss.urlopen")
+    @patch("auto_trader.brokers.toss.transport.urlopen")
     def test_order_detail_is_read_only_and_cancel_needs_unlock(self, mocked):
         mocked.side_effect = [
             FakeResponse({"access_token": "token", "expires_in": 3600}),
@@ -233,7 +233,7 @@ class TossClientTests(unittest.TestCase):
         with self.assertRaisesRegex(TossApiError, "안전 잠금"):
             client.cancel_order("order-1")
 
-    @patch("auto_trader.toss.urlopen")
+    @patch("auto_trader.brokers.toss.transport.urlopen")
     def test_order_history_group_is_read_only(self, mocked):
         mocked.side_effect = [
             FakeResponse({"access_token": "token", "expires_in": 3600}),
@@ -247,14 +247,14 @@ class TossClientTests(unittest.TestCase):
         self.assertEqual(request.get_method(), "GET")
         self.assertIn("status=CLOSED", request.full_url)
 
-    @patch("auto_trader.toss.urlopen")
+    @patch("auto_trader.brokers.toss.transport.urlopen")
     def test_api_error_is_sanitized(self, mocked):
         mocked.side_effect = HTTPError("url", 403, "Forbidden", {},
                                        io.BytesIO(b'{"code":"forbidden","message":"not allowed"}'))
         with self.assertRaisesRegex(TossApiError, "forbidden"):
             TossClient(client_id="id", client_secret="secret").access_token()
 
-    @patch("auto_trader.toss.urlopen")
+    @patch("auto_trader.brokers.toss.transport.urlopen")
     def test_nested_compressed_api_error_is_parsed(self, mocked):
         payload = gzip.compress(json.dumps({
             "error": {"code": "invalid-token", "message": "invalid token"}
@@ -266,7 +266,7 @@ class TossClientTests(unittest.TestCase):
             TossClient(client_id="id", client_secret="secret").access_token()
         self.assertEqual(caught.exception.error_code, "invalid-token")
 
-    @patch("auto_trader.toss.urlopen")
+    @patch("auto_trader.brokers.toss.transport.urlopen")
     def test_invalid_cached_token_is_refreshed_once(self, mocked):
         invalid_token = HTTPError(
             "url", 401, "Unauthorized", {},
@@ -283,7 +283,7 @@ class TossClientTests(unittest.TestCase):
         self.assertEqual(client.access_token(), "new-token")
         self.assertEqual(mocked.call_count, 4)
 
-    @patch("auto_trader.toss.urlopen")
+    @patch("auto_trader.brokers.toss.transport.urlopen")
     def test_invalid_token_retry_is_not_repeated(self, mocked):
         def invalid_token():
             return HTTPError(
@@ -301,7 +301,7 @@ class TossClientTests(unittest.TestCase):
             TossClient(client_id="id", client_secret="secret").accounts()
         self.assertEqual(mocked.call_count, 4)
 
-    @patch("auto_trader.toss.urlopen")
+    @patch("auto_trader.brokers.toss.transport.urlopen")
     def test_portfolio_is_normalized_and_account_is_masked(self, mocked):
         mocked.side_effect = [
             FakeResponse({"access_token": "token", "expires_in": 3600}),
@@ -331,7 +331,7 @@ class TossClientTests(unittest.TestCase):
         self.assertTrue(portfolio.market_open_today)
         self.assertEqual(mocked.call_count, 4)
 
-    @patch("auto_trader.toss.urlopen")
+    @patch("auto_trader.brokers.toss.transport.urlopen")
     def test_portfolio_uses_previous_business_day_label_on_kr_market_holiday(self, mocked):
         mocked.side_effect = [
             FakeResponse({"access_token": "token", "expires_in": 3600}),
@@ -361,7 +361,7 @@ class TossClientTests(unittest.TestCase):
         self.assertEqual(portfolio.daily_profit_rate, 2)
         self.assertEqual(portfolio.holdings[0].daily_profit_loss, 20)
 
-    @patch("auto_trader.toss.urlopen")
+    @patch("auto_trader.brokers.toss.transport.urlopen")
     def test_domestic_trading_amount_watchlist(self, mocked):
         mocked.side_effect = [
             FakeResponse({"access_token": "token", "expires_in": 3600}),
@@ -374,7 +374,7 @@ class TossClientTests(unittest.TestCase):
         self.assertEqual([stock.symbol for stock in stocks], ["005930", "000660"])
         self.assertEqual(prices["005930"], 70000)
 
-    @patch("auto_trader.toss.urlopen")
+    @patch("auto_trader.brokers.toss.transport.urlopen")
     def test_buying_power_is_normalized_and_cached(self, mocked):
         mocked.side_effect = [
             FakeResponse({"access_token": "token", "expires_in": 3600}),
@@ -390,7 +390,7 @@ class TossClientTests(unittest.TestCase):
         self.assertIs(buying_power, client.buying_power())
         self.assertEqual(mocked.call_count, 4)
 
-    @patch("auto_trader.toss.urlopen")
+    @patch("auto_trader.brokers.toss.transport.urlopen")
     def test_affordable_candidates_use_rank_and_cash_limit(self, mocked):
         mocked.side_effect = [
             FakeResponse({"access_token": "token", "expires_in": 3600}),
@@ -451,8 +451,8 @@ class TossClientTests(unittest.TestCase):
         self.assertEqual(request.call_count, 3)
         self.assertIn("/api/v1/prices?", request.call_args_list[-1].args[0])
 
-    @patch("auto_trader.toss.sleep")
-    @patch("auto_trader.toss.urlopen")
+    @patch("auto_trader.brokers.toss.market_data.sleep")
+    @patch("auto_trader.brokers.toss.transport.urlopen")
     def test_domestic_stock_search_matches_partial_name(self, mocked, mocked_sleep):
         mocked.side_effect = [
             FakeResponse({"access_token": "token", "expires_in": 3600}),
@@ -490,8 +490,8 @@ class TossClientTests(unittest.TestCase):
         self.assertEqual(page.total_pages, 1)
         mocked_sleep.assert_called_once()
 
-    @patch("auto_trader.toss.sleep")
-    @patch("auto_trader.toss.urlopen")
+    @patch("auto_trader.brokers.toss.market_data.sleep")
+    @patch("auto_trader.brokers.toss.transport.urlopen")
     def test_domestic_stock_list_filters_market_and_type(self, mocked, mocked_sleep):
         mocked.side_effect = [
             FakeResponse({"access_token": "token", "expires_in": 3600}),
@@ -523,8 +523,8 @@ class TossClientTests(unittest.TestCase):
         self.assertEqual(page.results[0].market_cap, 9000000000000)
         mocked_sleep.assert_called_once()
 
-    @patch("auto_trader.toss.sleep")
-    @patch("auto_trader.toss.urlopen")
+    @patch("auto_trader.brokers.toss.market_data.sleep")
+    @patch("auto_trader.brokers.toss.transport.urlopen")
     def test_domestic_stock_detail_and_sparkline_share_candle_cache(self, mocked, mocked_sleep):
         mocked.side_effect = [
             FakeResponse({"access_token": "token", "expires_in": 3600}),
@@ -566,7 +566,7 @@ class TossClientTests(unittest.TestCase):
         self.assertEqual(mocked.call_count, 7)
         mocked_sleep.assert_called_once()
 
-    @patch("auto_trader.toss.urlopen")
+    @patch("auto_trader.brokers.toss.transport.urlopen")
     def test_intraday_sparkline_requests_one_minute_candles(self, mocked):
         mocked.side_effect = [
             FakeResponse({"access_token": "token", "expires_in": 3600}),
@@ -583,8 +583,8 @@ class TossClientTests(unittest.TestCase):
         self.assertIn("count=200", request_url)
         self.assertEqual(result["005930"], [Decimal("70950"), Decimal("71050")])
 
-    @patch("auto_trader.toss.sleep")
-    @patch("auto_trader.toss.urlopen")
+    @patch("auto_trader.brokers.toss.market_data.sleep")
+    @patch("auto_trader.brokers.toss.transport.urlopen")
     def test_intraday_candles_follow_pagination_cursor(self, mocked, mocked_sleep):
         mocked.side_effect = [
             FakeResponse({"access_token": "token", "expires_in": 3600}),
@@ -606,7 +606,7 @@ class TossClientTests(unittest.TestCase):
         self.assertEqual([item.close_price for item in candles], [Decimal("100"), Decimal("101"), Decimal("102")])
         mocked_sleep.assert_called_once_with(0.08)
 
-    @patch("auto_trader.toss.urlopen")
+    @patch("auto_trader.brokers.toss.transport.urlopen")
     def test_favorite_snapshots_include_price_change_and_rank(self, mocked):
         mocked.side_effect = [
             FakeResponse({"access_token": "token", "expires_in": 3600}),

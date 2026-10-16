@@ -1,3 +1,6 @@
+import auto_trader.services.paper_workspace_service as _paper_workspace_service
+import auto_trader.middleware as _middleware
+import auto_trader.runtime as _runtime
 import asyncio
 import unittest
 import tempfile
@@ -7,7 +10,7 @@ from decimal import Decimal
 from uuid import uuid4
 from unittest.mock import patch, Mock
 from psycopg import sql
-from auto_trader import auth, database, paper, risk, main, user_connections, live_orders, connection_vault
+from auto_trader import auth, database, paper, risk, user_connections, live_orders, connection_vault
 from auto_trader.connection_vault import protect, unprotect
 from auto_trader.toss import TossApiError
 from auto_trader.user_workspace import current_workspace, UserWorkspace
@@ -30,7 +33,7 @@ class UserOwnershipTests(unittest.TestCase):
             conn.execute(sql.SQL('SET search_path TO {}').format(sql.Identifier(self.schema)))
             return conn
         self.connect = isolated
-        for module in (auth, database, paper, risk, main, user_connections, live_orders):
+        for module in (auth, database, paper, risk, _runtime, _paper_workspace_service, user_connections, live_orders):
             p = patch.object(module, 'connect', isolated)
             p.start()
             self.addCleanup(p.stop)
@@ -43,14 +46,14 @@ class UserOwnershipTests(unittest.TestCase):
             conn.execute(sql.SQL('DROP SCHEMA {} CASCADE').format(sql.Identifier(self.schema)))
 
     def test_existing_accounts_belong_only_to_first_user(self):
-        original = paper.PaperBroker(main.market)
+        original = paper.PaperBroker(_runtime.market)
         original.initialize()
         owner = user_connections.initialize_ownership()
         self.assertEqual(owner, self.users[0])
         with self.connect() as conn:
             self.assertEqual(conn.execute("SELECT user_id FROM accounts WHERE name='paper-default'").fetchone()['user_id'], owner)
         with self.assertRaises(ValueError):
-            paper.PaperBroker(main.market, user_id=self.users[1]).initialize()
+            paper.PaperBroker(_runtime.market, user_id=self.users[1]).initialize()
         self.assertEqual(user_connections.initialize_ownership(), owner)
 
     def test_unconnected_user_never_inherits_environment_credentials(self):
@@ -61,19 +64,19 @@ class UserOwnershipTests(unittest.TestCase):
 
     def test_two_users_restore_separate_assets_and_selected_accounts(self):
         owner = user_connections.initialize_ownership()
-        with patch.object(main.legacy_workspace, 'user_id', owner):
-            first = main._create_user_workspace(self.users[0])
-            second = main._create_user_workspace(self.users[1])
+        with patch.object(_runtime.legacy_workspace, 'user_id', owner):
+            first = _runtime._create_user_workspace(self.users[0])
+            second = _runtime._create_user_workspace(self.users[1])
             self.assertNotEqual(first.broker.account_id, second.broker.account_id)
             first.broker.load_snapshot(cash=Decimal('123456'), positions=[], metadata={'snapshot_at':'2026-10-03T09:00:00+09:00'})
             self.assertNotEqual(first.broker.account().cash, second.broker.account().cash)
             self.assertNotEqual(first.broker.risk_manager, second.broker.risk_manager)
             token = current_workspace.set(second)
             try:
-                asyncio.run(main.select_paper_account('EXPERIMENT', None))
+                asyncio.run(_paper_workspace_service.select_paper_account('EXPERIMENT', None))
             finally:
                 current_workspace.reset(token)
-            restored = main._create_user_workspace(self.users[1])
+            restored = _runtime._create_user_workspace(self.users[1])
             self.assertEqual(restored.mode, 'EXPERIMENT')
             self.assertEqual(restored.broker.account().cash, Decimal('10000000'))
             self.assertEqual(first.mode, 'LIVE_COPY')
@@ -179,13 +182,13 @@ class WorkspaceContextTests(unittest.IsolatedAsyncioTestCase):
             return SimpleNamespace(id=int(request.cookies[auth.SESSION_COOKIE]))
         async def next_request(request):
             await asyncio.sleep(.01)
-            return JSONResponse({'cash':await asyncio.to_thread(lambda:main.broker.cash)})
+            return JSONResponse({'cash':await asyncio.to_thread(lambda:_runtime.broker.cash)})
         async def request(i):
             req = Request({'type':'http','path':'/account','headers':[(b'cookie',f'{auth.SESSION_COOKIE}={i}'.encode())]})
-            response = await main.user_account_scope(req, next_request)
+            response = await _middleware.user_account_scope(req, next_request)
             self.assertIsNone(current_workspace.get())
             return response.body
-        with patch.object(main, 'session_from_request', side_effect=user), patch.object(main.workspaces, 'get', side_effect=states.__getitem__):
+        with patch.object(_middleware, 'session_from_request', side_effect=user), patch.object(_runtime.workspaces, 'get', side_effect=states.__getitem__):
             self.assertEqual(await asyncio.gather(request(11), request(22)), [b'{"cash":11}', b'{"cash":22}'])
 
     async def test_concurrent_tasks_and_thread_calls_keep_their_own_clients(self):
@@ -194,7 +197,7 @@ class WorkspaceContextTests(unittest.IsolatedAsyncioTestCase):
             token = current_workspace.set(state)
             try:
                 await asyncio.sleep(.01)
-                return await asyncio.to_thread(lambda:(main.broker.cash, main.toss_client.account_ref))
+                return await asyncio.to_thread(lambda:(_runtime.broker.cash, _runtime.toss_client.account_ref))
             finally:
                 current_workspace.reset(token)
         self.assertEqual(await asyncio.gather(read(11), read(22)), [(11,'11'),(22,'22')])

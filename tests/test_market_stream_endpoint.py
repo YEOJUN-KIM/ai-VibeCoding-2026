@@ -1,8 +1,9 @@
+import auto_trader.api.market as _api_market
+import auto_trader.runtime as _runtime
 import asyncio
 import unittest
 from unittest.mock import Mock, patch
 from fastapi import HTTPException
-from auto_trader import main
 from auto_trader.quote_stream import QuoteStream
 
 class Request:
@@ -20,8 +21,8 @@ class MarketStreamTests(unittest.IsolatedAsyncioTestCase):
         async def idle(): await asyncio.Event().wait()
         hub.run=idle
         codes=[f"{i:06}" for i in range(count)]
-        with patch.object(main,'quote_stream',hub), patch.object(main,'require_user',return_value=Mock()):
-            response=await main.live_market_stream(Request(),','.join(codes),None)
+        with patch.object(_runtime,'quote_stream',hub), patch.object(_api_market,'require_user',return_value=Mock()):
+            response=await _api_market.live_market_stream(Request(),','.join(codes),None)
             iterator=response.body_iterator
             await anext(iterator)
             self.assertEqual(len(hub.listeners),count)
@@ -35,4 +36,4 @@ class MarketStreamTests(unittest.IsolatedAsyncioTestCase):
     async def test_invalid_codes_rejected(self):
         for codes in ('','../bad',','.join(f"{i:06}" for i in range(101))):
             with self.assertRaises(HTTPException):
-                await main.live_market_stream(Request(),codes,None)
+                await _api_market.live_market_stream(Request(),codes,None)

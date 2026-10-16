@@ -1,3 +1,5 @@
+import auto_trader.api.settings as _api_settings
+import fastapi as _dep_fastapi
 import unittest
 from decimal import Decimal as D
 from unittest.mock import patch
@@ -80,13 +82,13 @@ class PresetTests(unittest.TestCase):
 
     def test_preview_does_not_save_or_enable_a_strategy(self):
         from auto_trader import main
-        with patch.object(main, 'weekly_preset', return_value=build('popular', [candidate()])), \
-             patch.object(main, 'save_strategy') as save:
-            draft = main.strategy_preset_preview('popular', D(300000), None)
+        with patch.object(_api_settings, 'weekly_preset', return_value=build('popular', [candidate()])), \
+             patch.object(_api_settings, 'save_strategy') as save:
+            draft = _api_settings.strategy_preset_preview('popular', D(300000), None)
         save.assert_not_called()
         self.assertEqual(draft['payload']['sizing_mode'], 'AMOUNT')
-        with self.assertRaises(main.HTTPException) as error:
-            main.strategy_preset_preview('unknown', D(300000), None)
+        with self.assertRaises(_dep_fastapi.HTTPException) as error:
+            _api_settings.strategy_preset_preview('unknown', D(300000), None)
         self.assertEqual(error.exception.status_code, 404)
 
 

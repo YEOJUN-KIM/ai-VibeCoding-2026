@@ -21,5 +21,5 @@ $('#my-watch-rank').value='pending';run('myPage=1;renderMyCandidates(items)');as
 $('#my-watch-query').value='000099';run('renderMyCandidates(items)');assert.ok($('#my-long-term-candidates').innerHTML.includes('기업99'));
 $('#my-watch-rank').value='A';run('renderMyCandidates(items)');assert.ok($('#my-long-term-candidates').innerHTML.includes('검색 조건'));
 $('#my-watch-query').value='';$('#my-watch-rank').value='';run('myPage=10;renderMyCandidates(items.slice(0,7))');assert.equal($('#my-watch-page').textContent,'1 / 1');
-run('renderMyCandidates([])');assert.ok($('#my-long-term-candidates').innerHTML.includes('관찰할 기업을 추가'));
+run('renderMyCandidates([])');assert.ok($('#my-long-term-candidates').innerHTML.includes('궁금한 기업을 저장해 보세요. 관심종목 또는 종목의 장기분석에서 추가할 수 있습니다.'));
 console.log('Watchlist checks passed: 100 items, 10 pages, filters, refresh retention, shrinking and empty results.');
