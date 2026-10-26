@@ -56,7 +56,7 @@ def live_stock_list(
 ) -> LiveStockSearchPage:
     try:
         result = runtime.toss_client.list_domestic_stocks(
-            query=q, market=runtime.market, security_type=security_type,
+            query=q, market=market, security_type=security_type,
             sort=sort, page=page, page_size=page_size, include_quotes=include_quotes,
         )
         saved = favorite_symbols(user.id)
