@@ -22,6 +22,7 @@ from psycopg.types.json import Jsonb
 from ..database import connect, initialize
 from ..toss import TossClient
 from .data_pipeline import finish_collection_run, start_collection_run
+from .collection_errors import error_detail
 
 
 NEW_YORK = ZoneInfo("America/New_York")
@@ -207,6 +208,7 @@ def collect_macro_context(
     run_id = start_collection_run("MACRO_CONTEXT", "MIXED", requested, days, now)
     inserted = duplicates = 0
     errors: dict[str, str] = {}
+    details = {}
 
     try:
         rate = toss_client.exchange_rate("USD", "KRW")
@@ -227,6 +229,7 @@ def collect_macro_context(
         duplicates += duplicate_rows
     except Exception as exc:
         errors["USD_KRW"] = str(exc)
+        details["USD_KRW"] = error_detail(exc)
 
     for symbol, indicator in TOSS_US_PROXIES.items():
         try:
@@ -261,6 +264,7 @@ def collect_macro_context(
             duplicates += duplicate_rows
         except Exception as exc:
             errors[indicator] = str(exc)
+            details[indicator] = error_detail(exc)
 
     start_date = now.astimezone(NEW_YORK).date() - timedelta(days=days)
     end_date = now.astimezone(NEW_YORK).date()
@@ -272,6 +276,7 @@ def collect_macro_context(
         fred_rows = {}
         for _, (indicator, _) in FRED_SERIES.items():
             errors[indicator] = str(exc)
+            details[indicator] = error_detail(exc)
 
     for series_id, (indicator, unit) in FRED_SERIES.items():
         if series_id not in fred_rows:
@@ -298,6 +303,7 @@ def collect_macro_context(
             duplicates += duplicate_rows
         except Exception as exc:
             errors[indicator] = str(exc)
+            details[indicator] = error_detail(exc)
 
     status = finish_collection_run(
         run_id,
@@ -305,6 +311,7 @@ def collect_macro_context(
         duplicate_rows=duplicates,
         errors=errors,
         finished_at=datetime.now(timezone.utc),
+        diagnostics={"kind": "macro", "error_details": details},
     )
     return {
         "run_id": run_id,
@@ -312,6 +319,7 @@ def collect_macro_context(
         "inserted_rows": inserted,
         "duplicate_rows": duplicates,
         "errors": errors,
+        "error_details": details,
         "requested": requested,
     }
 

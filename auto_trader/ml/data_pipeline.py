@@ -174,10 +174,14 @@ def finish_collection_run(
     duplicate_rows: int,
     errors: dict[str, str],
     finished_at: datetime,
+    diagnostics: dict | None = None,
 ) -> str:
     status = "COMPLETED" if not errors else (
         "PARTIAL" if inserted_rows or duplicate_rows else "FAILED"
     )
+    stored_errors = dict(errors)
+    if diagnostics is not None:
+        stored_errors["_diagnostics"] = diagnostics
     with connect() as conn:
         conn.execute(
             """
@@ -186,7 +190,7 @@ def finish_collection_run(
                    errors=%s, finished_at=%s
              WHERE id=%s
             """,
-            (status, inserted_rows, duplicate_rows, Jsonb(errors), finished_at, run_id),
+            (status, inserted_rows, duplicate_rows, Jsonb(stored_errors), finished_at, run_id),
         )
     return status
 

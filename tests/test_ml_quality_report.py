@@ -80,6 +80,8 @@ class QualityReportRepositoryTests(unittest.TestCase):
         self.assertEqual(first["stock_summary"]["missing_bars"], 0)
         self.assertEqual(first["indicator_summary"]["missing_bars"], 1)
         self.assertEqual(first["status"], "WARN")
+        self.assertEqual(first["stock_summary"]["data_completeness_status"], "PASS")
+        self.assertEqual(first["indicator_summary"]["data_completeness_status"], "WARN")
         self.assertEqual(second["report_date"], report_date)
         with quality_report.connect() as conn:
             count = conn.execute("SELECT count(*) AS count FROM ml_data_quality_reports").fetchone()

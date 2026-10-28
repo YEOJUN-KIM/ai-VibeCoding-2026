@@ -9,6 +9,8 @@ from datetime import datetime, timedelta, timezone
 from ..database import initialize
 from ..settings import settings
 from ..toss import TossClient
+from .collection_errors import error_detail
+from .gap_repair import opening_observation
 from .data_pipeline import (
     RawCandle,
     candle_quality_report,
@@ -36,21 +38,26 @@ def collect_candles(
     run_id = start_collection_run("TOSS", "1m", normalized, count, now)
     inserted = duplicates = 0
     errors: dict[str, str] = {}
+    details = {}
+    observations = {}
     for symbol in normalized:
         try:
             received = client._domestic_candles(
                 symbol, "1m", count, cache_seconds=cache_seconds
             )
+            received_at = collected_at or datetime.now(timezone.utc)
+            observations[symbol] = opening_observation(received, received_at, count)
             completed = [
-                RawCandle.from_live_candle(symbol, candle, collected_at=now)
+                RawCandle.from_live_candle(symbol, candle, collected_at=received_at)
                 for candle in received
-                if candle.timestamp + timedelta(minutes=1) <= now
+                if candle.timestamp + timedelta(minutes=1) <= received_at
             ]
             new_rows, duplicate_rows = save_raw_candles(completed, run_id=run_id)
             inserted += new_rows
             duplicates += duplicate_rows
         except Exception as exc:
             errors[symbol] = str(exc)
+            details[symbol] = error_detail(exc)
 
     finished_at = datetime.now(timezone.utc)
     status = finish_collection_run(
@@ -59,6 +66,7 @@ def collect_candles(
         duplicate_rows=duplicates,
         errors=errors,
         finished_at=finished_at,
+        diagnostics={"kind": "regular", "error_details": details, "series": observations},
     )
     return {
         "run_id": run_id,
@@ -67,6 +75,7 @@ def collect_candles(
         "inserted_rows": inserted,
         "duplicate_rows": duplicates,
         "errors": errors,
+        "error_details": details,
         "quality": [candle_quality_report(symbol) for symbol in normalized],
     }
 

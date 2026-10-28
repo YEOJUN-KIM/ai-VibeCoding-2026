@@ -11,12 +11,28 @@ from zoneinfo import ZoneInfo
 from ..toss import TossClient
 from .collect_candles import collect_candles
 from .collect_market_indicators import collect_market_indicators
+from .gap_repair import reconcile_session
 
 
 KST = ZoneInfo("Asia/Seoul")
 FIRST_COLLECTION = time(9, 1, 2)
 LAST_COLLECTION = time(15, 31, 2)
 logger = logging.getLogger(__name__)
+
+
+def next_worker_event(now: datetime, completed: set) -> tuple[datetime, str]:
+    """Catch up a delayed opening/final check rather than skipping its slot."""
+    local = now.astimezone(KST)
+    choices = [(next_collection_at(now), "regular")]
+    if local.weekday() < 5:
+        for kind, at in (("opening_0905", time(9, 5, 10)), ("opening_0910", time(9, 10, 10)), ("final", time(15, 35))):
+            scheduled = datetime.combine(local.date(), at, KST)
+            if (local.date(), kind) in completed:
+                continue
+            if kind != "final" and local.time() > time(9, 12):
+                continue
+            choices.append((max(scheduled, local), kind))
+    return min(choices, key=lambda choice: choice[0])
 
 
 def next_collection_at(now: datetime) -> datetime:
@@ -73,6 +89,7 @@ class CandleCollectionWorker:
         self.count = count
         self.enabled = enabled
         self._task: asyncio.Task | None = None
+        self._reconciled = set()
         self._status = {
             "enabled": enabled,
             "running": False,
@@ -89,6 +106,7 @@ class CandleCollectionWorker:
             "last_inserted_rows": 0,
             "last_duplicate_rows": 0,
             "last_errors": {},
+            "last_reconciliation": None,
             "total_inserted_rows": 0,
             "message": "정기 수집 대기" if enabled else "정기 수집 비활성화",
         }
@@ -149,7 +167,6 @@ class CandleCollectionWorker:
                 self.client,
                 list(self.symbols),
                 count=self.count,
-                collected_at=started_at,
                 cache_seconds=5,
             )
             indicator_result = await asyncio.to_thread(
@@ -157,7 +174,6 @@ class CandleCollectionWorker:
                 self.client,
                 list(self.market_indicators),
                 count=self.count,
-                collected_at=started_at,
                 cache_seconds=5,
             )
             statuses = {stock_result["status"], indicator_result["status"]}
@@ -209,9 +225,30 @@ class CandleCollectionWorker:
                 last_finished_at=datetime.now(timezone.utc),
             )
 
+    async def run_reconciliation_once(self, kind: str, day) -> dict:
+        self._status.update(running=True, phase="reconciling", message=f"{kind} 누락 봉 재검사 중")
+        try:
+            _, market_open = await asyncio.to_thread(self.client.kr_market_open_today)
+            if not market_open:
+                return {"status": "SKIPPED", "reason": "holiday"}
+            result = await asyncio.to_thread(reconcile_session, self.client, day,
+                                             symbols=self.symbols, indicators=self.market_indicators,
+                                             kind=kind, skip_completed=kind == "final")
+            summary = {key: result[key] for key in ("run_id", "status", "kind", "report_date", "inserted_rows", "errors", "reason") if key in result}
+            self._status.update(last_reconciliation=summary,
+                                total_inserted_rows=self._status["total_inserted_rows"] + result.get("inserted_rows", 0))
+            return result
+        except Exception as exc:
+            logger.warning("ML reconciliation failed: %s", exc)
+            result = {"status": "FAILED", "error": str(exc)}
+            self._status["last_reconciliation"] = result
+            return result
+        finally:
+            self._status.update(running=False, phase="waiting")
+
     async def _run(self) -> None:
         while True:
-            scheduled_at = next_collection_at(datetime.now(timezone.utc))
+            scheduled_at, kind = next_worker_event(datetime.now(timezone.utc), self._reconciled)
             self._status.update(
                 phase="waiting",
                 next_run_at=scheduled_at,
@@ -221,4 +258,9 @@ class CandleCollectionWorker:
                 0, (scheduled_at - datetime.now(scheduled_at.tzinfo)).total_seconds()
             )
             await asyncio.sleep(delay)
-            await self.run_once(datetime.now(timezone.utc))
+            if kind == "regular":
+                await self.run_once(datetime.now(timezone.utc))
+            else:
+                self._reconciled = {key for key in self._reconciled if key[0] == scheduled_at.date()}
+                self._reconciled.add((scheduled_at.date(), kind))
+                await self.run_reconciliation_once(kind, scheduled_at.date())

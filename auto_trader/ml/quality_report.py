@@ -12,6 +12,8 @@ from psycopg.types.json import Jsonb
 
 from ..database import connect, initialize
 from ..settings import settings
+from .collection_errors import error_category
+from .gap_repair import missing_timestamps
 
 
 KST = ZoneInfo("Asia/Seoul")
@@ -57,11 +59,14 @@ def _series_summary(
     start_at: datetime,
     end_at: datetime,
     expected_bars: int,
+    as_of: datetime | None = None,
 ) -> dict[str, Any]:
     if table not in {"ml_raw_candles", "ml_market_indicator_candles"}:
         raise ValueError("지원하지 않는 품질 검사 테이블입니다.")
     if key_column not in {"symbol", "indicator"}:
         raise ValueError("지원하지 않는 품질 검사 키입니다.")
+    source = "TOSS" if table == "ml_raw_candles" else "TOSS_MARKET_INDICATOR"
+    expected = [start_at + timedelta(minutes=index) for index in range(expected_bars)]
     with connect() as conn:
         rows = conn.execute(
             f"""
@@ -70,23 +75,28 @@ def _series_summary(
                    count(*) FILTER (
                        WHERE available_at - event_at > interval '5 minutes'
                    ) AS delayed_over_5m,
-                   count(*) FILTER (WHERE volume = 0) AS zero_volume_rows
+                   count(*) FILTER (WHERE volume = 0) AS zero_volume_rows,
+                   array_agg(DISTINCT event_at ORDER BY event_at) AS timestamps
               FROM {table}
              WHERE interval='1m' AND event_at >= %s AND event_at < %s
                AND {key_column} = ANY(%s)
+               AND source=%s AND available_at<=%s
              GROUP BY {key_column}
             """,
-            (start_at, end_at, list(requested)),
+            (start_at, min(end_at, start_at + timedelta(minutes=expected_bars)), list(requested), source, as_of or datetime.now(timezone.utc)),
         ).fetchall()
     found = {str(row["item"]): row for row in rows}
     items: dict[str, dict[str, Any]] = {}
     for item in requested:
         row = found.get(item, {})
         row_count = int(row.get("row_count", 0))
+        missing = missing_timestamps(row.get("timestamps", []), expected)
         items[item] = {
             "row_count": row_count,
             "expected_bars": expected_bars,
-            "missing_bars": max(0, expected_bars - row_count),
+            "missing_bars": len(missing),
+            "missing_timestamps": [stamp.isoformat() for stamp in missing],
+            "gap_origin": "UNVERIFIED" if missing else "COMPLETE",
             "first_event_at": (
                 row["first_event_at"].isoformat() if row.get("first_event_at") else None
             ),
@@ -122,11 +132,11 @@ def generate_quality_report(
     )
     stock = _series_summary(
         "ml_raw_candles", "symbol", normalized_symbols,
-        start_at=start_at, end_at=end_at, expected_bars=expected_bars,
+        start_at=start_at, end_at=end_at, expected_bars=expected_bars, as_of=now,
     )
     indicator = _series_summary(
         "ml_market_indicator_candles", "indicator", normalized_indicators,
-        start_at=start_at, end_at=end_at, expected_bars=expected_bars,
+        start_at=start_at, end_at=end_at, expected_bars=expected_bars, as_of=now,
     )
     with connect() as conn:
         decision = conn.execute(
@@ -141,6 +151,8 @@ def generate_quality_report(
             """,
             (start_at, end_at),
         ).fetchone()
+        day_start = datetime.combine(report_date, time.min, KST)
+        day_end = day_start + timedelta(days=1)
         collection = conn.execute(
             """
             SELECT count(*) AS run_count,
@@ -149,12 +161,15 @@ def generate_quality_report(
                    coalesce(sum(inserted_rows), 0) AS inserted_rows,
                    coalesce(sum(duplicate_rows), 0) AS duplicate_rows
               FROM ml_collection_runs
-             WHERE started_at >= %s AND started_at < %s
+             WHERE started_at >= %s AND started_at < %s AND started_at<=%s
             """,
-            (start_at, end_at),
+            (day_start, day_end, now),
         ).fetchone()
-        day_start = datetime.combine(report_date, time.min, KST)
-        day_end = day_start + timedelta(days=1)
+        collection_runs = conn.execute(
+            "SELECT id,source,status,inserted_rows,errors FROM ml_collection_runs "
+            "WHERE started_at>=%s AND started_at<%s AND started_at<=%s ORDER BY id",
+            (day_start, day_end, now),
+        ).fetchall()
         macro_rows = conn.execute(
             """
             SELECT DISTINCT ON (indicator)
@@ -169,6 +184,42 @@ def generate_quality_report(
 
     decision_summary = {key: int(value or 0) for key, value in decision.items()}
     collection_summary = {key: int(value or 0) for key, value in collection.items()}
+    error_counts = {}
+    reconciliation = {"run_count": 0, "recovered_rows": 0, "by_kind": {}}
+    provider_evidence = {}
+    for run in collection_runs:
+        errors = run["errors"] or {}
+        diagnostics = errors.get("_diagnostics", {})
+        details = diagnostics.get("error_details", {})
+        for key, message in errors.items():
+            if key.startswith("_"):
+                continue
+            category = error_category(details.get(key, message))
+            error_counts[category] = error_counts.get(category, 0) + 1
+        if run["source"] == "CANDLE_RECONCILIATION" and diagnostics.get("report_date") == report_date.isoformat():
+            kind = diagnostics.get("kind", "unknown")
+            recovered = int(run["inserted_rows"])
+            reconciliation["run_count"] += 1
+            reconciliation["recovered_rows"] += recovered
+            reconciliation["by_kind"][kind] = reconciliation["by_kind"].get(kind, 0) + recovered
+            for key, info in diagnostics.get("series", {}).items():
+                if info.get("provider_checked"):
+                    provider_evidence[key] = info
+    for family, summary in (("stock", stock), ("indicator", indicator)):
+        for key, info in summary["items"].items():
+            evidence = provider_evidence.get(f"{family}:{key}", {})
+            missing = set(info["missing_timestamps"])
+            absent = sorted(missing & set(evidence.get("provider_absent_timestamps", [])))
+            collection_gaps = sorted(missing & set(evidence.get("provider_timestamps", [])))
+            info.update(provider_absent_timestamps=absent, collection_gap_timestamps=collection_gaps,
+                        unverified_timestamps=sorted(missing - set(absent) - set(collection_gaps)),
+                        provider_semantics="UNCONFIRMED",
+                        provider_checked_at=evidence.get("received_at"))
+            if missing:
+                info["gap_origin"] = "COLLECTION_GAP" if collection_gaps else ("PROVIDER_ABSENT" if len(absent) == len(missing) else "UNVERIFIED")
+    reconciliation["unrecovered_rows"] = stock["missing_bars"] + indicator["missing_bars"]
+    collection_summary["error_counts"] = error_counts
+    collection_summary["reconciliation"] = reconciliation
     macro_found = {row["indicator"]: row for row in macro_rows}
     macro_summary = {
         "expected_count": len(CORE_MACRO_INDICATORS),
@@ -212,9 +263,22 @@ def generate_quality_report(
     no_stock_data = bool(normalized_symbols) and stock["row_count"] == 0 and expected_bars > 0
     no_indicator_data = bool(normalized_indicators) and indicator["row_count"] == 0 and expected_bars > 0
     status = "FAIL" if no_stock_data or no_indicator_data else ("WARN" if issues else "PASS")
+    completeness = "FAIL" if no_stock_data or no_indicator_data else (
+        "WARN" if stock["missing_bars"] or indicator["missing_bars"] or expected_bars == 0 else "PASS")
+    health = "WARN" if (collection_summary["failed_runs"] or collection_summary["partial_runs"]
+                         or stock["delayed_over_5m"] or indicator["delayed_over_5m"]) else "PASS"
+    for summary in (stock, indicator):
+        no_series_data = bool(summary["requested_count"]) and summary["row_count"] == 0 and expected_bars > 0
+        summary["data_completeness_status"] = "FAIL" if no_series_data else (
+            "WARN" if summary["missing_bars"] or expected_bars == 0 else "PASS")
+    collection_summary["data_completeness_status"] = completeness
+    collection_summary["collection_health_status"] = health
     report = {
         "report_date": report_date,
         "status": status,
+        "data_completeness_status": completeness,
+        "collection_health_status": health,
+        "reconciliation_summary": reconciliation,
         "expected_bars": expected_bars,
         "stock_summary": stock,
         "indicator_summary": indicator,
@@ -250,12 +314,28 @@ def generate_quality_report(
     return report
 
 
+def _with_detail_status(row):
+    if row is None:
+        return None
+    result = dict(row)
+    stock, indicator = result["stock_summary"], result["indicator_summary"]
+    collection = result["collection_summary"]
+    expected = result["expected_bars"]
+    no_data = expected > 0 and any(s.get("requested_count", 0) and not s.get("row_count", 0) for s in (stock, indicator))
+    result["data_completeness_status"] = collection.get("data_completeness_status") or (
+        "FAIL" if no_data else "WARN" if not expected or stock.get("missing_bars") or indicator.get("missing_bars") else "PASS")
+    result["collection_health_status"] = collection.get("collection_health_status") or (
+        "WARN" if collection.get("partial_runs") or collection.get("failed_runs") or stock.get("delayed_over_5m") or indicator.get("delayed_over_5m") else "PASS")
+    result["reconciliation_summary"] = collection.get("reconciliation", {})
+    return result
+
+
 def latest_quality_report() -> dict[str, Any] | None:
     with connect() as conn:
         row = conn.execute(
             "SELECT * FROM ml_data_quality_reports ORDER BY report_date DESC LIMIT 1"
         ).fetchone()
-    return dict(row) if row else None
+    return _with_detail_status(row)
 
 
 def quality_report_for_date(report_date: date) -> dict[str, Any] | None:
@@ -263,7 +343,7 @@ def quality_report_for_date(report_date: date) -> dict[str, Any] | None:
         row = conn.execute(
             "SELECT * FROM ml_data_quality_reports WHERE report_date=%s", (report_date,)
         ).fetchone()
-    return dict(row) if row else None
+    return _with_detail_status(row)
 
 
 def main() -> None:

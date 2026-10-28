@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 from ..toss import TossClient
 from .quality_report import generate_quality_report, quality_report_for_date
+from .gap_repair import reconcile_session
 
 
 KST = ZoneInfo("Asia/Seoul")
@@ -87,6 +88,11 @@ class QualityReportWorker:
             if target_date == datetime.now(KST).date() and not market_open:
                 result = {"report_date": target_date, "status": "SKIPPED", "issues": ["휴장일"]}
             else:
+                local_now = datetime.now(KST)
+                if target_date == local_now.date() and (local_now.hour, local_now.minute) >= (15, 31):
+                    await asyncio.to_thread(reconcile_session, self.client, target_date,
+                                            symbols=self.symbols, indicators=self.indicators,
+                                            kind="final", skip_completed=True)
                 result = await asyncio.to_thread(
                     generate_quality_report,
                     target_date,
@@ -119,7 +125,7 @@ class QualityReportWorker:
         )
         if local_now.weekday() < 5 and local_now >= scheduled_today:
             existing = await asyncio.to_thread(quality_report_for_date, local_now.date())
-            if existing is None:
+            if existing is None or "collection_health_status" not in existing.get("collection_summary", {}):
                 await self.run_once(local_now.date())
 
         while True:

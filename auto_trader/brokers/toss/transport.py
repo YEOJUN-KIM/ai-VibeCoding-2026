@@ -83,9 +83,14 @@ class TossTransport:
             try:
                 return self._json_request_once(request)
             except TossApiError as exc:
-                if exc.status_code != 429 or request.get_method() != "GET" or attempt == 2:
+                chart_transient = group in {"MARKET_DATA_CHART", "MARKET_INDICATOR_CHART"} and (
+                    exc.error_code in {"timeout", "network"}
+                    or (exc.status_code is not None and 500 <= exc.status_code < 600)
+                )
+                if (exc.status_code != 429 and not chart_transient) or request.get_method() != "GET" or attempt == 2:
                     raise
-                remaining = max(0.1, self._group_rate_limit_until.get(group, 0) - monotonic())
+                backoff = 0.5 * 2 ** attempt if chart_transient else 0.1
+                remaining = max(backoff, self._group_rate_limit_until.get(group, 0) - monotonic())
                 if monotonic() + remaining > deadline:
                     raise
                 self._request_waiter.wait(remaining)
@@ -148,9 +153,17 @@ class TossTransport:
                         self._group_rate_limit_until.get(group, 0.0), now + retry_after
                     )
                 raise TossApiError(message, status_code=exc.code, error_code=code) from exc
-            except (URLError, TimeoutError, json.JSONDecodeError) as exc:
+            except (URLError, TimeoutError, json.JSONDecodeError, UnicodeDecodeError) as exc:
                 self._last_request_at = monotonic()
-                raise TossApiError("토스 API 서버에 연결하지 못했습니다.") from exc
+                if group in {"MARKET_DATA_CHART", "MARKET_INDICATOR_CHART"}:
+                    self._group_last_request_at[group] = monotonic()
+                if isinstance(exc, (json.JSONDecodeError, UnicodeDecodeError)):
+                    code = "invalid-response"
+                elif isinstance(exc, TimeoutError) or (isinstance(exc, URLError) and isinstance(exc.reason, TimeoutError)):
+                    code = "timeout"
+                else:
+                    code = "network"
+                raise TossApiError("토스 API 서버에 연결하지 못했습니다.", error_code=code) from exc
 
 
     def _invalidate_access_token(self, rejected_token: str) -> None:

@@ -9,6 +9,8 @@ from datetime import datetime, timedelta, timezone
 from ..database import initialize
 from ..settings import settings
 from ..toss import TossClient
+from .collection_errors import error_detail
+from .gap_repair import opening_observation
 from .data_pipeline import (
     RawMarketIndicator,
     finish_collection_run,
@@ -38,21 +40,26 @@ def collect_market_indicators(
     run_id = start_collection_run("TOSS_MARKET_INDICATOR", "1m", normalized, count, now)
     inserted = duplicates = 0
     errors: dict[str, str] = {}
+    details = {}
+    observations = {}
     for indicator in normalized:
         try:
             received = client._market_indicator_candles(
                 indicator, "1m", count, cache_seconds=cache_seconds
             )
+            received_at = collected_at or datetime.now(timezone.utc)
+            observations[indicator] = opening_observation(received, received_at, count)
             completed = [
-                RawMarketIndicator.from_live_candle(indicator, candle, collected_at=now)
+                RawMarketIndicator.from_live_candle(indicator, candle, collected_at=received_at)
                 for candle in received
-                if candle.timestamp + timedelta(minutes=1) <= now
+                if candle.timestamp + timedelta(minutes=1) <= received_at
             ]
             new_rows, duplicate_rows = save_market_indicator_candles(completed, run_id=run_id)
             inserted += new_rows
             duplicates += duplicate_rows
         except Exception as exc:
             errors[indicator] = str(exc)
+            details[indicator] = error_detail(exc)
 
     status = finish_collection_run(
         run_id,
@@ -60,6 +67,7 @@ def collect_market_indicators(
         duplicate_rows=duplicates,
         errors=errors,
         finished_at=datetime.now(timezone.utc),
+        diagnostics={"kind": "regular", "error_details": details, "series": observations},
     )
     return {
         "run_id": run_id,
@@ -68,6 +76,7 @@ def collect_market_indicators(
         "inserted_rows": inserted,
         "duplicate_rows": duplicates,
         "errors": errors,
+        "error_details": details,
         "quality": [market_indicator_quality_report(item) for item in normalized],
     }
 
