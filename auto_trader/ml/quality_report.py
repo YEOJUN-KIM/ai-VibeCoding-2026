@@ -150,9 +150,43 @@ def _final_provider_evidence(diagnostics, info, session_end, as_of):
         return (diagnostics.get("expected_bars") == FULL_SESSION_BARS
                 and not diagnostics.get("kind", "").startswith("opening")
                 and info.get("provider_window_complete") is True
+                and not info.get("error")
                 and session_end <= received <= as_of)
     except (KeyError, ValueError, TypeError):
         return False
+
+
+def _prefer_provider_evidence(current, candidate, *, as_of):
+    """Prefer strength, then receive time; failures cannot erase confirmation.
+
+    The SQL finished_at boundary still applies. Check received_at independently
+    so future response data cannot be used even in an inconsistent stored run.
+    """
+    info, _ = candidate
+    received = None
+    if info.get("received_at") is not None:
+        try:
+            received = datetime.fromisoformat(info["received_at"])
+            if received.utcoffset() is None or received > as_of:
+                return current
+        except (TypeError, ValueError):
+            return current
+
+    def strength(evidence):
+        details, confirmed = evidence
+        if confirmed:
+            return 3
+        if not details.get("provider_checked") or details.get("error"):
+            return 0
+        return 2 if details.get("provider_window_complete") and details.get("provider_timestamps") else 1
+
+    if current is not None:
+        if strength(candidate) < strength(current):
+            return current
+        if strength(candidate) == strength(current) and received is not None and current[0].get("received_at"):
+            if received < datetime.fromisoformat(current[0]["received_at"]):
+                return current
+    return candidate
 
 
 def _classify_gaps(info, evidence, final_confirmed):
@@ -273,7 +307,10 @@ def generate_quality_report(
         reconciliation["by_kind"][kind] = reconciliation["by_kind"].get(kind, 0) + recovered
         for key, info in diagnostics.get("series", {}).items():
             if info.get("provider_checked") or info.get("error"):
-                provider_evidence[key] = (info, _final_provider_evidence(diagnostics, info, end_at, now))
+                candidate = (info, _final_provider_evidence(diagnostics, info, end_at, now))
+                preferred = _prefer_provider_evidence(provider_evidence.get(key), candidate, as_of=now)
+                if preferred is not None:
+                    provider_evidence[key] = preferred
     for family, summary in (("stock", stock), ("indicator", indicator)):
         for key, info in summary["items"].items():
             evidence, final_confirmed = provider_evidence.get(f"{family}:{key}", ({}, False))

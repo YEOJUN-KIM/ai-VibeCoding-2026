@@ -5,6 +5,7 @@ from unittest.mock import Mock, patch
 from uuid import uuid4
 
 from psycopg import sql
+from psycopg.types.json import Jsonb
 
 from auto_trader import database
 from auto_trader.ml import quality_report
@@ -86,6 +87,131 @@ class QualityReportRepositoryTests(unittest.TestCase):
         with quality_report.connect() as conn:
             count = conn.execute("SELECT count(*) AS count FROM ml_data_quality_reports").fetchone()
         self.assertEqual(count["count"], 1)
+
+    def seed_missing_opening(self):
+        self.opening = datetime(2026, 10, 28, 9, tzinfo=KST)
+        self.as_of = self.opening.replace(hour=16)
+        with quality_report.connect() as conn:
+            conn.execute(
+                """INSERT INTO ml_raw_candles(
+                       source,symbol,interval,event_at,available_at,collected_at,
+                       open_price,high_price,low_price,close_price,volume,raw_payload)
+                   SELECT 'TOSS','005930','1m',%s + m * interval '1 minute',
+                          %s + (m+1) * interval '1 minute',%s + (m+1) * interval '1 minute',
+                          100,101,99,100,1,'{}' FROM generate_series(1,390) AS m""",
+                (self.opening, self.opening, self.opening),
+            )
+
+    def record_evidence(self, received_at, *, complete=True, kind="final", error=False,
+                        opening_present=False, finished_at=None):
+        if error:
+            info = {"error": {"category": "TIMEOUT", "message": "timeout"}}
+        else:
+            info = {
+                "provider_checked": True, "received_at": received_at.isoformat(),
+                "provider_window_complete": complete,
+                "provider_timestamps": [(self.opening + timedelta(minutes=m)).isoformat()
+                                        for m in range(0 if opening_present else 1, 391)],
+                "provider_absent_timestamps": [] if opening_present else [self.opening.isoformat()],
+            }
+        diagnostics = {"kind": kind, "expected_bars": 10 if kind.startswith("opening") else 391,
+                       "report_date": self.opening.date().isoformat(), "series": {"stock:005930": info}}
+        errors = {"_diagnostics": diagnostics}
+        if error:
+            errors["stock:005930"] = "timeout"
+        with quality_report.connect() as conn:
+            conn.execute(
+                """INSERT INTO ml_collection_runs(source,interval,requested_symbols,requested_count,
+                       status,errors,started_at,finished_at)
+                   VALUES ('CANDLE_RECONCILIATION','1m','["stock:005930"]',600,%s,%s,%s,%s)""",
+                ("FAILED" if error else "COMPLETED", Jsonb(errors), received_at, finished_at or received_at),
+            )
+
+    def evidence_report(self):
+        return quality_report.generate_quality_report(
+            self.opening.date(), symbols=("005930",), indicators=(), generated_at=self.as_of)
+
+    def assert_confirmed_absence(self, report, received_at):
+        self.assertEqual(report["data_completeness_status"], "PASS")
+        self.assertEqual((report["raw_missing_bars"], report["provider_absent_bars"], report["unverified_bars"]), (1, 1, 0))
+        info = report["stock_summary"]["items"]["005930"]
+        self.assertTrue(info["final_provider_evidence_confirmed"])
+        self.assertEqual(info["provider_checked_at"], received_at.isoformat())
+
+    def test_confirmed_absence_survives_later_timeout(self):
+        self.seed_missing_opening()
+        confirmed = self.as_of - timedelta(minutes=20)
+        self.record_evidence(confirmed)
+        self.record_evidence(self.as_of - timedelta(minutes=10), error=True)
+        report = self.evidence_report()
+        self.assert_confirmed_absence(report, confirmed)
+        self.assertEqual(report["collection_health_status"], "WARN")
+
+    def test_confirmed_absence_survives_later_incomplete_window(self):
+        self.seed_missing_opening()
+        confirmed = self.as_of - timedelta(minutes=20)
+        self.record_evidence(confirmed)
+        self.record_evidence(self.as_of - timedelta(minutes=10), complete=False)
+        self.assert_confirmed_absence(self.evidence_report(), confirmed)
+
+    def test_confirmed_absence_survives_later_opening_evidence(self):
+        self.seed_missing_opening()
+        confirmed = self.as_of - timedelta(minutes=20)
+        self.record_evidence(confirmed)
+        self.record_evidence(self.as_of - timedelta(minutes=10), kind="opening_0910")
+        self.assert_confirmed_absence(self.evidence_report(), confirmed)
+
+    def test_newer_confirmed_evidence_can_replace_prior_absence(self):
+        self.seed_missing_opening()
+        self.record_evidence(self.as_of - timedelta(minutes=20))
+        latest = self.as_of - timedelta(minutes=10)
+        self.record_evidence(latest, opening_present=True)
+        report = self.evidence_report()
+        self.assertEqual(report["data_completeness_status"], "WARN")
+        self.assertEqual((report["provider_absent_bars"], report["collection_gap_bars"]), (0, 1))
+        self.assertEqual(report["stock_summary"]["items"]["005930"]["provider_checked_at"], latest.isoformat())
+
+    def test_confirmed_evidence_recency_uses_receipt_time_not_run_id(self):
+        self.seed_missing_opening()
+        latest = self.as_of - timedelta(minutes=10)
+        self.record_evidence(latest, opening_present=True)
+        self.record_evidence(self.as_of - timedelta(minutes=20))
+        report = self.evidence_report()
+        self.assertEqual(report["collection_gap_bars"], 1)
+        self.assertEqual(report["stock_summary"]["items"]["005930"]["provider_checked_at"], latest.isoformat())
+
+    def test_only_weak_absence_evidence_remains_unverified(self):
+        self.seed_missing_opening()
+        self.record_evidence(self.as_of - timedelta(minutes=20), kind="opening_0910")
+        self.record_evidence(self.as_of - timedelta(minutes=10), complete=False)
+        self.record_evidence(self.as_of - timedelta(minutes=5), error=True)
+        report = self.evidence_report()
+        self.assertEqual(report["data_completeness_status"], "WARN")
+        self.assertEqual((report["provider_absent_bars"], report["unverified_bars"]), (0, 1))
+
+    def test_opening_positive_evidence_survives_later_error_without_confirming_absence(self):
+        self.seed_missing_opening()
+        self.record_evidence(self.as_of - timedelta(minutes=20), kind="opening_0910", opening_present=True)
+        self.record_evidence(self.as_of - timedelta(minutes=5), error=True)
+        report = self.evidence_report()
+        self.assertEqual((report["provider_absent_bars"], report["collection_gap_bars"]), (0, 1))
+        self.assertFalse(report["stock_summary"]["items"]["005930"]["final_provider_evidence_confirmed"])
+
+    def test_future_finished_evidence_is_excluded(self):
+        self.seed_missing_opening()
+        self.record_evidence(self.as_of - timedelta(minutes=20), finished_at=self.as_of + timedelta(days=2))
+        report = self.evidence_report()
+        self.assertEqual((report["provider_absent_bars"], report["unverified_bars"]), (0, 1))
+        self.assertEqual(report["data_completeness_status"], "WARN")
+
+    def test_future_received_evidence_is_not_used_as_positive_evidence(self):
+        self.seed_missing_opening()
+        # An inconsistent persisted record must not bypass the receive-time
+        # boundary merely because its finished_at satisfies the SQL filter.
+        self.record_evidence(self.as_of + timedelta(days=2), finished_at=self.as_of, opening_present=True)
+        report = self.evidence_report()
+        self.assertEqual((report["provider_absent_bars"], report["collection_gap_bars"], report["unverified_bars"]), (0, 0, 1))
+        self.assertEqual(report["data_completeness_status"], "WARN")
 
 
 class QualityReportScheduleTests(unittest.TestCase):
