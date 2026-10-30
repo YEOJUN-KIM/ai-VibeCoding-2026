@@ -1,0 +1,11 @@
+{
+  "status": "CANDIDATE_RECONSTRUCTION_NOT_READY",
+  "verdict": "ML_FILTER_INCONCLUSIVE",
+  "training_executed": false,
+  "baseline": null,
+  "logistic_regression": null,
+  "hist_gradient_boosting": null,
+  "symbol_holdout": null,
+  "feature_importance": null,
+  "reason": "Readiness gate failed. No authenticated candidates, fitted models, predictions or performance claims."
+}

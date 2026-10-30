@@ -1,0 +1,31 @@
+{
+  "python": {
+    "command": ".\\.venv\\Scripts\\python.exe -m unittest discover -s tests -v",
+    "tests": 371,
+    "result": "PASS",
+    "log": "artifacts/ml-first-experiment-python-tests.log"
+  },
+  "javascript": {
+    "command": "node --test tests/*.js (PowerShell enumerated all 22 files)",
+    "tests": 22,
+    "result": "PASS",
+    "log": "artifacts/ml-first-experiment-js-tests.log"
+  },
+  "final_targeted": {
+    "command": ".\\.venv\\Scripts\\python.exe -m unittest discover -s tests -p test_ml_first_experiment.py -v",
+    "tests": 7,
+    "result": "PASS"
+  },
+  "actual_dataset_run": {
+    "command": ".\\.venv\\Scripts\\python.exe -m auto_trader.ml.first_experiment",
+    "exit_code": 1,
+    "expected_status": "CANDIDATE_RECONSTRUCTION_NOT_READY",
+    "log": "artifacts/ml-first-experiment-run.log"
+  },
+  "scope": "New ML audit code, tests and experiment artifacts only. No tracked existing file modified. No production behavior changes. DB evidence transaction READ ONLY.",
+  "log_sha256": {
+    "ml-first-experiment-python-tests.log": "dfd3861d86325331a6cba1a1e52948b8e1a73e2b890738bb18332e083f81720b",
+    "ml-first-experiment-js-tests.log": "92aa644352507de82ee5c7e77432de03a961577bb2a7c6dd4b5bc17694998615",
+    "ml-first-experiment-run.log": "ff11e3d48b70d9f091723b36a94ef7cacca38049c701bc0f0ece44e7327b2ebc"
+  }
+}

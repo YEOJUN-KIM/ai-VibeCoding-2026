@@ -1,0 +1,87 @@
+{
+  "experiment_version": "v1",
+  "created_at": "2026-10-30T02:33:19.763381+00:00",
+  "git_revision": "a3c1c12018861100f92850cf8fde6a564b4060f1",
+  "dataset_version": "v1",
+  "dataset_hash": "94b7c402ed71a9e43a556f1a4a0d8bbe2f149938c55ac2be2baaa701a69d67e1",
+  "dataset_samples_sha256": "4a6f56cd0412dc522da2d5049c1a58a5727f1cb5cd3add8b237c36d7566b9a7b",
+  "candidate_reconstruction_version": "flat-close-diagnostic-v1",
+  "target": "executable_net_return_20m",
+  "binary_target": "executable_net_return_20m > 0",
+  "feature_list": [
+    "has_session_open",
+    "has_us_djia_proxy",
+    "has_us_nasdaq100_proxy",
+    "has_us_sp500_proxy",
+    "has_us_treasury_proxy",
+    "has_us_volatility_proxy",
+    "has_usd_krw",
+    "kosdaq_return_1m",
+    "kosdaq_return_20m",
+    "kosdaq_return_5m",
+    "kospi_return_1m",
+    "kospi_return_20m",
+    "kospi_return_5m",
+    "ma_10",
+    "ma_40",
+    "ma_spread",
+    "ma_spread_percent",
+    "minutes_since_open",
+    "price_vs_session_open",
+    "range_20m",
+    "range_5m",
+    "relative_volume_20m",
+    "relative_volume_5m",
+    "return_10m",
+    "return_1m",
+    "return_20m",
+    "return_3m",
+    "return_5m",
+    "us_djia_proxy",
+    "us_nasdaq100_proxy",
+    "us_sp500_proxy",
+    "us_treasury_proxy",
+    "us_volatility_proxy",
+    "usd_krw",
+    "volatility_20m",
+    "volatility_5m",
+    "volume",
+    "volume_avg_20m",
+    "volume_avg_5m"
+  ],
+  "train_dates": [],
+  "validation_dates": [],
+  "random_seed": 17,
+  "threshold": 0.5,
+  "model_config": {
+    "logistic_regression": {
+      "C": 1,
+      "max_iter": 2000
+    },
+    "hist_gradient_boosting": {
+      "max_iter": 100,
+      "max_leaf_nodes": 15,
+      "early_stopping": false
+    }
+  },
+  "preprocessing_config": "Pipeline: train-only median imputer; LR train-only StandardScaler",
+  "planned_split": "expanding full dates, minimum 5 train dates; explicit 20m outcome-end purge",
+  "evidence_hashes": {
+    "stocks": "fc8eafde40d7e50052e276b1aaed90605e073b977b4bb25961e0ffa5a35236eb",
+    "decisions": "b70d6a1ea1559a701fea270ad8c467e2c4aaeb7ca44e5b3413a443e216473d1f"
+  },
+  "evidence_snapshot": {
+    "transaction_at": "2026-10-30T11:32:47.165549+09:00",
+    "snapshot_id": "312260:312260:",
+    "transaction_read_only": "on"
+  },
+  "candidate_replay_hash": "63a37fd5093e64e17a6915d63c0b6c117621ee9461e880f05f96750801aa9686",
+  "dataset_artifacts_verified": true,
+  "actual_replay_determinism_verified": true,
+  "status": "CANDIDATE_RECONSTRUCTION_NOT_READY",
+  "source_hashes": {
+    "auto_trader/ml/first_experiment.py": "aeb48db225d0b8e96a4a6ca6fc8e2c04b50dec2ec2eaef9766c64c83b4743788",
+    "auto_trader/trading/strategies/moving_average.py": "523e72ebd23be21e9743c3f83b521da26ecd4a6b4c1988186fea3af3b6d0d88c",
+    "auto_trader/trading/engine.py": "0af224125111686b851ed8a9072f4dda266743ab928d1fb6010e256353daf64b"
+  }
+}
