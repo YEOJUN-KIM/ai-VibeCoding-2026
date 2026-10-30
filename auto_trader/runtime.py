@@ -20,6 +20,7 @@ from .market_hours import MarketHours
 from .live_strategies import list_strategies
 from .ml.collection_worker import CandleCollectionWorker
 from .ml.decision_pipeline import StrategyDecisionRecorder
+from .ml.candidate_pipeline import StrategyCandidateRecorder
 from .ml.quality_worker import QualityReportWorker
 from .ml.macro_worker import MacroCollectionWorker
 
@@ -38,6 +39,7 @@ broker = PaperBroker(market, initial_cash=settings.paper_initial_cash,
 
 
 ml_decision_recorder = StrategyDecisionRecorder()
+ml_candidate_recorder = StrategyCandidateRecorder()
 
 
 engine = MovingAverageEngine(
@@ -48,6 +50,7 @@ engine = MovingAverageEngine(
     long_period=settings.strategy_long_period,
     order_quantity=settings.order_quantity,
     decision_recorder=ml_decision_recorder.record,
+    candidate_recorder=ml_candidate_recorder.record,
 )
 
 
@@ -145,7 +148,8 @@ def _create_paper_session(user_id, mode, client):
     new_broker.initialize()
     new_broker.set_risk_manager(RiskManager(market))
     new_engine = MovingAverageEngine(market, new_broker, price_feed=PaperPriceFeed(client),
-                                    decision_recorder=ml_decision_recorder.record)
+                                    decision_recorder=ml_decision_recorder.record,
+                                    candidate_recorder=ml_candidate_recorder.record)
     new_engine.market_hours_provider = lambda now: market_hours.status(
         'KR', new_engine.price_feed.client, now=now, trading=True)
     metadata = new_broker.snapshot_metadata or {}

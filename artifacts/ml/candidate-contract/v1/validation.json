@@ -1,0 +1,64 @@
+{
+  "status": "PRE_RISK_CANDIDATE_CONTRACT_READY",
+  "contract_version": "v1",
+  "validated_at": "2026-10-30T05:02:12.661044+00:00",
+  "git_revision": "074ed3320faf9e13f93bb72a6618e00549122de3",
+  "python": {
+    "tests": 386,
+    "result": "PASS",
+    "command": ".\\.venv\\Scripts\\python.exe -m unittest discover -s tests -v",
+    "log": "artifacts/ml-candidate-contract-python-tests.log"
+  },
+  "javascript": {
+    "tests": 22,
+    "result": "PASS",
+    "command": "node --test (all tests/*.js files enumerated by PowerShell)",
+    "log": "artifacts/ml-candidate-contract-js-tests.log"
+  },
+  "candidate_contract_tests": 15,
+  "dataset_v1_hash_verification": {
+    "artifacts": 5,
+    "result": "PASS",
+    "dataset_rebuilt": false
+  },
+  "integration": "Real signal/engine/PaperBroker risk rejection + PostgreSQL isolated schemas; no production candidate inserts",
+  "behavior_regression": "All legacy replay scenarios equal with active logging after removing only additive candidate_key metadata",
+  "production_server_restarted": false,
+  "model_training_performed": false,
+  "authenticated_coverage_begins_at": null,
+  "coverage_note": "Begins only after deployment/restart and first durable real v1 signal evaluation. Current producer is PAPER. LIVE manual orders are not strategy candidates.",
+  "changed_files": [
+    "auto_trader/ml/candidate_pipeline.py",
+    "auto_trader/trading/engine.py",
+    "auto_trader/schema.sql",
+    "auto_trader/runtime.py",
+    "auto_trader/lifecycle.py",
+    "tests/test_ml_candidate_contract.py",
+    "tests/test_application_composition.py",
+    "docs/machine-learning/05_PRE_RISK_CANDIDATE_CONTRACT.md",
+    "docs/machine-learning/CURRENT_PROGRESS.md"
+  ],
+  "protected_behavior_files_unchanged": [
+    "auto_trader/trading/strategies/moving_average.py",
+    "auto_trader/trading/exits.py",
+    "auto_trader/trading/sizing.py",
+    "auto_trader/risk.py",
+    "auto_trader/paper.py",
+    "auto_trader/services/live_order_service.py"
+  ],
+  "source_sha256": {
+    "auto_trader/ml/candidate_pipeline.py": "f99033c098ce44cef59d09e67fe48adafbdebb3abd090a171fb96271536e0cbc",
+    "auto_trader/trading/engine.py": "da4c87f9d8cb8fccaeb9ef91627dfd3cb72e83f845ed5e191d317b3de4a89b1c",
+    "auto_trader/schema.sql": "ba2e388030ea9fd8f44cf6c4206f6ec5d0601d538c67e0bf9e624b73f4528e1a",
+    "auto_trader/runtime.py": "4cf2685727461f9f6149af535b20b8848262c07997dfbb849f4afb8d9024aa7e",
+    "auto_trader/lifecycle.py": "ca5a00bc079658723bb7dcff4c9edc74c154d2080c49d62cff855d23d60deb7b",
+    "tests/test_ml_candidate_contract.py": "e493975b5c5abb43fbe37b341ac63180474b3ebfa2f35ab76e07b233d282b772",
+    "tests/test_application_composition.py": "f4960f060c7173ed80381e1aed827b9298afe00684027bd0bdbfd7897d46ef34",
+    "docs/machine-learning/05_PRE_RISK_CANDIDATE_CONTRACT.md": "c8c821605e969482f31d46a41d37489d73a6ebcb823e20844d3235c0fb1217e6",
+    "docs/machine-learning/CURRENT_PROGRESS.md": "3db813220305d9718b78d374efb0d72065767d60d03af4b03334ebf69c4ef07f"
+  },
+  "log_sha256": {
+    "artifacts/ml-candidate-contract-python-tests.log": "67a28a22422f4d237774b71985d8d35c88fd0e23356406c0cdf686c16754aec7",
+    "artifacts/ml-candidate-contract-js-tests.log": "f91a823620ff586b669c7c0a8e9166496bfefae1ec17dd8fcc5b47c9d8cc489d"
+  }
+}

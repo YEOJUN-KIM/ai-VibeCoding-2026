@@ -449,6 +449,62 @@ CREATE INDEX IF NOT EXISTS ml_strategy_decisions_action_time
 CREATE INDEX IF NOT EXISTS ml_strategy_decisions_account_time
     ON ml_strategy_decisions(account_id, decision_at DESC, id DESC);
 
+-- Contract v1: pre-risk entry evaluation evidence, append-only application sink.
+-- Repeated candles across resets/sessions remain separate real evaluations.
+CREATE TABLE IF NOT EXISTS ml_strategy_candidates (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    candidate_key TEXT NOT NULL UNIQUE,
+    contract_version TEXT NOT NULL CHECK (contract_version = 'v1'),
+    engine_instance_id TEXT NOT NULL,
+    invocation_sequence BIGINT NOT NULL CHECK (invocation_sequence >= 0),
+    run_id TEXT NOT NULL,
+    strategy_id BIGINT,
+    strategy_name TEXT,
+    strategy_version TEXT NOT NULL,
+    execution_mode TEXT NOT NULL CHECK (execution_mode IN ('PAPER','LIVE')),
+    symbol TEXT NOT NULL,
+    candle_event_at TIMESTAMPTZ,
+    quote_observed_at TIMESTAMPTZ NOT NULL,
+    decision_at TIMESTAMPTZ NOT NULL,
+    available_at TIMESTAMPTZ NOT NULL,
+    collected_at TIMESTAMPTZ NOT NULL,
+    quote_price NUMERIC NOT NULL CHECK (quote_price > 0),
+    quote_source TEXT NOT NULL,
+    short_period INTEGER NOT NULL CHECK (short_period > 0),
+    long_period INTEGER NOT NULL CHECK (long_period > short_period),
+    history_count INTEGER NOT NULL CHECK (history_count >= 0),
+    history_first_close NUMERIC,
+    history_last_close NUMERIC,
+    short_average NUMERIC,
+    long_average NUMERIC,
+    previous_trend TEXT,
+    trend TEXT,
+    entry_armed_before BOOLEAN NOT NULL,
+    confirmation_count_before INTEGER NOT NULL CHECK (confirmation_count_before >= 0),
+    position_quantity_before INTEGER NOT NULL CHECK (position_quantity_before >= 0),
+    signal_action TEXT CHECK (signal_action IN ('BUY','HOLD','SELL')),
+    signal_reason TEXT,
+    signal_decision TEXT,
+    entry_armed_after_signal BOOLEAN,
+    confirmation_count_after_signal INTEGER CHECK (confirmation_count_after_signal >= 0),
+    rising_condition BOOLEAN,
+    baseline_buy_candidate BOOLEAN,
+    entry_evaluation_performed BOOLEAN NOT NULL,
+    metadata JSONB NOT NULL,
+    UNIQUE(engine_instance_id, invocation_sequence, symbol),
+    CHECK (candle_event_at IS NULL OR candle_event_at <= decision_at),
+    CHECK (quote_observed_at <= decision_at AND decision_at <= available_at AND available_at <= collected_at),
+    CHECK ((entry_evaluation_performed AND signal_action IS NOT NULL
+            AND baseline_buy_candidate IS NOT NULL AND baseline_buy_candidate = (signal_action = 'BUY')
+            AND entry_armed_after_signal IS NOT NULL AND confirmation_count_after_signal IS NOT NULL)
+           OR (NOT entry_evaluation_performed AND signal_action IS NULL AND baseline_buy_candidate IS NULL
+               AND entry_armed_after_signal IS NULL AND confirmation_count_after_signal IS NULL))
+);
+CREATE INDEX IF NOT EXISTS ml_strategy_candidates_sample_time
+    ON ml_strategy_candidates(strategy_id, symbol, candle_event_at, available_at);
+CREATE INDEX IF NOT EXISTS ml_strategy_candidates_buy_time
+    ON ml_strategy_candidates(available_at) WHERE baseline_buy_candidate;
+
 CREATE TABLE IF NOT EXISTS ml_data_quality_reports (
     report_date DATE PRIMARY KEY,
     status TEXT NOT NULL CHECK (status IN ('PASS','WARN','FAIL')),

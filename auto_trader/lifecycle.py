@@ -33,6 +33,7 @@ async def lifespan(application: FastAPI):
         runtime.legacy_workspace.engine.price_feed = PaperPriceFeed(runtime.legacy_workspace.client)
         runtime.workspaces.items[owner] = runtime.legacy_workspace
     await runtime.ml_decision_recorder.start()
+    await runtime.ml_candidate_recorder.start()
     if runtime.toss_client.configured:
         readiness = await asyncio.to_thread(_startup_readiness, force=True)
         try:
@@ -96,5 +97,6 @@ async def lifespan(application: FastAPI):
         await runtime.ml_quality_worker.stop()
         await runtime.ml_macro_worker.stop()
         await runtime._stop_all_paper_engines()
+        await runtime.ml_candidate_recorder.stop()
         await runtime.ml_decision_recorder.stop()
         await asyncio.gather(*(state.quote_stream.close() for state in list(runtime.workspaces.items.values()) or [runtime.legacy_workspace]))

@@ -40,6 +40,7 @@ class ApplicationCompositionTests(unittest.IsolatedAsyncioTestCase):
     async def test_lifespan_initializes_and_closes_workers_without_starting_trading(self):
         worker = lambda: NS(start=AsyncMock(), stop=AsyncMock())
         recorder = worker()
+        candidates = worker()
         collection, quality, macro = worker(), worker(), worker()
         broker = Mock(snapshot_metadata={})
         engine = Mock()
@@ -52,6 +53,7 @@ class ApplicationCompositionTests(unittest.IsolatedAsyncioTestCase):
             for name, value in {"legacy_workspace": workspace, "broker": broker, "engine": engine,
                                 "toss_client": NS(configured=False), "workspaces": NS(items={}),
                                 "paper_state": Mock(return_value=workspace), "ml_decision_recorder": recorder,
+                                "ml_candidate_recorder": candidates,
                                 "ml_collection_worker": collection, "ml_quality_worker": quality,
                                 "ml_macro_worker": macro, "_stop_all_paper_engines": stop_engines,
                                 "_restore_paper_strategy": Mock(return_value=None)}.items():
@@ -59,8 +61,10 @@ class ApplicationCompositionTests(unittest.IsolatedAsyncioTestCase):
             async with main.app.router.lifespan_context(main.app):
                 broker.initialize.assert_called_once()
                 recorder.start.assert_awaited_once()
+                candidates.start.assert_awaited_once()
                 engine.start.assert_not_called()
             recorder.stop.assert_awaited_once()
+            candidates.stop.assert_awaited_once()
             stop_engines.assert_awaited_once()
             stream.close.assert_awaited_once()
             for task in (collection, quality, macro):

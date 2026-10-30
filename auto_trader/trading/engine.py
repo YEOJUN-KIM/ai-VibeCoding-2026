@@ -6,6 +6,8 @@ from collections import deque
 from datetime import datetime, time, timedelta
 from decimal import Decimal
 from typing import Callable
+from uuid import uuid4
+from ..ml.candidate_pipeline import capture_before, capture_after
 from . import KST
 from .strategies.base import SignalContext, TradingStrategy
 from .strategies.moving_average import MovingAverageStrategy
@@ -44,6 +46,7 @@ class TradingEngine:
         clock: Callable[[], datetime] | None = None,
         price_feed: PaperPriceFeed | None = None,
         decision_recorder: Callable[[dict], None] | None = None,
+        candidate_recorder: Callable[[dict], None] | None = None,
         market_hours_provider: Callable[[datetime], dict] | None = None,
         strategy: TradingStrategy | None = None,
     ) -> None:
@@ -68,6 +71,9 @@ class TradingEngine:
         self._market_status = {}
         self._market_checked_at = None
         self.decision_recorder = decision_recorder
+        self.candidate_recorder = candidate_recorder
+        self._candidate_engine_id = str(uuid4())
+        self._candidate_invocation_sequence = 0  # Unlike tick_count, never reset by configure/start.
         self.last_data_at = None
         self.last_decision_at = None
         self.data_message = "시세 수신 대기"
@@ -280,6 +286,7 @@ class TradingEngine:
         if self.market_hours_provider and not self._within_hours():
             return
         self.tick_count += 1
+        self._candidate_invocation_sequence += 1
         exited = self._manage_exits(candles)
         quotes = ([self.market.quote(symbol, move=candles is None) for symbol in self.target_symbols]
                   if self.target_symbols else self.market.quotes(move=candles is None))
@@ -288,6 +295,8 @@ class TradingEngine:
                 continue
             history = self._history[quote.symbol]
             new_bar = True
+            previous_bar = self._last_bar_at.get(quote.symbol)
+            state_reset = False
             if candles is None:
                 history.append(quote.price)
             else:
@@ -296,6 +305,7 @@ class TradingEngine:
                 new_bar = bool(bars) and (previous_bar is None or bars[-1].timestamp > previous_bar)
                 if new_bar:
                     if previous_bar and bars[-1].timestamp - previous_bar > timedelta(minutes=2):
+                        state_reset = True
                         self._previous_trend.pop(quote.symbol, None)
                         self._above_count.pop(quote.symbol, None)
                         self._entry_armed.discard(quote.symbol)
@@ -305,9 +315,13 @@ class TradingEngine:
             stock = next(item for item in self.market.stocks() if item.symbol == quote.symbol)
 
             if quote.symbol in exited:
+                capture_after(self, capture_before(self, quote, history, new_bar=new_bar,
+                              previous_bar=previous_bar, state_reset=state_reset, skip_reason="EXIT_SUPPRESSION"))
                 continue
 
             if len(history) < self.long_period:
+                capture_after(self, capture_before(self, quote, history, new_bar=new_bar,
+                              previous_bar=previous_bar, state_reset=state_reset, skip_reason="INSUFFICIENT_HISTORY"))
                 self._snapshots[quote.symbol] = StrategySnapshot(
                     symbol=quote.symbol,
                     name=stock.name,
@@ -323,6 +337,8 @@ class TradingEngine:
                 continue
 
             previous_trend = self._previous_trend.get(quote.symbol)
+            candidate_before = capture_before(self, quote, history, new_bar=new_bar,
+                                              previous_bar=previous_bar, state_reset=state_reset)
             signal = self.strategy.generate_signal(SignalContext(
                 history=history, price=quote.price,
                 short_period=self.short_period, long_period=self.long_period,
@@ -332,6 +348,7 @@ class TradingEngine:
                 new_bar=new_bar,
                 position_quantity=lambda: self.broker.strategy_quantity(quote.symbol),
             ))
+            candidate_key = capture_after(self, candidate_before, signal)
             self._snapshots[quote.symbol] = StrategySnapshot(
                 symbol=quote.symbol,
                 name=stock.name,
@@ -366,7 +383,7 @@ class TradingEngine:
                 self._snapshots[quote.symbol],
                 action,
                 previous_trend=previous_trend,
-                metadata={"rising": signal.rising},
+                metadata={"rising": signal.rising, **({"candidate_key": candidate_key} if candidate_key else {})},
             )
             self._previous_trend[quote.symbol] = signal.trend
         self._update_drawdown()

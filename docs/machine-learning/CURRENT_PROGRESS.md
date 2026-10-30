@@ -1,11 +1,13 @@
 # 머신러닝 자동매매 구현 현황
 
-최신 확인일: **2026-10-30**. V1/V2/V2.1 수집 안정화에 이어 ML Data Readiness Audit + Curated Dataset v1을 구현하고 실제 누적 DB로 검증했습니다. 모델 학습과 매매 연결은 아직 수행하지 않았습니다. 아래 2026-10-02 건수·실험 결과는 과거 이력으로 구분합니다.
+최신 확인일: **2026-10-30**. Dataset v1 실제 후보 재현 감사는 `CANDIDATE_RECONSTRUCTION_NOT_READY`로 학습 전에 중단했습니다. 이후 **Pre-Risk Candidate Contract v1**의 실제 signal 전후 관측·비동기 저장·PIT 결합 helper를 구현했습니다. 모델 학습과 ML 매매 연결은 수행하지 않았습니다. 이번 구현으로 운영 서버를 재시작하거나 전략을 시작하지 않았으며, authenticated coverage는 배포/재시작 후 실제 평가가 저장되면서 시작됩니다. 아래 과거 건수·실험 결과는 이력으로 구분합니다.
 
 이 문서는 머신러닝 자동매매 프로젝트에서 지금까지 구현하고 실제로 확인한 내용을 한곳에 정리합니다. 세부 설계와 실행 명령은 각 단계 문서를 참고합니다.
 
 ## 현재 단계
 
+- Pre-Risk Candidate Contract v1: 실제 quote와 signal 직전 상태, signal 결과를 해당 entry의 risk/order 전에 별도 `ml_strategy_candidates`로 enqueue합니다. 기존 decision에는 correlation key만 추가하며 전략·리스크·주문 조건은 유지합니다. 동일 봉 poll은 제외하고 재설정/재시작 후 실제 재평가는 별도로 보존합니다. 운영 coverage 시작은 아직 미확정이며, 다음 단계는 **Authenticated candidate data accumulation → Curated Dataset v2 → First ML Experiment v2**입니다. 필드·시간·LIVE 범위·검증은 [계약 문서](05_PRE_RISK_CANDIDATE_CONTRACT.md)를 참고합니다.
+- First ML Experiment v1 후보 감사: 진단 후보 17,274개/14일이었으나 실제 quote·pre-state·호출 순서의 provenance 부족으로 학습을 중단했습니다. 재생 MA는 66,388쌍에서 일치했으나 진단 후보는 authenticated truth가 아닙니다. 판정은 `ML_FILTER_INCONCLUSIVE`, 수익성/일반화 신뢰 NOT READY입니다.
 - 데이터 수집 파이프라인: 운영·안정화 및 다일 데이터 누적 중.
 - V1 수집 안정화: 완료. 제한된 chart GET retry, 실제 수신 시각, opening/final reconciliation 유지.
 - V2 보수: 완료. 최종 원천 부재와 수집 gap을 구분하고, 백테스트 날짜 선택을 KST `event_at` 기준으로 수정했습니다. replay는 계속 `available_at`을 사용합니다.
