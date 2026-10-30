@@ -5,7 +5,7 @@ import argparse
 import csv
 from collections import defaultdict
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 import hashlib
 import json
@@ -240,6 +240,31 @@ def replay(rows: list[RawCandle], config: Config, mode: str = 'moving_average') 
         'stale_or_zero_volume_symbol_batches_skipped': stale_batches}, 'trades': trades, 'equity_curve': curve, 'daily_results': daily}
 
 
+def select_candles(conn, *, symbols=None, start: str | date | None = None,
+                   end: str | date | None = None) -> list[dict]:
+    """Select market-event dates in KST; keep availability for subsequent replay.
+
+    A prior-day candle received today is not today's market input. Conversely a
+    selected event may arrive on a later day; replay must still wait for it.
+    """
+    start = date.fromisoformat(start) if isinstance(start, str) else start
+    end = date.fromisoformat(end) if isinstance(end, str) else end
+    if start and end and start > end:
+        raise ValueError("start는 end보다 늦을 수 없습니다.")
+    conditions, params = ["source='TOSS'", "interval='1m'"], []
+    if symbols:
+        conditions.append('symbol=ANY(%s)')
+        params.append(symbols)
+    if start:
+        conditions.append('event_at >= %s')
+        params.append(datetime.combine(start, time.min, KST))
+    if end:
+        conditions.append('event_at < %s')
+        params.append(datetime.combine(end + timedelta(days=1), time.min, KST))
+    return conn.execute('SELECT ' + ','.join(RawCandle.__dataclass_fields__) +
+        ' FROM ml_raw_candles WHERE ' + ' AND '.join(conditions) + ' ORDER BY available_at,symbol,event_at', params).fetchall()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--start', help='Inclusive KST date YYYY-MM-DD')
@@ -267,18 +292,10 @@ def main():
             symbols = symbols or [r['symbol'] for r in conn.execute(
                 'SELECT symbol FROM live_strategy_symbols WHERE strategy_id=%s ORDER BY symbol', (args.strategy_id,))]
             symbols = symbols or [strategy['symbol']]
-        conditions, params = ["source='TOSS'", "interval='1m'"], []
-        if symbols:
-            conditions.append('symbol=ANY(%s)')
-            params.append(symbols)
-        if args.start:
-            conditions.append('available_at >= %s')
-            params.append(datetime.fromisoformat(args.start).replace(tzinfo=KST))
-        if args.end:
-            conditions.append('available_at < %s')
-            params.append(datetime.fromisoformat(args.end).replace(tzinfo=KST) + timedelta(days=1))
-        selected = conn.execute('SELECT ' + ','.join(RawCandle.__dataclass_fields__) +
-            ' FROM ml_raw_candles WHERE ' + ' AND '.join(conditions) + ' ORDER BY available_at,symbol,event_at', params).fetchall()
+        try:
+            selected = select_candles(conn, symbols=symbols, start=args.start, end=args.end)
+        except ValueError as exc:
+            parser.error(str(exc))
         quality_reports = conn.execute('SELECT report_date,status FROM ml_data_quality_reports ORDER BY report_date').fetchall()
     rows = [RawCandle(**r) for r in selected]
     if not rows:
@@ -310,7 +327,8 @@ def main():
         'quality_reports': quality_reports,
         'missing_target_symbols': sorted(set(symbols or []) - {r.symbol for r in rows}),
         'first_available_at': min(r.available_at for r in rows), 'last_available_at': max(r.available_at for r in rows),
-        'assumptions': ['Replay uses available_at; historical backfills cannot trigger old trades.',
+        'selection_time': 'event_at', 'selection_timezone': 'Asia/Seoul', 'replay_time': 'available_at',
+        'assumptions': ['Selection uses KST event_at dates; replay uses available_at; historical backfills cannot trigger old trades.',
             f'Execution: {config.execution}; next_open uses the first observed positive-volume bar open strictly after signal availability within 2 minutes, same day.',
             f'Default account risk preset enabled: {config.risk_enabled}; does not load or modify running account limits.',
             'PAPER rules reused; historical bid/ask, partial fills and volume capacity are not simulated.',

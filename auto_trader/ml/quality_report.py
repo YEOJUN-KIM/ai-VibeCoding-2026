@@ -85,7 +85,17 @@ def _series_summary(
             """,
             (start_at, min(end_at, start_at + timedelta(minutes=expected_bars)), list(requested), source, as_of or datetime.now(timezone.utc)),
         ).fetchall()
+        outside_rows = conn.execute(
+            f"SELECT {key_column} AS item,count(*) AS row_count FROM {table} "
+            "WHERE source=%s AND interval='1m' AND event_at>=%s AND event_at<%s "
+            f"AND {key_column}=ANY(%s) AND available_at<=%s "
+            "AND (event_at<%s OR event_at>=%s) "
+            f"GROUP BY {key_column}",
+            (source, start_at.replace(hour=0, minute=0), start_at.replace(hour=0, minute=0) + timedelta(days=1),
+             list(requested), as_of or datetime.now(timezone.utc), start_at, end_at),
+        ).fetchall()
     found = {str(row["item"]): row for row in rows}
+    outside = {str(row["item"]): int(row["row_count"]) for row in outside_rows}
     items: dict[str, dict[str, Any]] = {}
     for item in requested:
         row = found.get(item, {})
@@ -96,6 +106,10 @@ def _series_summary(
             "expected_bars": expected_bars,
             "missing_bars": len(missing),
             "missing_timestamps": [stamp.isoformat() for stamp in missing],
+            "raw_missing_bars": len(missing),
+            "raw_missing_timestamps": [stamp.isoformat() for stamp in missing],
+            "regular_session_rows": row_count,
+            "outside_regular_session_rows": outside.get(item, 0),
             "gap_origin": "UNVERIFIED" if missing else "COMPLETE",
             "first_event_at": (
                 row["first_event_at"].isoformat() if row.get("first_event_at") else None
@@ -109,11 +123,56 @@ def _series_summary(
     return {
         "requested_count": len(requested),
         "row_count": sum(item["row_count"] for item in items.values()),
+        "regular_session_rows": sum(item["regular_session_rows"] for item in items.values()),
+        "outside_regular_session_rows": sum(item["outside_regular_session_rows"] for item in items.values()),
         "missing_bars": sum(item["missing_bars"] for item in items.values()),
         "delayed_over_5m": sum(item["delayed_over_5m"] for item in items.values()),
         "zero_volume_rows": sum(item["zero_volume_rows"] for item in items.values()),
         "items": items,
     }
+
+
+GAP_COUNTS = ("raw_missing_bars", "provider_absent_bars", "collection_gap_bars", "unverified_bars", "effective_missing_bars")
+
+
+def _gap_totals(summaries):
+    return {key: sum(summary.get(key, 0) for summary in summaries) for key in GAP_COUNTS}
+
+
+def _final_provider_evidence(diagnostics, info, session_end, as_of):
+    """Absence is confirmed only by a full-window, post-close response.
+
+    V1 final evidence is accepted without requiring a V2-only metadata flag.
+    Opening evidence can identify positive provider candles, never final absence.
+    """
+    try:
+        received = datetime.fromisoformat(info["received_at"])
+        return (diagnostics.get("expected_bars") == FULL_SESSION_BARS
+                and not diagnostics.get("kind", "").startswith("opening")
+                and info.get("provider_window_complete") is True
+                and session_end <= received <= as_of)
+    except (KeyError, ValueError, TypeError):
+        return False
+
+
+def _classify_gaps(info, evidence, final_confirmed):
+    def stamps(values):
+        return {datetime.fromisoformat(value).astimezone(KST).isoformat() for value in values}
+    missing = stamps(info["raw_missing_timestamps"])
+    provided = stamps(evidence.get("provider_timestamps", []))
+    collection = missing & provided
+    absent = (missing & stamps(evidence.get("provider_absent_timestamps", []))) - provided if final_confirmed else set()
+    unverified = missing - absent - collection
+    info.update(provider_absent_timestamps=sorted(absent), collection_gap_timestamps=sorted(collection),
+                unverified_timestamps=sorted(unverified), provider_absent_bars=len(absent),
+                collection_gap_bars=len(collection), unverified_bars=len(unverified),
+                effective_missing_bars=len(collection) + len(unverified),
+                final_provider_evidence_confirmed=final_confirmed,
+                provider_semantics="UNCONFIRMED", provider_checked_at=evidence.get("received_at"))
+    info["gap_origin"] = ("COMPLETE" if not missing else "COLLECTION_GAP" if collection
+                          else "PROVIDER_ABSENT" if len(absent) == len(missing) else "UNVERIFIED")
+    info["data_completeness_status"] = ("FAIL" if info["expected_bars"] and not info["row_count"]
+                                        else "WARN" if info["effective_missing_bars"] or not info["expected_bars"] else "PASS")
 
 
 def generate_quality_report(
@@ -170,6 +229,15 @@ def generate_quality_report(
             "WHERE started_at>=%s AND started_at<%s AND started_at<=%s ORDER BY id",
             (day_start, day_end, now),
         ).fetchall()
+        # Rechecks of historical dates are performed later than the event day.
+        # Keep health counters on their execution day, but read evidence for the
+        # requested market date, constrained by this report's knowledge time.
+        reconciliation_runs = conn.execute(
+            "SELECT id,source,status,inserted_rows,errors FROM ml_collection_runs "
+            "WHERE source='CANDLE_RECONCILIATION' AND errors->'_diagnostics'->>'report_date'=%s "
+            "AND finished_at<=%s ORDER BY id",
+            (report_date.isoformat(), now),
+        ).fetchall()
         macro_rows = conn.execute(
             """
             SELECT DISTINCT ON (indicator)
@@ -196,28 +264,26 @@ def generate_quality_report(
                 continue
             category = error_category(details.get(key, message))
             error_counts[category] = error_counts.get(category, 0) + 1
-        if run["source"] == "CANDLE_RECONCILIATION" and diagnostics.get("report_date") == report_date.isoformat():
-            kind = diagnostics.get("kind", "unknown")
-            recovered = int(run["inserted_rows"])
-            reconciliation["run_count"] += 1
-            reconciliation["recovered_rows"] += recovered
-            reconciliation["by_kind"][kind] = reconciliation["by_kind"].get(kind, 0) + recovered
-            for key, info in diagnostics.get("series", {}).items():
-                if info.get("provider_checked"):
-                    provider_evidence[key] = info
+    for run in reconciliation_runs:
+        diagnostics = (run["errors"] or {}).get("_diagnostics", {})
+        kind = diagnostics.get("kind", "unknown")
+        recovered = int(run["inserted_rows"])
+        reconciliation["run_count"] += 1
+        reconciliation["recovered_rows"] += recovered
+        reconciliation["by_kind"][kind] = reconciliation["by_kind"].get(kind, 0) + recovered
+        for key, info in diagnostics.get("series", {}).items():
+            if info.get("provider_checked") or info.get("error"):
+                provider_evidence[key] = (info, _final_provider_evidence(diagnostics, info, end_at, now))
     for family, summary in (("stock", stock), ("indicator", indicator)):
         for key, info in summary["items"].items():
-            evidence = provider_evidence.get(f"{family}:{key}", {})
-            missing = set(info["missing_timestamps"])
-            absent = sorted(missing & set(evidence.get("provider_absent_timestamps", [])))
-            collection_gaps = sorted(missing & set(evidence.get("provider_timestamps", [])))
-            info.update(provider_absent_timestamps=absent, collection_gap_timestamps=collection_gaps,
-                        unverified_timestamps=sorted(missing - set(absent) - set(collection_gaps)),
-                        provider_semantics="UNCONFIRMED",
-                        provider_checked_at=evidence.get("received_at"))
-            if missing:
-                info["gap_origin"] = "COLLECTION_GAP" if collection_gaps else ("PROVIDER_ABSENT" if len(absent) == len(missing) else "UNVERIFIED")
+            evidence, final_confirmed = provider_evidence.get(f"{family}:{key}", ({}, False))
+            _classify_gaps(info, evidence, final_confirmed)
+        summary.update(_gap_totals(summary["items"].values()))
+        statuses = {item["data_completeness_status"] for item in summary["items"].values()}
+        summary["data_completeness_status"] = "FAIL" if "FAIL" in statuses else "WARN" if "WARN" in statuses or not expected_bars else "PASS"
     reconciliation["unrecovered_rows"] = stock["missing_bars"] + indicator["missing_bars"]
+    gap_summary = _gap_totals((stock, indicator))
+    reconciliation["effective_unrecovered_rows"] = gap_summary["effective_missing_bars"]
     collection_summary["error_counts"] = error_counts
     collection_summary["reconciliation"] = reconciliation
     macro_found = {row["indicator"]: row for row in macro_rows}
@@ -263,14 +329,12 @@ def generate_quality_report(
     no_stock_data = bool(normalized_symbols) and stock["row_count"] == 0 and expected_bars > 0
     no_indicator_data = bool(normalized_indicators) and indicator["row_count"] == 0 and expected_bars > 0
     status = "FAIL" if no_stock_data or no_indicator_data else ("WARN" if issues else "PASS")
-    completeness = "FAIL" if no_stock_data or no_indicator_data else (
-        "WARN" if stock["missing_bars"] or indicator["missing_bars"] or expected_bars == 0 else "PASS")
+    statuses = {stock["data_completeness_status"], indicator["data_completeness_status"]}
+    completeness = "FAIL" if "FAIL" in statuses else "WARN" if "WARN" in statuses else "PASS"
     health = "WARN" if (collection_summary["failed_runs"] or collection_summary["partial_runs"]
                          or stock["delayed_over_5m"] or indicator["delayed_over_5m"]) else "PASS"
-    for summary in (stock, indicator):
-        no_series_data = bool(summary["requested_count"]) and summary["row_count"] == 0 and expected_bars > 0
-        summary["data_completeness_status"] = "FAIL" if no_series_data else (
-            "WARN" if summary["missing_bars"] or expected_bars == 0 else "PASS")
+    collection_summary["quality_semantics_version"] = 2
+    collection_summary["gap_summary"] = gap_summary
     collection_summary["data_completeness_status"] = completeness
     collection_summary["collection_health_status"] = health
     report = {
@@ -279,6 +343,9 @@ def generate_quality_report(
         "data_completeness_status": completeness,
         "collection_health_status": health,
         "reconciliation_summary": reconciliation,
+        "quality_semantics_version": 2,
+        "gap_summary": gap_summary,
+        **gap_summary,
         "expected_bars": expected_bars,
         "stock_summary": stock,
         "indicator_summary": indicator,
@@ -327,6 +394,10 @@ def _with_detail_status(row):
     result["collection_health_status"] = collection.get("collection_health_status") or (
         "WARN" if collection.get("partial_runs") or collection.get("failed_runs") or stock.get("delayed_over_5m") or indicator.get("delayed_over_5m") else "PASS")
     result["reconciliation_summary"] = collection.get("reconciliation", {})
+    result["quality_semantics_version"] = collection.get("quality_semantics_version", 1)
+    if result["quality_semantics_version"] >= 2:
+        result["gap_summary"] = collection.get("gap_summary", _gap_totals((stock, indicator)))
+        result.update(result["gap_summary"])
     return result
 
 

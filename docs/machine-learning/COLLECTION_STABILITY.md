@@ -1,6 +1,93 @@
-# 시장 데이터 수집 안정화 점검 결과
+# 시장 데이터 수집 안정화 V1 / 품질·날짜 선택 V2
 
-점검일: 2026-10-28, 한국시간. 이번 변경은 수집·누락 탐지·품질 보고서에 한정합니다.
+최신 확인일: **2026-10-30**, 한국시간. 수집 파이프라인은 운영·안정화 및 다일 누적 중입니다. V1은 유지하고 V2 품질 의미·백테스트 데이터 선택 보수를 완료했습니다. ML Dataset·실제 모델 학습은 아직 시작 전입니다.
+
+## V2 최종 검증 (2026-10-30)
+
+### 유지한 V1과 수정 범위
+
+09:05·09:10 opening reconciliation, 15:35 final reconciliation, bounded chart GET retry, 429 cooldown, POST 비재전송, 오류 분류, 실제 응답 수신 시각, immutable observation과 unique conflict 정책을 유지했습니다. 정기 20개 중첩 조회도 줄이지 않았습니다.
+
+V2는 다음을 보완합니다.
+
+- 391 timestamp 진단 grid를 유지하며 raw missing과 actionable missing을 분리합니다.
+- 마감 후 충분한 원천 범위에서 확인한 provider absence만 completeness PASS에 허용합니다. opening 응답의 부재는 아직 unverified입니다.
+- 과거 날짜의 재검사 증거는 실행일이 아닌 `diagnostics.report_date`로 조회합니다. 증거의 완료·수신 시각은 보고서 `generated_at` 이후일 수 없습니다.
+- `before` 시작 cursor를 선택적으로 넘겨 과거 정규장 끝부터 기존 pagination을 재사용합니다. 현재 조회와 과거 조회의 cache key를 분리하며 기본 조회는 이전 동작입니다.
+- 백테스트 시작·종료일은 KST `event_at`으로 선택하고, replay는 계속 `available_at`을 사용합니다.
+
+### 품질 필드와 판정
+
+`missing_bars`·`missing_timestamps`의 기존 raw grid 의미는 유지합니다. timestamp 목록은 시계열 항목별로, 누락 원인별 건수는 항목·종목/지수 summary·최상위 `gap_summary`에 제공합니다. 정규장/시간외 행 수는 항목과 종목/지수 summary에서 확인합니다.
+
+| 필드 | 의미 |
+|---|---|
+| `raw_missing_bars` / `raw_missing_timestamps` | 진단 grid와 DB의 전체 차이 |
+| `provider_absent_bars` / `provider_absent_timestamps` | 마감 후 충분한 범위의 원천 응답에도 없는 봉 |
+| `collection_gap_bars` / `collection_gap_timestamps` | 원천에 존재하지만 DB에 없는 봉 |
+| `unverified_bars` / `unverified_timestamps` | 원천 조회 실패·범위 부족·최종 확인 전 gap |
+| `effective_missing_bars` | collection gap + unverified |
+| `regular_session_rows` | 정규장 관측 행 수 |
+| `outside_regular_session_rows` | 같은 KST 날짜의 정규장 밖 관측 행 수 |
+
+데이터가 없는 시계열은 FAIL입니다. 그 외에 effective missing이 있으면 WARN, 남은 raw missing이 모두 최종 provider absence로 확인됐거나 raw gap이 없으면 PASS입니다. 공급사가 그 분에 봉을 반환하지 않았다는 사실만 기록하며 무거래·정상 봉·거래소 의미를 추론하지 않습니다. `provider_semantics=UNCONFIRMED`를 유지하고 synthetic candle을 만들지 않습니다.
+
+기존 전체 `status`와 `collection_health_status`는 별도로 유지합니다. `quality_semantics_version=2`와 새 상세는 기존 JSONB summary에 저장하므로 migration은 없습니다. 예전 V1 보고서는 재생성 전까지 당시 판정으로 남으며, 새 워커는 장 마감 뒤 기존 당일 V1 보고서를 발견하면 V2로 재생성합니다.
+
+### 10/28 보고서 재생성
+
+22종목의 09:01~15:30은 **8,580개(22×390)**, KOSPI·KOSDAQ도 각각 390개로 모두 존재합니다. 09:00이 실제 있는 18종목을 포함한 정규장 종목 행 수는 8,598개입니다. 당일 시간외 종목 RAW 290개는 삭제하지 않았습니다.
+
+| 지표 | 종목 | 시장지표 | 합계 |
+|---|---:|---:|---:|
+| raw missing | 4 | 2 | 6 |
+| provider absent | 4 | 2 | 6 |
+| collection gap | 0 | 0 | 0 |
+| unverified | 0 | 0 | 0 |
+| effective missing | 0 | 0 | 0 |
+
+최종 상태는 **data completeness PASS / collection health WARN / 기존 status WARN**입니다. 원천 부재는 `035720`, `036930`, `080220`, `403870`, `KOSPI`, `KOSDAQ`의 09:00이며 원천 과거 전체 조회로 다시 확인했습니다. `FULL_SESSION_BARS=391`과 원본 데이터는 판정을 맞추기 위해 바꾸지 않았습니다.
+
+### 과거 3일 실제 재검사·백필
+
+| 날짜 | 수정 전 raw missing | 실제 백필 | 최종 raw missing | provider absent | collection gap | unverified | completeness |
+|---|---:|---:|---:|---:|---:|---:|---|
+| 2026-10-15 | 2,352 | 2,346 | 6 | 6 | 0 | 0 | PASS |
+| 2026-10-16 | 266 | 260 | 6 | 6 | 0 | 0 | PASS |
+| 2026-10-21 | 347 | 341 | 6 | 6 | 0 | 0 | PASS |
+
+합계 **2,947개**를 원천 실제 반환값으로 추가했습니다. 10/21 첫 조회는 두 종목의 token-revoked 오류로 PARTIAL이었고, 해당 두 대상만 한 번 더 확인해 남은 30개를 복구했습니다. 첫 오류 기록은 그대로 보존했습니다. 세 날짜의 health는 지연·수집 기록을 반영해 WARN입니다. 각 날짜의 남은 여섯 raw gap은 모두 위 여섯 시계열의 09:00 provider absence입니다.
+
+기존 RAW **35,234개**의 모든 열은 체크섬이 동일하며 UPDATE·DELETE하지 않았습니다. 신규 2,947개의 `available_at=collected_at`은 모두 실제 재수신한 10/30 시각입니다. 과거 event 시각으로 소급하지 않았습니다. 전략 17 설정·대상 22종목도 전후 체크섬이 같습니다.
+
+### 백테스트 날짜 선택 전후
+
+동일 DB·저장 전략 17·`--start 2026-10-28 --end 2026-10-28` 기준입니다.
+
+| 항목 | V1 | V2 |
+|---|---|---|
+| 입력 행 | 8,955 | 8,888 |
+| observed_days | 10/27, 10/28 | 10/28 |
+| 날짜 선택 | available_at | KST event_at |
+| replay 정보 사용 | available_at | available_at 유지 |
+
+전날 event 67개가 선택에서 제외됐습니다. 당일의 시간외 290개는 선택에 남습니다. 향후 Dataset의 session 선택은 별도 설계합니다. 과거 봉을 다음날 받았어도 실제 수신 전에는 history에 들어가지 않고 과거 가격 주문을 만들지 않습니다. `replay`, `Config`, `ReplayBroker`, `ReplayRisk`의 AST가 수정 전과 동일함을 확인했습니다.
+
+### 중복·요청량 측정과 운영 적용
+
+변경 전 10/15 이후 수집 실행 기록 기준입니다. 종목 2,032개 배치에서 신규 77,223·중복 717,375개, 지수 2,030개 배치에서 신규 6,850·중복 63,393개를 기록했습니다. 논리 요청량은 종목 894,080봉·지수 81,200봉이며 HTTP 재시도 수를 뜻하지 않습니다. 최근 20개 중첩 수집은 유지했고 중복 감소 최적화는 하지 않았습니다.
+
+이번 4개 과거 날짜 재검사와 10/21 추가 대상 재검사에서 계측한 차트 GET client 시도는 **274회**입니다. 그룹 대기·재시도를 포함한 client 호출 수이며 실제 네트워크 전송 횟수와 구분합니다. 과거 조회는 날짜 cursor로 필요한 범위만 읽습니다. 현재 장중 서버·전략은 유지했으며, 자동 워커의 V2 판정은 다음 정상 재시작부터 적용됩니다. 과거 4일 보고서는 이미 V2로 수동 재생성했습니다.
+
+### 테스트·diff 검토
+
+전체 Python **339개**, JavaScript **22개**가 통과했습니다. provider absence PASS·원천 존재 gap WARN·조회 실패 unverified·복구 후 PASS·미생성·시간외 보존·historical 증거 시점·event-date 선택·availability replay·next-day backfill 무거래·cursor/cache 격리 검증을 추가했습니다. 컴파일·앱 import·Git 공백 검사도 확인했습니다.
+
+diff는 수집 증거·품질 판정·과거 조회 cursor·백테스트 입력 선택·테스트·문서에 한정됩니다. V1 transport·collector·raw 저장, 전략·리스크·PAPER·LIVE 주문 소스와 DB schema는 그대로입니다. 실제 주문 전송·전략 시작·RAW 수정/삭제·DB migration은 없습니다.
+
+## V1 점검 이력 (2026-10-28)
+
+이하의 WARN 판정과 당시 검증 건수는 **V1 시점의 과거 기록**입니다. 현재 판정은 위 V2 검증을 기준으로 합니다. V1은 수집·누락 탐지·품질 보고서에 한정해 구현했습니다.
 
 ## 1. 확인한 09:00 누락 원인
 

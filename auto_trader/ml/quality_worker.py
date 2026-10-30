@@ -125,7 +125,7 @@ class QualityReportWorker:
         )
         if local_now.weekday() < 5 and local_now >= scheduled_today:
             existing = await asyncio.to_thread(quality_report_for_date, local_now.date())
-            if existing is None or "collection_health_status" not in existing.get("collection_summary", {}):
+            if existing is None or existing.get("quality_semantics_version", 1) < 2:
                 await self.run_once(local_now.date())
 
         while True:

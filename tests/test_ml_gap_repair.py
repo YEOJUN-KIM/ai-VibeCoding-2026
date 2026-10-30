@@ -99,8 +99,74 @@ class GapRepairRepositoryTests(unittest.TestCase):
         self.assertEqual(info["missing_timestamps"], [self.start.isoformat()])
         self.assertEqual(info["provider_absent_timestamps"], [self.start.isoformat()])
         self.assertEqual(info["gap_origin"], "PROVIDER_ABSENT")
-        self.assertEqual(report["data_completeness_status"], "WARN")
+        self.assertEqual(report["data_completeness_status"], "PASS")
+        self.assertEqual(report["raw_missing_bars"], 1)
+        self.assertEqual(report["provider_absent_bars"], 1)
+        self.assertEqual(report["effective_missing_bars"], 0)
+        self.assertEqual(report["status"], "WARN")
         self.assertEqual(report["expected_bars"], 391)
+
+    def test_provider_positive_but_unsaved_gap_is_actionable(self):
+        self.save(range(1, 391))
+        self.client._domestic_candles.return_value = [self.bar(m) for m in range(391)]
+        with patch.object(gap_repair, "save_raw_candles", return_value=(0, 0)):
+            self.repair(kind="final")
+        report = quality_report.generate_quality_report(self.start.date(), symbols=("005930",), indicators=(), generated_at=self.now)
+        self.assertEqual((report["collection_gap_bars"], report["unverified_bars"], report["effective_missing_bars"]), (1, 0, 1))
+        self.assertEqual(report["data_completeness_status"], "WARN")
+
+    def test_provider_failure_keeps_gap_unverified(self):
+        self.save(range(1, 391))
+        self.client._domestic_candles.side_effect = TossApiError("timeout", error_code="timeout")
+        self.repair(kind="final")
+        report = quality_report.generate_quality_report(self.start.date(), symbols=("005930",), indicators=(), generated_at=self.now)
+        self.assertEqual((report["provider_absent_bars"], report["collection_gap_bars"], report["unverified_bars"]), (0, 0, 1))
+        self.assertEqual(report["data_completeness_status"], "WARN")
+
+    def test_opening_absence_is_not_final_evidence(self):
+        self.save(range(1, 391))
+        self.now = self.start + timedelta(minutes=10)
+        self.client._domestic_candles.return_value = [self.bar(m) for m in range(1, 10)]
+        self.repair(kind="opening_0910")
+        report = quality_report.generate_quality_report(self.start.date(), symbols=("005930",), indicators=(), generated_at=self.now)
+        self.assertEqual((report["provider_absent_bars"], report["unverified_bars"]), (0, 1))
+        self.assertEqual(report["data_completeness_status"], "WARN")
+
+    def test_historical_final_evidence_is_read_on_event_date_without_future_leakage(self):
+        self.save(range(1, 391))
+        self.now += timedelta(days=2)
+        self.client._domestic_candles.return_value = [self.bar(m) for m in range(1, 391)]
+        self.repair(kind="historical")
+        self.client._domestic_candles.assert_called_once_with("005930", "1m", 600, cache_seconds=0,
+                                                             before=(self.start + timedelta(minutes=391)).isoformat())
+        current = quality_report.generate_quality_report(self.start.date(), symbols=("005930",), indicators=(), generated_at=self.now)
+        self.assertEqual((current["data_completeness_status"], current["provider_absent_bars"]), ("PASS", 1))
+        past = quality_report.generate_quality_report(self.start.date(), symbols=("005930",), indicators=(), generated_at=self.start + timedelta(hours=7))
+        self.assertEqual((past["data_completeness_status"], past["unverified_bars"]), ("WARN", 1))
+
+    def test_extended_hours_remain_in_raw_but_do_not_inflate_regular_completeness(self):
+        self.save(range(391))
+        self.save([-60, 400, -797])  # Same-day 08:00/15:40 and prior-day 19:43.
+        report = quality_report.generate_quality_report(self.start.date(), symbols=("005930",), indicators=(), generated_at=self.now)
+        self.assertEqual((report["stock_summary"]["regular_session_rows"], report["stock_summary"]["outside_regular_session_rows"]), (391, 2))
+        self.assertEqual((report["raw_missing_bars"], report["data_completeness_status"]), (0, "PASS"))
+        with data_pipeline.connect() as conn:
+            self.assertEqual(conn.execute("SELECT count(*) AS count FROM ml_raw_candles").fetchone()["count"], 394)
+
+    def test_all_data_absent_remains_fail_even_with_provider_absence(self):
+        self.client._domestic_candles.return_value = [self.bar(-1)]
+        self.repair(kind="final")
+        report = quality_report.generate_quality_report(self.start.date(), symbols=("005930",), indicators=(), generated_at=self.now)
+        self.assertEqual((report["provider_absent_bars"], report["effective_missing_bars"]), (391, 0))
+        self.assertEqual(report["data_completeness_status"], "FAIL")
+
+    def test_recovered_gap_has_no_actionable_missing(self):
+        self.save(range(1, 391))
+        self.client._domestic_candles.return_value = [self.bar(m) for m in range(391)]
+        self.repair(kind="final")
+        report = quality_report.generate_quality_report(self.start.date(), symbols=("005930",), indicators=(), generated_at=self.now)
+        self.assertEqual((report["raw_missing_bars"], report["collection_gap_bars"], report["unverified_bars"]), (0, 0, 0))
+        self.assertEqual(report["data_completeness_status"], "PASS")
 
     def test_incomplete_provider_window_is_unverified(self):
         self.client._domestic_candles.return_value = [self.bar(390)] * 600

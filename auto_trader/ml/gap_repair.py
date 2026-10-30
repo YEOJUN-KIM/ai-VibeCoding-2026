@@ -96,9 +96,10 @@ def reconcile_session(client, day: date, *, symbols, indicators=("KOSPI", "KOSDA
         if not targets or not expected:
             return {"status": "SKIPPED", "reason": "no_completed_bars", "inserted_rows": 0}
         start, end = session_bounds(day)
-        # Include extended-hours bars and older pages; reuse the existing cursor
-        # client. If the 10k safety cap truncates a historical window, report it.
-        count = min(10000, max(600, int((started - start).total_seconds() // 60) + 60))
+        historical = day < started.astimezone(KST).date()
+        # Historical scans start at the requested session end, using the same
+        # existing pagination. Today's V1 overlap/reconciliation is unchanged.
+        count = 600 if historical else min(10000, max(600, int((started - start).total_seconds() // 60) + 60))
         run_id = start_collection_run("CANDLE_RECONCILIATION", "1m", [f"{k}:{v}" for k, v in targets], count, started)
         errors, details, series = {}, {}, {}
         inserted = duplicates = 0
@@ -114,13 +115,17 @@ def reconcile_session(client, day: date, *, symbols, indicators=("KOSPI", "KOSDA
                     info.update(recovered_rows=0, missing_after=[], provider_absent_timestamps=[])
                     continue
                 fetch = client._domestic_candles if family == "stock" else client._market_indicator_candles
-                received = fetch(item, "1m", count, cache_seconds=0)
+                options = {"cache_seconds": 0}
+                if historical:
+                    options["before"] = end.isoformat()
+                received = fetch(item, "1m", count, **options)
                 received_at = clock()
                 provider = {bar.timestamp: bar for bar in received
                             if start <= bar.timestamp < end and bar.timestamp in expected
                             and bar.timestamp + timedelta(minutes=1) <= received_at}
                 oldest = min((bar.timestamp for bar in received), default=None)
                 window_complete = bool(received) and (oldest <= start or len(received) < count)
+                final_check = len(expected) == FULL_SESSION_BARS and received_at >= end and not kind.startswith("opening")
                 candidates = sorted(set(missing) & provider.keys())
                 factory = RawCandle if family == "stock" else RawMarketIndicator
                 save = save_raw_candles if family == "stock" else save_market_indicator_candles
@@ -132,14 +137,16 @@ def reconcile_session(client, day: date, *, symbols, indicators=("KOSPI", "KOSDA
                 remaining = missing_timestamps(after, expected)
                 info.update(provider_checked=True, received_at=received_at.isoformat(),
                             provider_window_complete=window_complete,
+                            final_provider_check=final_check,
                             oldest_received=oldest.isoformat() if oldest else None,
                             opening_bar_present=start in provider,
                             provider_timestamps=[t.astimezone(KST).isoformat() for t in sorted(provider)],
                             recovered_rows=added,
                             missing_after=[t.isoformat() for t in remaining],
-                            provider_absent_timestamps=[t.isoformat() for t in remaining if t not in provider] if window_complete else [],
+                            raw_missing_timestamps=[t.isoformat() for t in remaining],
+                            provider_absent_timestamps=[t.isoformat() for t in remaining if t not in provider] if window_complete and final_check else [],
                             collection_gap_timestamps=[t.isoformat() for t in remaining if t in provider],
-                            unverified_timestamps=[t.isoformat() for t in remaining if t not in provider] if not window_complete else [])
+                            unverified_timestamps=[t.isoformat() for t in remaining if t not in provider] if not (window_complete and final_check) else [])
                 if remaining and not window_complete:
                     errors[key] = "원천 응답에서 정규장 전체 범위를 확인하지 못했습니다. 다음 재검사에서 확인합니다."
                     details[key] = {"category": "OTHER", "message": errors[key], "error_code": "incomplete-window"}

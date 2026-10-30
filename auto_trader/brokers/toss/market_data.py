@@ -338,9 +338,11 @@ class TossMarketData:
 
 
     def _domestic_candles(self, symbol: str, interval: str, count: int,
-                          *, cache_seconds: int | None = None) -> list[LiveStockCandle]:
+                          *, cache_seconds: int | None = None, before: str | None = None) -> list[LiveStockCandle]:
         normalized = symbol.strip().upper()
         cache_key = (normalized, interval, cache_seconds)
+        if before is not None:
+            cache_key += (before,)
         now = monotonic()
         cached = self._candle_cache.get(cache_key)
         if cached is not None and now < cached[0] and cached[1] >= count:
@@ -353,13 +355,13 @@ class TossMarketData:
             if cached is not None and monotonic() < cached[0] and cached[1] >= count:
                 return cached[2][-count:]
             raw_rows: list[dict] = []
-            before: str | None = None
-            seen_cursors: set[str] = set()
+            cursor = before
+            seen_cursors: set[str] = {before} if before else set()
             max_pages = max(1, (count + 199) // 200)
             for page_index in range(max_pages):
                 query_values = {"symbol": normalized, "interval": interval, "count": 200}
-                if before:
-                    query_values["before"] = before
+                if cursor:
+                    query_values["before"] = cursor
                 query = urlencode(query_values)
                 payload = self._authorized_json_request(f"{self.base_url}/api/v1/candles?{query}")
                 result = payload.get("result")
@@ -373,7 +375,7 @@ class TossMarketData:
                 if not next_before or next_before in seen_cursors:
                     break
                 seen_cursors.add(str(next_before))
-                before = str(next_before)
+                cursor = str(next_before)
                 if page_index + 1 < max_pages:
                     sleep(0.08)
             candles = [LiveStockCandle(
@@ -392,7 +394,7 @@ class TossMarketData:
 
 
     def _market_indicator_candles(
-        self, symbol: str, interval: str, count: int, *, cache_seconds: int = 0
+        self, symbol: str, interval: str, count: int, *, cache_seconds: int = 0, before: str | None = None
     ) -> list[LiveStockCandle]:
         """Return Toss market-index candles in chronological order."""
         normalized = symbol.strip().upper()
@@ -404,6 +406,8 @@ class TossMarketData:
             raise ValueError("count는 1 이상이어야 합니다.")
 
         cache_key = (f"MARKET_INDICATOR:{normalized}", interval, cache_seconds)
+        if before is not None:
+            cache_key += (before,)
         cached = self._candle_cache.get(cache_key)
         if cached is not None and monotonic() < cached[0] and cached[1] >= count:
             return cached[2][-count:]
@@ -414,13 +418,13 @@ class TossMarketData:
             if cached is not None and monotonic() < cached[0] and cached[1] >= count:
                 return cached[2][-count:]
             raw_rows: list[dict] = []
-            before: str | None = None
-            seen_cursors: set[str] = set()
+            cursor = before
+            seen_cursors: set[str] = {before} if before else set()
             max_pages = max(1, (count + 199) // 200)
             for page_index in range(max_pages):
                 query_values = {"interval": interval, "count": min(200, count - len(raw_rows))}
-                if before:
-                    query_values["before"] = before
+                if cursor:
+                    query_values["before"] = cursor
                 query = urlencode(query_values)
                 payload = self._authorized_json_request(
                     f"{self.base_url}/api/v1/market-indicators/{normalized}/candles?{query}"
@@ -436,7 +440,7 @@ class TossMarketData:
                 if not next_before or str(next_before) in seen_cursors:
                     break
                 seen_cursors.add(str(next_before))
-                before = str(next_before)
+                cursor = str(next_before)
                 if page_index + 1 < max_pages:
                     sleep(0.08)
             candles = [

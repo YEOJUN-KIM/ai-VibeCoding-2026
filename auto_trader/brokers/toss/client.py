@@ -59,7 +59,7 @@ class TossClient(TossTransport, TossAccounts, TossOrders, TossMarketData):
         self._stock_info_cache: dict[str, tuple[float, dict]] = {}
         self._stock_info_lock = Lock()
         self._candle_cache: dict[
-            tuple[str, str, int | None], tuple[float, int, list[LiveStockCandle]]
+            tuple[str, str, int | None] | tuple[str, str, int | None, str], tuple[float, int, list[LiveStockCandle]]
         ] = {}
         self._candle_lock = Lock()
-        self._candle_request_locks: dict[tuple[str, str, int | None], Lock] = {}
+        self._candle_request_locks: dict[tuple[str, str, int | None] | tuple[str, str, int | None, str], Lock] = {}
