@@ -1,0 +1,3347 @@
+{
+  "readiness": "PARTIALLY_READY",
+  "readiness_scope": "DATA_PIPELINE",
+  "first_ml_experiment": "READY FOR FIRST ML EXPERIMENT",
+  "profitability_generalization_confidence": "NOT_READY",
+  "raw_candles": 110664,
+  "raw_index_candles": 9770,
+  "candidate_samples": 142774,
+  "usable_samples": 89368,
+  "excluded_samples": 53406,
+  "usable_ratio": 0.6259402972530013,
+  "market_dates": [
+    "2026-10-02",
+    "2026-10-08",
+    "2026-10-12",
+    "2026-10-13",
+    "2026-10-14",
+    "2026-10-15",
+    "2026-10-16",
+    "2026-10-19",
+    "2026-10-20",
+    "2026-10-21",
+    "2026-10-22",
+    "2026-10-23",
+    "2026-10-26",
+    "2026-10-27",
+    "2026-10-28",
+    "2026-10-29",
+    "2026-10-30"
+  ],
+  "usable_market_dates": [
+    "2026-10-02",
+    "2026-10-12",
+    "2026-10-13",
+    "2026-10-14",
+    "2026-10-15",
+    "2026-10-16",
+    "2026-10-20",
+    "2026-10-21",
+    "2026-10-22",
+    "2026-10-23",
+    "2026-10-26",
+    "2026-10-27",
+    "2026-10-28",
+    "2026-10-30"
+  ],
+  "symbols": [
+    "000660",
+    "005380",
+    "005490",
+    "005930",
+    "006400",
+    "017670",
+    "034020",
+    "035420",
+    "035720",
+    "036930",
+    "042700",
+    "051910",
+    "055550",
+    "058470",
+    "080220",
+    "086520",
+    "096770",
+    "103590",
+    "105560",
+    "218410",
+    "222800",
+    "403870"
+  ],
+  "symbols_with_usable_samples": [
+    "000660",
+    "005380",
+    "005490",
+    "005930",
+    "006400",
+    "017670",
+    "034020",
+    "035420",
+    "035720",
+    "036930",
+    "042700",
+    "051910",
+    "055550",
+    "058470",
+    "080220",
+    "086520",
+    "096770",
+    "103590",
+    "105560",
+    "218410",
+    "222800",
+    "403870"
+  ],
+  "exclusion_reason_counts": {
+    "MISSING_KOSDAQ": 47394,
+    "MISSING_KOSPI": 47394,
+    "MISSING_LOOKBACK": 47028,
+    "MISSING_STOCK_DATA": 32110,
+    "UNVERIFIED_GAP": 33924,
+    "LATE_LOOKBACK_DATA": 9722,
+    "OUTSIDE_SESSION": 3338
+  },
+  "label_counts": {
+    "future_return_5m": 88264,
+    "future_net_return_5m": 88264,
+    "executable_net_return_5m": 87990,
+    "max_favorable_excursion_5m": 87990,
+    "max_adverse_excursion_5m": 87990,
+    "future_return_15m": 85524,
+    "future_net_return_15m": 85524,
+    "executable_net_return_15m": 85140,
+    "max_favorable_excursion_15m": 85140,
+    "max_adverse_excursion_15m": 85140,
+    "future_return_20m": 84154,
+    "future_net_return_20m": 84154,
+    "executable_net_return_20m": 83764,
+    "max_favorable_excursion_20m": 83764,
+    "max_adverse_excursion_20m": 83764,
+    "future_return_30m": 81352,
+    "future_net_return_30m": 81352,
+    "executable_net_return_30m": 80973,
+    "max_favorable_excursion_30m": 80973,
+    "max_adverse_excursion_30m": 80973,
+    "future_return_60m": 73055,
+    "future_net_return_60m": 73055,
+    "executable_net_return_60m": 72737,
+    "max_favorable_excursion_60m": 72737,
+    "max_adverse_excursion_60m": 72737
+  },
+  "outcome_flag_counts": {
+    "MISSING_FUTURE_LABEL": 1104,
+    "NO_EXECUTABLE_NEXT_BAR": 282
+  },
+  "feature_point_in_time_violations": 0,
+  "raw_time_order_violations": 0,
+  "historical_backfill_feature_rows": 0,
+  "index_alignment": {
+    "KOSPI": {
+      "missing_samples": 47394,
+      "aligned_usable_samples": 89368
+    },
+    "KOSDAQ": {
+      "missing_samples": 47394,
+      "aligned_usable_samples": 89368
+    }
+  },
+  "macro": {
+    "USD_KRW": {
+      "rows": 43,
+      "time_order_violations": 0,
+      "usable_sample_available": 89178,
+      "observations": [
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-02T14:46:27+09:00",
+          "available_at": "2026-10-02T14:47:54.440871+09:00",
+          "collected_at": "2026-10-02T14:47:54.440871+09:00",
+          "value": "1354.05",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-02T14:50:27+09:00",
+          "available_at": "2026-10-02T14:51:17.408440+09:00",
+          "collected_at": "2026-10-02T14:51:17.408440+09:00",
+          "value": "1353.7",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-02T14:51:27+09:00",
+          "available_at": "2026-10-02T14:52:13.297643+09:00",
+          "collected_at": "2026-10-02T14:52:13.297643+09:00",
+          "value": "1353.65",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-02T14:54:27+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "1353.65",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-02T14:57:27+09:00",
+          "available_at": "2026-10-02T14:58:48.097654+09:00",
+          "collected_at": "2026-10-02T14:58:48.097654+09:00",
+          "value": "1352.9",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-02T15:55:27+09:00",
+          "available_at": "2026-10-02T15:56:14.562586+09:00",
+          "collected_at": "2026-10-02T15:56:14.562586+09:00",
+          "value": "1351.6",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-02T16:04:27+09:00",
+          "available_at": "2026-10-02T16:05:21.874494+09:00",
+          "collected_at": "2026-10-02T16:05:21.874494+09:00",
+          "value": "1351.35",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-02T16:16:27+09:00",
+          "available_at": "2026-10-02T16:17:55.770745+09:00",
+          "collected_at": "2026-10-02T16:17:55.770745+09:00",
+          "value": "1350.65",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-12T09:07:38+09:00",
+          "available_at": "2026-10-12T09:08:48.944458+09:00",
+          "collected_at": "2026-10-12T09:08:48.944458+09:00",
+          "value": "1339.25",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-12T09:14:38+09:00",
+          "available_at": "2026-10-12T09:15:55.992817+09:00",
+          "collected_at": "2026-10-12T09:15:55.992817+09:00",
+          "value": "1338.7",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-12T09:42:38+09:00",
+          "available_at": "2026-10-12T09:43:03.488771+09:00",
+          "collected_at": "2026-10-12T09:43:03.488771+09:00",
+          "value": "1337.7",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-12T10:23:38+09:00",
+          "available_at": "2026-10-12T10:24:50.609386+09:00",
+          "collected_at": "2026-10-12T10:24:50.609386+09:00",
+          "value": "1334.15",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-12T10:58:38+09:00",
+          "available_at": "2026-10-12T10:59:52.697588+09:00",
+          "collected_at": "2026-10-12T10:59:52.697588+09:00",
+          "value": "1336.15",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-12T11:12:38+09:00",
+          "available_at": "2026-10-12T11:13:23.310070+09:00",
+          "collected_at": "2026-10-12T11:13:23.310070+09:00",
+          "value": "1336.5",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-12T11:17:38+09:00",
+          "available_at": "2026-10-12T11:18:55.656400+09:00",
+          "collected_at": "2026-10-12T11:18:55.656400+09:00",
+          "value": "1335.65",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-12T13:09:38+09:00",
+          "available_at": "2026-10-12T13:10:00.003244+09:00",
+          "collected_at": "2026-10-12T13:10:00.003244+09:00",
+          "value": "1334.4",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-13T08:50:42+09:00",
+          "available_at": "2026-10-13T08:51:06.462420+09:00",
+          "collected_at": "2026-10-13T08:51:06.462420+09:00",
+          "value": "1335.05",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-13T13:09:42+09:00",
+          "available_at": "2026-10-13T13:10:00.010754+09:00",
+          "collected_at": "2026-10-13T13:10:00.010754+09:00",
+          "value": "1342.65",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-14T08:53:56+09:00",
+          "available_at": "2026-10-14T08:54:24.141422+09:00",
+          "collected_at": "2026-10-14T08:54:24.141422+09:00",
+          "value": "1340.85",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-14T13:09:56+09:00",
+          "available_at": "2026-10-14T13:10:00.005243+09:00",
+          "collected_at": "2026-10-14T13:10:00.005243+09:00",
+          "value": "1337.55",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-15T10:54:04+09:00",
+          "available_at": "2026-10-15T10:55:14.690714+09:00",
+          "collected_at": "2026-10-15T10:55:14.690714+09:00",
+          "value": "1350.8",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-15T13:09:04+09:00",
+          "available_at": "2026-10-15T13:10:00.005022+09:00",
+          "collected_at": "2026-10-15T13:10:00.005022+09:00",
+          "value": "1349.2",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-16T08:52:46+09:00",
+          "available_at": "2026-10-16T08:53:21.930702+09:00",
+          "collected_at": "2026-10-16T08:53:21.930702+09:00",
+          "value": "1339.45",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-16T10:34:46+09:00",
+          "available_at": "2026-10-16T10:35:56.802150+09:00",
+          "collected_at": "2026-10-16T10:35:56.802150+09:00",
+          "value": "1347.8",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-16T13:09:46+09:00",
+          "available_at": "2026-10-16T13:10:00.007631+09:00",
+          "collected_at": "2026-10-16T13:10:00.007631+09:00",
+          "value": "1343.45",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-20T08:59:52+09:00",
+          "available_at": "2026-10-20T09:00:23.707481+09:00",
+          "collected_at": "2026-10-20T09:00:23.707481+09:00",
+          "value": "1330.7",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-20T13:09:52+09:00",
+          "available_at": "2026-10-20T13:10:00.001277+09:00",
+          "collected_at": "2026-10-20T13:10:00.001277+09:00",
+          "value": "1328.35",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-21T09:30:42+09:00",
+          "available_at": "2026-10-21T09:31:08.065986+09:00",
+          "collected_at": "2026-10-21T09:31:08.065986+09:00",
+          "value": "1325.4",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-21T13:09:42+09:00",
+          "available_at": "2026-10-21T13:10:00.015783+09:00",
+          "collected_at": "2026-10-21T13:10:00.015783+09:00",
+          "value": "1325.2",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-22T09:16:41+09:00",
+          "available_at": "2026-10-22T09:17:33.123274+09:00",
+          "collected_at": "2026-10-22T09:17:33.123274+09:00",
+          "value": "1326.65",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-22T13:09:41+09:00",
+          "available_at": "2026-10-22T13:10:00.007276+09:00",
+          "collected_at": "2026-10-22T13:10:00.007276+09:00",
+          "value": "1323.15",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-23T09:05:31+09:00",
+          "available_at": "2026-10-23T09:06:29.683607+09:00",
+          "collected_at": "2026-10-23T09:06:29.683607+09:00",
+          "value": "1325.6",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-23T13:08:31+09:00",
+          "available_at": "2026-10-23T13:10:00.014155+09:00",
+          "collected_at": "2026-10-23T13:10:00.014155+09:00",
+          "value": "1324.4",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-26T08:55:33+09:00",
+          "available_at": "2026-10-26T08:56:43.617233+09:00",
+          "collected_at": "2026-10-26T08:56:43.617233+09:00",
+          "value": "1322.6",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-26T10:07:33+09:00",
+          "available_at": "2026-10-26T10:08:04.778542+09:00",
+          "collected_at": "2026-10-26T10:08:04.778542+09:00",
+          "value": "1321.7",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-26T13:09:33+09:00",
+          "available_at": "2026-10-26T13:10:00.014471+09:00",
+          "collected_at": "2026-10-26T13:10:00.014471+09:00",
+          "value": "1321.55",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-27T08:54:49+09:00",
+          "available_at": "2026-10-27T08:55:29.698971+09:00",
+          "collected_at": "2026-10-27T08:55:29.698971+09:00",
+          "value": "1323.8",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-27T13:09:49+09:00",
+          "available_at": "2026-10-27T13:10:00.005587+09:00",
+          "collected_at": "2026-10-27T13:10:00.005587+09:00",
+          "value": "1324.3",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-28T08:49:59+09:00",
+          "available_at": "2026-10-28T08:50:57.543721+09:00",
+          "collected_at": "2026-10-28T08:50:57.543721+09:00",
+          "value": "1325.6",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-28T13:09:59+09:00",
+          "available_at": "2026-10-28T13:10:00.008136+09:00",
+          "collected_at": "2026-10-28T13:10:00.008136+09:00",
+          "value": "1340.3",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-30T08:58:46+09:00",
+          "available_at": "2026-10-30T08:59:17.570686+09:00",
+          "collected_at": "2026-10-30T08:59:17.570686+09:00",
+          "value": "1338.5",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-30T09:58:46+09:00",
+          "available_at": "2026-10-30T09:59:22.254418+09:00",
+          "collected_at": "2026-10-30T09:59:22.254418+09:00",
+          "value": "1338.9",
+          "frequency": "SNAPSHOT"
+        },
+        {
+          "source": "TOSS_EXCHANGE_RATE",
+          "event_at": "2026-10-30T10:08:46+09:00",
+          "available_at": "2026-10-30T10:09:52.727661+09:00",
+          "collected_at": "2026-10-30T10:09:52.727661+09:00",
+          "value": "1339.35",
+          "frequency": "SNAPSHOT"
+        }
+      ],
+      "with_completed_run_evidence": 43,
+      "feature_availability_policy": "Legacy RAW macro times are cycle-start. Use completed MACRO_CONTEXT run finished_at as conservative available_at; missing run evidence => optional null."
+    },
+    "US_DJIA_PROXY": {
+      "rows": 47,
+      "time_order_violations": 0,
+      "usable_sample_available": 89108,
+      "observations": [
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-09-15T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "521.23",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-09-16T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "515.22",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-09-17T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "518.35",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-09-18T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "515.88",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-09-21T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "519.78",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-09-22T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "518",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-09-23T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "514.3",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-09-24T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "512.68",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-09-25T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "517.49",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-09-28T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "514.02",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-09-29T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "512.88",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-09-30T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "508.55",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-10-01T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "508.62",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-10-02T13:00:00+09:00",
+          "available_at": "2026-10-02T15:56:14.562586+09:00",
+          "collected_at": "2026-10-02T15:56:14.562586+09:00",
+          "value": "509.85",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-10-02T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "510.04",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-10-02T13:00:00+09:00",
+          "available_at": "2026-10-12T09:08:48.944458+09:00",
+          "collected_at": "2026-10-12T09:08:48.944458+09:00",
+          "value": "511.1",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-10-05T13:00:00+09:00",
+          "available_at": "2026-10-12T09:08:48.944458+09:00",
+          "collected_at": "2026-10-12T09:08:48.944458+09:00",
+          "value": "512.11",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-10-06T13:00:00+09:00",
+          "available_at": "2026-10-12T09:08:48.944458+09:00",
+          "collected_at": "2026-10-12T09:08:48.944458+09:00",
+          "value": "514.56",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-10-07T13:00:00+09:00",
+          "available_at": "2026-10-12T09:08:48.944458+09:00",
+          "collected_at": "2026-10-12T09:08:48.944458+09:00",
+          "value": "511.02",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-10-08T13:00:00+09:00",
+          "available_at": "2026-10-12T09:08:48.944458+09:00",
+          "collected_at": "2026-10-12T09:08:48.944458+09:00",
+          "value": "511.65",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-10-09T13:00:00+09:00",
+          "available_at": "2026-10-12T09:08:48.944458+09:00",
+          "collected_at": "2026-10-12T09:08:48.944458+09:00",
+          "value": "516.11",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-10-12T13:00:00+09:00",
+          "available_at": "2026-10-12T13:10:00.003244+09:00",
+          "collected_at": "2026-10-12T13:10:00.003244+09:00",
+          "value": "517.85",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-10-12T13:00:00+09:00",
+          "available_at": "2026-10-13T08:51:06.462420+09:00",
+          "collected_at": "2026-10-13T08:51:06.462420+09:00",
+          "value": "517.91",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-10-13T13:00:00+09:00",
+          "available_at": "2026-10-14T08:54:24.141422+09:00",
+          "collected_at": "2026-10-14T08:54:24.141422+09:00",
+          "value": "516.21",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-10-13T13:00:00+09:00",
+          "available_at": "2026-10-13T13:10:00.010754+09:00",
+          "collected_at": "2026-10-13T13:10:00.010754+09:00",
+          "value": "519.31",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-10-14T13:00:00+09:00",
+          "available_at": "2026-10-15T10:55:14.690714+09:00",
+          "collected_at": "2026-10-15T10:55:14.690714+09:00",
+          "value": "515.63",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-10-14T13:00:00+09:00",
+          "available_at": "2026-10-14T13:10:00.005243+09:00",
+          "collected_at": "2026-10-14T13:10:00.005243+09:00",
+          "value": "516.99",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-10-15T13:00:00+09:00",
+          "available_at": "2026-10-15T13:10:00.005022+09:00",
+          "collected_at": "2026-10-15T13:10:00.005022+09:00",
+          "value": "514.86",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-10-15T13:00:00+09:00",
+          "available_at": "2026-10-16T08:53:21.930702+09:00",
+          "collected_at": "2026-10-16T08:53:21.930702+09:00",
+          "value": "521.18",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-10-16T13:00:00+09:00",
+          "available_at": "2026-10-20T09:00:23.707481+09:00",
+          "collected_at": "2026-10-20T09:00:23.707481+09:00",
+          "value": "519.1",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-10-16T13:00:00+09:00",
+          "available_at": "2026-10-16T13:10:00.007631+09:00",
+          "collected_at": "2026-10-16T13:10:00.007631+09:00",
+          "value": "521.74",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-10-19T13:00:00+09:00",
+          "available_at": "2026-10-20T09:00:23.707481+09:00",
+          "collected_at": "2026-10-20T09:00:23.707481+09:00",
+          "value": "518.92",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-10-20T13:00:00+09:00",
+          "available_at": "2026-10-20T13:10:00.001277+09:00",
+          "collected_at": "2026-10-20T13:10:00.001277+09:00",
+          "value": "520.15",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-10-20T13:00:00+09:00",
+          "available_at": "2026-10-21T09:31:08.065986+09:00",
+          "collected_at": "2026-10-21T09:31:08.065986+09:00",
+          "value": "524.36",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-10-21T13:00:00+09:00",
+          "available_at": "2026-10-21T13:10:00.015783+09:00",
+          "collected_at": "2026-10-21T13:10:00.015783+09:00",
+          "value": "524.4",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-10-21T13:00:00+09:00",
+          "available_at": "2026-10-22T09:17:33.123274+09:00",
+          "collected_at": "2026-10-22T09:17:33.123274+09:00",
+          "value": "527.7",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-10-22T13:00:00+09:00",
+          "available_at": "2026-10-22T13:10:00.007276+09:00",
+          "collected_at": "2026-10-22T13:10:00.007276+09:00",
+          "value": "526.23",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-10-22T13:00:00+09:00",
+          "available_at": "2026-10-23T09:06:29.683607+09:00",
+          "collected_at": "2026-10-23T09:06:29.683607+09:00",
+          "value": "527.89",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-10-23T13:00:00+09:00",
+          "available_at": "2026-10-26T08:56:43.617233+09:00",
+          "collected_at": "2026-10-26T08:56:43.617233+09:00",
+          "value": "521.37",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-10-23T13:00:00+09:00",
+          "available_at": "2026-10-23T13:10:00.014155+09:00",
+          "collected_at": "2026-10-23T13:10:00.014155+09:00",
+          "value": "527.01",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-10-26T13:00:00+09:00",
+          "available_at": "2026-10-26T13:10:00.014471+09:00",
+          "collected_at": "2026-10-26T13:10:00.014471+09:00",
+          "value": "522.84",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-10-26T13:00:00+09:00",
+          "available_at": "2026-10-27T08:55:29.698971+09:00",
+          "collected_at": "2026-10-27T08:55:29.698971+09:00",
+          "value": "522.97",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-10-27T13:00:00+09:00",
+          "available_at": "2026-10-28T08:50:57.543721+09:00",
+          "collected_at": "2026-10-28T08:50:57.543721+09:00",
+          "value": "523.28",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-10-27T13:00:00+09:00",
+          "available_at": "2026-10-27T13:10:00.005587+09:00",
+          "collected_at": "2026-10-27T13:10:00.005587+09:00",
+          "value": "524.3",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-10-28T13:00:00+09:00",
+          "available_at": "2026-10-28T13:10:00.008136+09:00",
+          "collected_at": "2026-10-28T13:10:00.008136+09:00",
+          "value": "522.38",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-10-28T13:00:00+09:00",
+          "available_at": "2026-10-30T08:59:17.570686+09:00",
+          "collected_at": "2026-10-30T08:59:17.570686+09:00",
+          "value": "524.68",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:DIA",
+          "event_at": "2026-10-29T13:00:00+09:00",
+          "available_at": "2026-10-30T08:59:17.570686+09:00",
+          "collected_at": "2026-10-30T08:59:17.570686+09:00",
+          "value": "522.73",
+          "frequency": "DAILY"
+        }
+      ],
+      "with_completed_run_evidence": 47,
+      "feature_availability_policy": "Legacy RAW macro times are cycle-start. Use completed MACRO_CONTEXT run finished_at as conservative available_at; missing run evidence => optional null."
+    },
+    "US_NASDAQ100_PROXY": {
+      "rows": 57,
+      "time_order_violations": 0,
+      "usable_sample_available": 89108,
+      "observations": [
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-09-15T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "704.54",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-09-16T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "704.72",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-09-17T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "716.92",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-09-18T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "721.45",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-09-21T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "741.47",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-09-22T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "747.46",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-09-23T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "741.21",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-09-24T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "741.1",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-09-25T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "744.5",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-09-28T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "736.53",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-09-29T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "737.93",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-09-30T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "739.77",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-01T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "742.03",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-02T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "744.65",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-02T13:00:00+09:00",
+          "available_at": "2026-10-02T14:58:48.097654+09:00",
+          "collected_at": "2026-10-02T14:58:48.097654+09:00",
+          "value": "744.74",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-02T13:00:00+09:00",
+          "available_at": "2026-10-02T15:56:14.562586+09:00",
+          "collected_at": "2026-10-02T15:56:14.562586+09:00",
+          "value": "744.76",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-02T13:00:00+09:00",
+          "available_at": "2026-10-02T16:05:21.874494+09:00",
+          "collected_at": "2026-10-02T16:05:21.874494+09:00",
+          "value": "745.29",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-02T13:00:00+09:00",
+          "available_at": "2026-10-02T16:17:55.770745+09:00",
+          "collected_at": "2026-10-02T16:17:55.770745+09:00",
+          "value": "745.63",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-02T13:00:00+09:00",
+          "available_at": "2026-10-12T09:08:48.944458+09:00",
+          "collected_at": "2026-10-12T09:08:48.944458+09:00",
+          "value": "749.58",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-05T13:00:00+09:00",
+          "available_at": "2026-10-12T09:08:48.944458+09:00",
+          "collected_at": "2026-10-12T09:08:48.944458+09:00",
+          "value": "756.2",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-06T13:00:00+09:00",
+          "available_at": "2026-10-12T09:08:48.944458+09:00",
+          "collected_at": "2026-10-12T09:08:48.944458+09:00",
+          "value": "759.66",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-07T13:00:00+09:00",
+          "available_at": "2026-10-12T09:08:48.944458+09:00",
+          "collected_at": "2026-10-12T09:08:48.944458+09:00",
+          "value": "757.73",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-08T13:00:00+09:00",
+          "available_at": "2026-10-12T09:08:48.944458+09:00",
+          "collected_at": "2026-10-12T09:08:48.944458+09:00",
+          "value": "747.58",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-09T13:00:00+09:00",
+          "available_at": "2026-10-12T09:08:48.944458+09:00",
+          "collected_at": "2026-10-12T09:08:48.944458+09:00",
+          "value": "751.27",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-12T13:00:00+09:00",
+          "available_at": "2026-10-13T08:51:06.462420+09:00",
+          "collected_at": "2026-10-13T08:51:06.462420+09:00",
+          "value": "746.04",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-12T13:00:00+09:00",
+          "available_at": "2026-10-12T13:10:00.003244+09:00",
+          "collected_at": "2026-10-12T13:10:00.003244+09:00",
+          "value": "754.11",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-13T13:00:00+09:00",
+          "available_at": "2026-10-13T13:10:00.010754+09:00",
+          "collected_at": "2026-10-13T13:10:00.010754+09:00",
+          "value": "740.7",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-13T13:00:00+09:00",
+          "available_at": "2026-10-14T08:54:24.141422+09:00",
+          "collected_at": "2026-10-14T08:54:24.141422+09:00",
+          "value": "743.57",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-14T13:00:00+09:00",
+          "available_at": "2026-10-15T10:55:14.690714+09:00",
+          "collected_at": "2026-10-15T10:55:14.690714+09:00",
+          "value": "728.95",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-14T13:00:00+09:00",
+          "available_at": "2026-10-14T13:10:00.005243+09:00",
+          "collected_at": "2026-10-14T13:10:00.005243+09:00",
+          "value": "745.91",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-15T13:00:00+09:00",
+          "available_at": "2026-10-15T13:10:00.005022+09:00",
+          "collected_at": "2026-10-15T13:10:00.005022+09:00",
+          "value": "720.72",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-15T13:00:00+09:00",
+          "available_at": "2026-10-16T08:53:21.930702+09:00",
+          "collected_at": "2026-10-16T08:53:21.930702+09:00",
+          "value": "728",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-16T13:00:00+09:00",
+          "available_at": "2026-10-20T09:00:23.707481+09:00",
+          "collected_at": "2026-10-20T09:00:23.707481+09:00",
+          "value": "709.8",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-16T13:00:00+09:00",
+          "available_at": "2026-10-16T13:10:00.007631+09:00",
+          "collected_at": "2026-10-16T13:10:00.007631+09:00",
+          "value": "729.06",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-19T13:00:00+09:00",
+          "available_at": "2026-10-20T09:00:23.707481+09:00",
+          "collected_at": "2026-10-20T09:00:23.707481+09:00",
+          "value": "718.3",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-19T13:00:00+09:00",
+          "available_at": "2026-10-20T13:10:00.001277+09:00",
+          "collected_at": "2026-10-20T13:10:00.001277+09:00",
+          "value": "718.36",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-20T13:00:00+09:00",
+          "available_at": "2026-10-21T09:31:08.065986+09:00",
+          "collected_at": "2026-10-21T09:31:08.065986+09:00",
+          "value": "717.58",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-20T13:00:00+09:00",
+          "available_at": "2026-10-20T13:10:00.001277+09:00",
+          "collected_at": "2026-10-20T13:10:00.001277+09:00",
+          "value": "717.59",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-20T13:00:00+09:00",
+          "available_at": "2026-10-21T13:10:00.015783+09:00",
+          "collected_at": "2026-10-21T13:10:00.015783+09:00",
+          "value": "717.63",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-21T13:00:00+09:00",
+          "available_at": "2026-10-21T13:10:00.015783+09:00",
+          "collected_at": "2026-10-21T13:10:00.015783+09:00",
+          "value": "723.21",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-21T13:00:00+09:00",
+          "available_at": "2026-10-22T13:10:00.007276+09:00",
+          "collected_at": "2026-10-22T13:10:00.007276+09:00",
+          "value": "725.2",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-21T13:00:00+09:00",
+          "available_at": "2026-10-22T09:17:33.123274+09:00",
+          "collected_at": "2026-10-22T09:17:33.123274+09:00",
+          "value": "725.24",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-22T13:00:00+09:00",
+          "available_at": "2026-10-23T09:06:29.683607+09:00",
+          "collected_at": "2026-10-23T09:06:29.683607+09:00",
+          "value": "704.46",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-22T13:00:00+09:00",
+          "available_at": "2026-10-23T13:10:00.014155+09:00",
+          "collected_at": "2026-10-23T13:10:00.014155+09:00",
+          "value": "704.47",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-22T13:00:00+09:00",
+          "available_at": "2026-10-22T13:10:00.007276+09:00",
+          "collected_at": "2026-10-22T13:10:00.007276+09:00",
+          "value": "716.34",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-23T13:00:00+09:00",
+          "available_at": "2026-10-26T08:56:43.617233+09:00",
+          "collected_at": "2026-10-26T08:56:43.617233+09:00",
+          "value": "704.4",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-23T13:00:00+09:00",
+          "available_at": "2026-10-23T13:10:00.014155+09:00",
+          "collected_at": "2026-10-23T13:10:00.014155+09:00",
+          "value": "705.7",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-26T13:00:00+09:00",
+          "available_at": "2026-10-26T13:10:00.014471+09:00",
+          "collected_at": "2026-10-26T13:10:00.014471+09:00",
+          "value": "704.2",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-26T13:00:00+09:00",
+          "available_at": "2026-10-27T08:55:29.698971+09:00",
+          "collected_at": "2026-10-27T08:55:29.698971+09:00",
+          "value": "712.17",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-26T13:00:00+09:00",
+          "available_at": "2026-10-27T13:10:00.005587+09:00",
+          "collected_at": "2026-10-27T13:10:00.005587+09:00",
+          "value": "712.2",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-27T13:00:00+09:00",
+          "available_at": "2026-10-27T13:10:00.005587+09:00",
+          "collected_at": "2026-10-27T13:10:00.005587+09:00",
+          "value": "711.89",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-27T13:00:00+09:00",
+          "available_at": "2026-10-28T08:50:57.543721+09:00",
+          "collected_at": "2026-10-28T08:50:57.543721+09:00",
+          "value": "721.2",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-27T13:00:00+09:00",
+          "available_at": "2026-10-28T13:10:00.008136+09:00",
+          "collected_at": "2026-10-28T13:10:00.008136+09:00",
+          "value": "721.25",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-28T13:00:00+09:00",
+          "available_at": "2026-10-28T13:10:00.008136+09:00",
+          "collected_at": "2026-10-28T13:10:00.008136+09:00",
+          "value": "724.18",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-28T13:00:00+09:00",
+          "available_at": "2026-10-30T08:59:17.570686+09:00",
+          "collected_at": "2026-10-30T08:59:17.570686+09:00",
+          "value": "725.61",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-29T13:00:00+09:00",
+          "available_at": "2026-10-30T09:59:22.254418+09:00",
+          "collected_at": "2026-10-30T09:59:22.254418+09:00",
+          "value": "715.34",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:QQQ",
+          "event_at": "2026-10-29T13:00:00+09:00",
+          "available_at": "2026-10-30T08:59:17.570686+09:00",
+          "collected_at": "2026-10-30T08:59:17.570686+09:00",
+          "value": "715.42",
+          "frequency": "DAILY"
+        }
+      ],
+      "with_completed_run_evidence": 57,
+      "feature_availability_policy": "Legacy RAW macro times are cycle-start. Use completed MACRO_CONTEXT run finished_at as conservative available_at; missing run evidence => optional null."
+    },
+    "US_SP500_PROXY": {
+      "rows": 50,
+      "time_order_violations": 0,
+      "usable_sample_available": 89108,
+      "observations": [
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-09-15T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "757.39",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-09-16T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "754.05",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-09-17T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "762.6",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-09-18T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "761.69",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-09-21T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "773.5",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-09-22T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "773.38",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-09-23T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "767.81",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-09-24T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "767.18",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-09-25T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "771.35",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-09-28T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "765.61",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-09-29T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "764.2",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-09-30T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "762.63",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-10-01T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "763.99",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-10-02T13:00:00+09:00",
+          "available_at": "2026-10-02T15:56:14.562586+09:00",
+          "collected_at": "2026-10-02T15:56:14.562586+09:00",
+          "value": "766.02",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-10-02T13:00:00+09:00",
+          "available_at": "2026-10-02T16:05:21.874494+09:00",
+          "collected_at": "2026-10-02T16:05:21.874494+09:00",
+          "value": "766.07",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-10-02T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "766.1",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-10-02T13:00:00+09:00",
+          "available_at": "2026-10-02T14:58:48.097654+09:00",
+          "collected_at": "2026-10-02T14:58:48.097654+09:00",
+          "value": "766.11",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-10-02T13:00:00+09:00",
+          "available_at": "2026-10-02T16:17:55.770745+09:00",
+          "collected_at": "2026-10-02T16:17:55.770745+09:00",
+          "value": "766.27",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-10-02T13:00:00+09:00",
+          "available_at": "2026-10-12T09:08:48.944458+09:00",
+          "collected_at": "2026-10-12T09:08:48.944458+09:00",
+          "value": "769.64",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-10-05T13:00:00+09:00",
+          "available_at": "2026-10-12T09:08:48.944458+09:00",
+          "collected_at": "2026-10-12T09:08:48.944458+09:00",
+          "value": "774.83",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-10-06T13:00:00+09:00",
+          "available_at": "2026-10-12T09:08:48.944458+09:00",
+          "collected_at": "2026-10-12T09:08:48.944458+09:00",
+          "value": "779.09",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-10-07T13:00:00+09:00",
+          "available_at": "2026-10-12T09:08:48.944458+09:00",
+          "collected_at": "2026-10-12T09:08:48.944458+09:00",
+          "value": "777.22",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-10-08T13:00:00+09:00",
+          "available_at": "2026-10-12T09:08:48.944458+09:00",
+          "collected_at": "2026-10-12T09:08:48.944458+09:00",
+          "value": "773.93",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-10-09T13:00:00+09:00",
+          "available_at": "2026-10-12T09:08:48.944458+09:00",
+          "collected_at": "2026-10-12T09:08:48.944458+09:00",
+          "value": "778.57",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-10-12T13:00:00+09:00",
+          "available_at": "2026-10-13T08:51:06.462420+09:00",
+          "collected_at": "2026-10-13T08:51:06.462420+09:00",
+          "value": "778.1",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-10-12T13:00:00+09:00",
+          "available_at": "2026-10-12T13:10:00.003244+09:00",
+          "collected_at": "2026-10-12T13:10:00.003244+09:00",
+          "value": "780.89",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-10-13T13:00:00+09:00",
+          "available_at": "2026-10-13T13:10:00.010754+09:00",
+          "collected_at": "2026-10-13T13:10:00.010754+09:00",
+          "value": "777.09",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-10-13T13:00:00+09:00",
+          "available_at": "2026-10-14T08:54:24.141422+09:00",
+          "collected_at": "2026-10-14T08:54:24.141422+09:00",
+          "value": "778.01",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-10-14T13:00:00+09:00",
+          "available_at": "2026-10-15T10:55:14.690714+09:00",
+          "collected_at": "2026-10-15T10:55:14.690714+09:00",
+          "value": "769.6",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-10-14T13:00:00+09:00",
+          "available_at": "2026-10-14T13:10:00.005243+09:00",
+          "collected_at": "2026-10-14T13:10:00.005243+09:00",
+          "value": "779.87",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-10-15T13:00:00+09:00",
+          "available_at": "2026-10-15T13:10:00.005022+09:00",
+          "collected_at": "2026-10-15T13:10:00.005022+09:00",
+          "value": "765.83",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-10-15T13:00:00+09:00",
+          "available_at": "2026-10-16T08:53:21.930702+09:00",
+          "collected_at": "2026-10-16T08:53:21.930702+09:00",
+          "value": "771.79",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-10-16T13:00:00+09:00",
+          "available_at": "2026-10-20T09:00:23.707481+09:00",
+          "collected_at": "2026-10-20T09:00:23.707481+09:00",
+          "value": "763.25",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-10-16T13:00:00+09:00",
+          "available_at": "2026-10-16T13:10:00.007631+09:00",
+          "collected_at": "2026-10-16T13:10:00.007631+09:00",
+          "value": "772.7",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-10-19T13:00:00+09:00",
+          "available_at": "2026-10-20T09:00:23.707481+09:00",
+          "collected_at": "2026-10-20T09:00:23.707481+09:00",
+          "value": "766.48",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-10-20T13:00:00+09:00",
+          "available_at": "2026-10-20T13:10:00.001277+09:00",
+          "collected_at": "2026-10-20T13:10:00.001277+09:00",
+          "value": "767.25",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-10-20T13:00:00+09:00",
+          "available_at": "2026-10-21T09:31:08.065986+09:00",
+          "collected_at": "2026-10-21T09:31:08.065986+09:00",
+          "value": "769.05",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-10-21T13:00:00+09:00",
+          "available_at": "2026-10-21T13:10:00.015783+09:00",
+          "collected_at": "2026-10-21T13:10:00.015783+09:00",
+          "value": "771.1",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-10-21T13:00:00+09:00",
+          "available_at": "2026-10-22T09:17:33.123274+09:00",
+          "collected_at": "2026-10-22T09:17:33.123274+09:00",
+          "value": "773.09",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-10-22T13:00:00+09:00",
+          "available_at": "2026-10-23T09:06:29.683607+09:00",
+          "collected_at": "2026-10-23T09:06:29.683607+09:00",
+          "value": "763.96",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-10-22T13:00:00+09:00",
+          "available_at": "2026-10-22T13:10:00.007276+09:00",
+          "collected_at": "2026-10-22T13:10:00.007276+09:00",
+          "value": "768.4",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-10-23T13:00:00+09:00",
+          "available_at": "2026-10-26T08:56:43.617233+09:00",
+          "collected_at": "2026-10-26T08:56:43.617233+09:00",
+          "value": "759.97",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-10-23T13:00:00+09:00",
+          "available_at": "2026-10-23T13:10:00.014155+09:00",
+          "collected_at": "2026-10-23T13:10:00.014155+09:00",
+          "value": "763.94",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-10-26T13:00:00+09:00",
+          "available_at": "2026-10-26T13:10:00.014471+09:00",
+          "collected_at": "2026-10-26T13:10:00.014471+09:00",
+          "value": "760.93",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-10-26T13:00:00+09:00",
+          "available_at": "2026-10-27T08:55:29.698971+09:00",
+          "collected_at": "2026-10-27T08:55:29.698971+09:00",
+          "value": "765.37",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-10-27T13:00:00+09:00",
+          "available_at": "2026-10-27T13:10:00.005587+09:00",
+          "collected_at": "2026-10-27T13:10:00.005587+09:00",
+          "value": "766.33",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-10-27T13:00:00+09:00",
+          "available_at": "2026-10-28T08:50:57.543721+09:00",
+          "collected_at": "2026-10-28T08:50:57.543721+09:00",
+          "value": "769.66",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-10-28T13:00:00+09:00",
+          "available_at": "2026-10-28T13:10:00.008136+09:00",
+          "collected_at": "2026-10-28T13:10:00.008136+09:00",
+          "value": "770.27",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-10-28T13:00:00+09:00",
+          "available_at": "2026-10-30T08:59:17.570686+09:00",
+          "collected_at": "2026-10-30T08:59:17.570686+09:00",
+          "value": "772.31",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:SPY",
+          "event_at": "2026-10-29T13:00:00+09:00",
+          "available_at": "2026-10-30T08:59:17.570686+09:00",
+          "collected_at": "2026-10-30T08:59:17.570686+09:00",
+          "value": "769.36",
+          "frequency": "DAILY"
+        }
+      ],
+      "with_completed_run_evidence": 50,
+      "feature_availability_policy": "Legacy RAW macro times are cycle-start. Use completed MACRO_CONTEXT run finished_at as conservative available_at; missing run evidence => optional null."
+    },
+    "US_TREASURY_7_10Y_PROXY": {
+      "rows": 51,
+      "time_order_violations": 0,
+      "usable_sample_available": 89108,
+      "observations": [
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-09-15T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "90.82",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-09-16T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "90.73",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-09-17T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "91.25",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-09-18T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "90.8",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-09-21T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "91.15",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-09-22T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "91.16",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-09-23T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "90.19",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-09-24T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "89.69",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-09-25T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "90",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-09-28T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "89.53",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-09-29T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "89.45",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-09-30T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "89.31",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-10-01T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "89.3",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-10-02T13:00:00+09:00",
+          "available_at": "2026-10-12T09:08:48.944458+09:00",
+          "collected_at": "2026-10-12T09:08:48.944458+09:00",
+          "value": "89.05",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-10-02T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "89.23",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-10-02T13:00:00+09:00",
+          "available_at": "2026-10-02T15:56:14.562586+09:00",
+          "collected_at": "2026-10-02T15:56:14.562586+09:00",
+          "value": "89.36",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-10-05T13:00:00+09:00",
+          "available_at": "2026-10-12T09:08:48.944458+09:00",
+          "collected_at": "2026-10-12T09:08:48.944458+09:00",
+          "value": "88.92",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-10-06T13:00:00+09:00",
+          "available_at": "2026-10-12T09:08:48.944458+09:00",
+          "collected_at": "2026-10-12T09:08:48.944458+09:00",
+          "value": "89.125",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-10-07T13:00:00+09:00",
+          "available_at": "2026-10-12T09:08:48.944458+09:00",
+          "collected_at": "2026-10-12T09:08:48.944458+09:00",
+          "value": "89.11",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-10-08T13:00:00+09:00",
+          "available_at": "2026-10-12T09:08:48.944458+09:00",
+          "collected_at": "2026-10-12T09:08:48.944458+09:00",
+          "value": "89.45",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-10-09T13:00:00+09:00",
+          "available_at": "2026-10-12T09:08:48.944458+09:00",
+          "collected_at": "2026-10-12T09:08:48.944458+09:00",
+          "value": "89.4",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-10-12T13:00:00+09:00",
+          "available_at": "2026-10-13T08:51:06.462420+09:00",
+          "collected_at": "2026-10-13T08:51:06.462420+09:00",
+          "value": "89.43",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-10-12T13:00:00+09:00",
+          "available_at": "2026-10-12T13:10:00.003244+09:00",
+          "collected_at": "2026-10-12T13:10:00.003244+09:00",
+          "value": "89.65",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-10-13T13:00:00+09:00",
+          "available_at": "2026-10-14T08:54:24.141422+09:00",
+          "collected_at": "2026-10-14T08:54:24.141422+09:00",
+          "value": "89.54",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-10-13T13:00:00+09:00",
+          "available_at": "2026-10-13T13:10:00.010754+09:00",
+          "collected_at": "2026-10-13T13:10:00.010754+09:00",
+          "value": "89.64",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-10-14T13:00:00+09:00",
+          "available_at": "2026-10-14T13:10:00.005243+09:00",
+          "collected_at": "2026-10-14T13:10:00.005243+09:00",
+          "value": "89.62",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-10-14T13:00:00+09:00",
+          "available_at": "2026-10-15T10:55:14.690714+09:00",
+          "collected_at": "2026-10-15T10:55:14.690714+09:00",
+          "value": "89.71",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-10-15T13:00:00+09:00",
+          "available_at": "2026-10-15T13:10:00.005022+09:00",
+          "collected_at": "2026-10-15T13:10:00.005022+09:00",
+          "value": "90.23",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-10-15T13:00:00+09:00",
+          "available_at": "2026-10-16T08:53:21.930702+09:00",
+          "collected_at": "2026-10-16T08:53:21.930702+09:00",
+          "value": "90.35",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-10-16T13:00:00+09:00",
+          "available_at": "2026-10-20T09:00:23.707481+09:00",
+          "collected_at": "2026-10-20T09:00:23.707481+09:00",
+          "value": "90.42",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-10-16T13:00:00+09:00",
+          "available_at": "2026-10-16T13:10:00.007631+09:00",
+          "collected_at": "2026-10-16T13:10:00.007631+09:00",
+          "value": "90.47",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-10-19T13:00:00+09:00",
+          "available_at": "2026-10-20T09:00:23.707481+09:00",
+          "collected_at": "2026-10-20T09:00:23.707481+09:00",
+          "value": "90.08",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-10-20T13:00:00+09:00",
+          "available_at": "2026-10-20T13:10:00.001277+09:00",
+          "collected_at": "2026-10-20T13:10:00.001277+09:00",
+          "value": "90.12",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-10-20T13:00:00+09:00",
+          "available_at": "2026-10-21T09:31:08.065986+09:00",
+          "collected_at": "2026-10-21T09:31:08.065986+09:00",
+          "value": "90.23",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-10-20T13:00:00+09:00",
+          "available_at": "2026-10-21T13:10:00.015783+09:00",
+          "collected_at": "2026-10-21T13:10:00.015783+09:00",
+          "value": "90.25",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-10-21T13:00:00+09:00",
+          "available_at": "2026-10-21T13:10:00.015783+09:00",
+          "collected_at": "2026-10-21T13:10:00.015783+09:00",
+          "value": "90.15",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-10-21T13:00:00+09:00",
+          "available_at": "2026-10-22T09:17:33.123274+09:00",
+          "collected_at": "2026-10-22T09:17:33.123274+09:00",
+          "value": "90.22",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-10-21T13:00:00+09:00",
+          "available_at": "2026-10-22T13:10:00.007276+09:00",
+          "collected_at": "2026-10-22T13:10:00.007276+09:00",
+          "value": "90.23",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-10-22T13:00:00+09:00",
+          "available_at": "2026-10-22T13:10:00.007276+09:00",
+          "collected_at": "2026-10-22T13:10:00.007276+09:00",
+          "value": "90.43",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-10-22T13:00:00+09:00",
+          "available_at": "2026-10-23T09:06:29.683607+09:00",
+          "collected_at": "2026-10-23T09:06:29.683607+09:00",
+          "value": "91.2",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-10-23T13:00:00+09:00",
+          "available_at": "2026-10-26T08:56:43.617233+09:00",
+          "collected_at": "2026-10-26T08:56:43.617233+09:00",
+          "value": "91.05",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-10-23T13:00:00+09:00",
+          "available_at": "2026-10-23T13:10:00.014155+09:00",
+          "collected_at": "2026-10-23T13:10:00.014155+09:00",
+          "value": "91.29",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-10-26T13:00:00+09:00",
+          "available_at": "2026-10-27T08:55:29.698971+09:00",
+          "collected_at": "2026-10-27T08:55:29.698971+09:00",
+          "value": "91.12",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-10-26T13:00:00+09:00",
+          "available_at": "2026-10-26T13:10:00.014471+09:00",
+          "collected_at": "2026-10-26T13:10:00.014471+09:00",
+          "value": "91.34",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-10-27T13:00:00+09:00",
+          "available_at": "2026-10-28T08:50:57.543721+09:00",
+          "collected_at": "2026-10-28T08:50:57.543721+09:00",
+          "value": "91.09",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-10-27T13:00:00+09:00",
+          "available_at": "2026-10-28T13:10:00.008136+09:00",
+          "collected_at": "2026-10-28T13:10:00.008136+09:00",
+          "value": "91.1",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-10-27T13:00:00+09:00",
+          "available_at": "2026-10-27T13:10:00.005587+09:00",
+          "collected_at": "2026-10-27T13:10:00.005587+09:00",
+          "value": "91.2",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-10-28T13:00:00+09:00",
+          "available_at": "2026-10-30T08:59:17.570686+09:00",
+          "collected_at": "2026-10-30T08:59:17.570686+09:00",
+          "value": "90.85",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-10-28T13:00:00+09:00",
+          "available_at": "2026-10-28T13:10:00.008136+09:00",
+          "collected_at": "2026-10-28T13:10:00.008136+09:00",
+          "value": "90.98",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-10-29T13:00:00+09:00",
+          "available_at": "2026-10-30T08:59:17.570686+09:00",
+          "collected_at": "2026-10-30T08:59:17.570686+09:00",
+          "value": "91.24",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:IEF",
+          "event_at": "2026-10-29T13:00:00+09:00",
+          "available_at": "2026-10-30T09:59:22.254418+09:00",
+          "collected_at": "2026-10-30T09:59:22.254418+09:00",
+          "value": "91.25",
+          "frequency": "DAILY"
+        }
+      ],
+      "with_completed_run_evidence": 51,
+      "feature_availability_policy": "Legacy RAW macro times are cycle-start. Use completed MACRO_CONTEXT run finished_at as conservative available_at; missing run evidence => optional null."
+    },
+    "US_VOLATILITY_PROXY": {
+      "rows": 55,
+      "time_order_violations": 0,
+      "usable_sample_available": 89108,
+      "observations": [
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-09-15T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "17.53",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-09-16T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "17.67",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-09-17T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "16.98",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-09-18T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "17.09",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-09-21T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "16.94",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-09-22T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "16.48",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-09-23T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "16.79",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-09-24T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "16.9",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-09-25T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "16.61",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-09-28T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "16.79",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-09-29T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "16.68",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-09-30T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "16.94",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-01T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "17.08",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-02T13:00:00+09:00",
+          "available_at": "2026-10-12T09:08:48.944458+09:00",
+          "collected_at": "2026-10-12T09:08:48.944458+09:00",
+          "value": "16.72",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-02T13:00:00+09:00",
+          "available_at": "2026-10-02T16:05:21.874494+09:00",
+          "collected_at": "2026-10-02T16:05:21.874494+09:00",
+          "value": "16.83",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-02T13:00:00+09:00",
+          "available_at": "2026-10-02T15:56:14.562586+09:00",
+          "collected_at": "2026-10-02T15:56:14.562586+09:00",
+          "value": "16.87",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-02T13:00:00+09:00",
+          "available_at": "2026-10-02T14:55:47.466224+09:00",
+          "collected_at": "2026-10-02T14:55:47.466224+09:00",
+          "value": "16.88",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-05T13:00:00+09:00",
+          "available_at": "2026-10-12T09:08:48.944458+09:00",
+          "collected_at": "2026-10-12T09:08:48.944458+09:00",
+          "value": "16.54",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-06T13:00:00+09:00",
+          "available_at": "2026-10-12T09:08:48.944458+09:00",
+          "collected_at": "2026-10-12T09:08:48.944458+09:00",
+          "value": "16.1",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-07T13:00:00+09:00",
+          "available_at": "2026-10-12T09:08:48.944458+09:00",
+          "collected_at": "2026-10-12T09:08:48.944458+09:00",
+          "value": "16.19",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-08T13:00:00+09:00",
+          "available_at": "2026-10-12T09:08:48.944458+09:00",
+          "collected_at": "2026-10-12T09:08:48.944458+09:00",
+          "value": "16.5",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-09T13:00:00+09:00",
+          "available_at": "2026-10-12T09:08:48.944458+09:00",
+          "collected_at": "2026-10-12T09:08:48.944458+09:00",
+          "value": "16.3",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-12T13:00:00+09:00",
+          "available_at": "2026-10-13T08:51:06.462420+09:00",
+          "collected_at": "2026-10-13T08:51:06.462420+09:00",
+          "value": "16.04",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-12T13:00:00+09:00",
+          "available_at": "2026-10-12T13:10:00.003244+09:00",
+          "collected_at": "2026-10-12T13:10:00.003244+09:00",
+          "value": "16.23",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-13T13:00:00+09:00",
+          "available_at": "2026-10-14T08:54:24.141422+09:00",
+          "collected_at": "2026-10-14T08:54:24.141422+09:00",
+          "value": "16.02",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-13T13:00:00+09:00",
+          "available_at": "2026-10-13T13:10:00.010754+09:00",
+          "collected_at": "2026-10-13T13:10:00.010754+09:00",
+          "value": "16.12",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-14T13:00:00+09:00",
+          "available_at": "2026-10-14T13:10:00.005243+09:00",
+          "collected_at": "2026-10-14T13:10:00.005243+09:00",
+          "value": "15.92",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-14T13:00:00+09:00",
+          "available_at": "2026-10-15T10:55:14.690714+09:00",
+          "collected_at": "2026-10-15T10:55:14.690714+09:00",
+          "value": "16.53",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-15T13:00:00+09:00",
+          "available_at": "2026-10-16T08:53:21.930702+09:00",
+          "collected_at": "2026-10-16T08:53:21.930702+09:00",
+          "value": "16.4",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-15T13:00:00+09:00",
+          "available_at": "2026-10-15T13:10:00.005022+09:00",
+          "collected_at": "2026-10-15T13:10:00.005022+09:00",
+          "value": "17.08",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-16T13:00:00+09:00",
+          "available_at": "2026-10-16T13:10:00.007631+09:00",
+          "collected_at": "2026-10-16T13:10:00.007631+09:00",
+          "value": "16.36",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-16T13:00:00+09:00",
+          "available_at": "2026-10-20T09:00:23.707481+09:00",
+          "collected_at": "2026-10-20T09:00:23.707481+09:00",
+          "value": "17.73",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-19T13:00:00+09:00",
+          "available_at": "2026-10-20T13:10:00.001277+09:00",
+          "collected_at": "2026-10-20T13:10:00.001277+09:00",
+          "value": "17.01",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-19T13:00:00+09:00",
+          "available_at": "2026-10-20T09:00:23.707481+09:00",
+          "collected_at": "2026-10-20T09:00:23.707481+09:00",
+          "value": "17.05",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-20T13:00:00+09:00",
+          "available_at": "2026-10-21T09:31:08.065986+09:00",
+          "collected_at": "2026-10-21T09:31:08.065986+09:00",
+          "value": "16.41",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-20T13:00:00+09:00",
+          "available_at": "2026-10-21T13:10:00.015783+09:00",
+          "collected_at": "2026-10-21T13:10:00.015783+09:00",
+          "value": "16.86",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-20T13:00:00+09:00",
+          "available_at": "2026-10-20T13:10:00.001277+09:00",
+          "collected_at": "2026-10-20T13:10:00.001277+09:00",
+          "value": "17.17",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-21T13:00:00+09:00",
+          "available_at": "2026-10-22T13:10:00.007276+09:00",
+          "collected_at": "2026-10-22T13:10:00.007276+09:00",
+          "value": "16.65",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-21T13:00:00+09:00",
+          "available_at": "2026-10-22T09:17:33.123274+09:00",
+          "collected_at": "2026-10-22T09:17:33.123274+09:00",
+          "value": "16.68",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-21T13:00:00+09:00",
+          "available_at": "2026-10-21T13:10:00.015783+09:00",
+          "collected_at": "2026-10-21T13:10:00.015783+09:00",
+          "value": "16.78",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-22T13:00:00+09:00",
+          "available_at": "2026-10-22T13:10:00.007276+09:00",
+          "collected_at": "2026-10-22T13:10:00.007276+09:00",
+          "value": "17.11",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-22T13:00:00+09:00",
+          "available_at": "2026-10-23T09:06:29.683607+09:00",
+          "collected_at": "2026-10-23T09:06:29.683607+09:00",
+          "value": "17.47",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-22T13:00:00+09:00",
+          "available_at": "2026-10-23T13:10:00.014155+09:00",
+          "collected_at": "2026-10-23T13:10:00.014155+09:00",
+          "value": "17.7",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-23T13:00:00+09:00",
+          "available_at": "2026-10-23T13:10:00.014155+09:00",
+          "collected_at": "2026-10-23T13:10:00.014155+09:00",
+          "value": "17.7",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-23T13:00:00+09:00",
+          "available_at": "2026-10-26T08:56:43.617233+09:00",
+          "collected_at": "2026-10-26T08:56:43.617233+09:00",
+          "value": "17.92",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-26T13:00:00+09:00",
+          "available_at": "2026-10-27T08:55:29.698971+09:00",
+          "collected_at": "2026-10-27T08:55:29.698971+09:00",
+          "value": "17.47",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-26T13:00:00+09:00",
+          "available_at": "2026-10-27T13:10:00.005587+09:00",
+          "collected_at": "2026-10-27T13:10:00.005587+09:00",
+          "value": "17.56",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-26T13:00:00+09:00",
+          "available_at": "2026-10-26T13:10:00.014471+09:00",
+          "collected_at": "2026-10-26T13:10:00.014471+09:00",
+          "value": "17.92",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-27T13:00:00+09:00",
+          "available_at": "2026-10-28T08:50:57.543721+09:00",
+          "collected_at": "2026-10-28T08:50:57.543721+09:00",
+          "value": "17.33",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-27T13:00:00+09:00",
+          "available_at": "2026-10-28T13:10:00.008136+09:00",
+          "collected_at": "2026-10-28T13:10:00.008136+09:00",
+          "value": "17.39",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-27T13:00:00+09:00",
+          "available_at": "2026-10-27T13:10:00.005587+09:00",
+          "collected_at": "2026-10-27T13:10:00.005587+09:00",
+          "value": "17.56",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-28T13:00:00+09:00",
+          "available_at": "2026-10-30T08:59:17.570686+09:00",
+          "collected_at": "2026-10-30T08:59:17.570686+09:00",
+          "value": "17.02",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-28T13:00:00+09:00",
+          "available_at": "2026-10-28T13:10:00.008136+09:00",
+          "collected_at": "2026-10-28T13:10:00.008136+09:00",
+          "value": "17.4",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-29T13:00:00+09:00",
+          "available_at": "2026-10-30T08:59:17.570686+09:00",
+          "collected_at": "2026-10-30T08:59:17.570686+09:00",
+          "value": "16.51",
+          "frequency": "DAILY"
+        },
+        {
+          "source": "TOSS_US_PROXY:VIXY",
+          "event_at": "2026-10-29T13:00:00+09:00",
+          "available_at": "2026-10-30T09:59:22.254418+09:00",
+          "collected_at": "2026-10-30T09:59:22.254418+09:00",
+          "value": "16.66",
+          "frequency": "DAILY"
+        }
+      ],
+      "with_completed_run_evidence": 55,
+      "feature_availability_policy": "Legacy RAW macro times are cycle-start. Use completed MACRO_CONTEXT run finished_at as conservative available_at; missing run evidence => optional null."
+    }
+  },
+  "decisions": {
+    "rows": 87681,
+    "null_counts": {
+      "strategy_id": 0,
+      "strategy_name": 0,
+      "symbol": 0,
+      "candle_event_at": 0,
+      "decision_at": 0,
+      "available_at": 0,
+      "action": 0,
+      "reason": 0,
+      "price": 0,
+      "short_average": 12178,
+      "long_average": 12178,
+      "trend": 0,
+      "previous_trend": 13123,
+      "history_count": 0,
+      "entry_armed": 0,
+      "confirmation_count": 0,
+      "strategy_quantity": 0,
+      "cash": 0,
+      "total_asset": 0
+    },
+    "actions": {
+      "WAIT": 66117,
+      "BUY_FILLED": 243,
+      "BUY_BLOCKED": 8960,
+      "SELL_FILLED": 183,
+      "DATA_WAIT": 12178
+    },
+    "time_order_violations": 0,
+    "missing_candle_links": 1640,
+    "baseline_buy_candidate": "UNAVAILABLE: action does not safely reconstruct pre-risk BUY candidate; no behavior labels"
+  },
+  "by_date": [
+    {
+      "market_date": "2026-10-02",
+      "raw_rows": 2376,
+      "candidate_samples": 8602,
+      "usable_samples": 600,
+      "excluded_samples": 8002,
+      "usable_ratio": 0.06975122064636131,
+      "exclusion_reason_counts": {
+        "MISSING_KOSDAQ": 7992,
+        "MISSING_KOSPI": 7992,
+        "MISSING_LOOKBACK": 6652,
+        "MISSING_STOCK_DATA": 6226,
+        "UNVERIFIED_GAP": 6652,
+        "LATE_LOOKBACK_DATA": 190
+      }
+    },
+    {
+      "market_date": "2026-10-08",
+      "raw_rows": 19,
+      "candidate_samples": 8621,
+      "usable_samples": 0,
+      "excluded_samples": 8621,
+      "usable_ratio": 0.0,
+      "exclusion_reason_counts": {
+        "MISSING_KOSDAQ": 8621,
+        "MISSING_KOSPI": 8621,
+        "MISSING_LOOKBACK": 8621,
+        "MISSING_STOCK_DATA": 8602,
+        "UNVERIFIED_GAP": 8602,
+        "LATE_LOOKBACK_DATA": 41,
+        "OUTSIDE_SESSION": 19
+      }
+    },
+    {
+      "market_date": "2026-10-12",
+      "raw_rows": 8769,
+      "candidate_samples": 8773,
+      "usable_samples": 7316,
+      "excluded_samples": 1457,
+      "usable_ratio": 0.833922261484099,
+      "exclusion_reason_counts": {
+        "LATE_LOOKBACK_DATA": 718,
+        "MISSING_KOSDAQ": 700,
+        "MISSING_KOSPI": 700,
+        "MISSING_LOOKBACK": 1033,
+        "OUTSIDE_SESSION": 171,
+        "MISSING_STOCK_DATA": 4,
+        "UNVERIFIED_GAP": 160
+      }
+    },
+    {
+      "market_date": "2026-10-13",
+      "raw_rows": 8976,
+      "candidate_samples": 8980,
+      "usable_samples": 7718,
+      "excluded_samples": 1262,
+      "usable_ratio": 0.8594654788418709,
+      "exclusion_reason_counts": {
+        "LATE_LOOKBACK_DATA": 346,
+        "MISSING_KOSDAQ": 840,
+        "MISSING_KOSPI": 840,
+        "MISSING_LOOKBACK": 1240,
+        "OUTSIDE_SESSION": 378,
+        "MISSING_STOCK_DATA": 4,
+        "UNVERIFIED_GAP": 160
+      }
+    },
+    {
+      "market_date": "2026-10-14",
+      "raw_rows": 8904,
+      "candidate_samples": 8908,
+      "usable_samples": 7718,
+      "excluded_samples": 1190,
+      "usable_ratio": 0.8664122137404581,
+      "exclusion_reason_counts": {
+        "LATE_LOOKBACK_DATA": 274,
+        "MISSING_KOSDAQ": 768,
+        "MISSING_KOSPI": 768,
+        "MISSING_LOOKBACK": 1168,
+        "OUTSIDE_SESSION": 306,
+        "MISSING_STOCK_DATA": 4,
+        "UNVERIFIED_GAP": 160
+      }
+    },
+    {
+      "market_date": "2026-10-15",
+      "raw_rows": 8670,
+      "candidate_samples": 8674,
+      "usable_samples": 5566,
+      "excluded_samples": 3108,
+      "usable_ratio": 0.6416878026285451,
+      "exclusion_reason_counts": {
+        "LATE_LOOKBACK_DATA": 3104,
+        "MISSING_KOSDAQ": 2668,
+        "MISSING_KOSPI": 2668,
+        "MISSING_LOOKBACK": 934,
+        "MISSING_STOCK_DATA": 4,
+        "OUTSIDE_SESSION": 72
+      }
+    },
+    {
+      "market_date": "2026-10-16",
+      "raw_rows": 8901,
+      "candidate_samples": 8905,
+      "usable_samples": 6596,
+      "excluded_samples": 2309,
+      "usable_ratio": 0.740707467714767,
+      "exclusion_reason_counts": {
+        "LATE_LOOKBACK_DATA": 1365,
+        "MISSING_KOSDAQ": 1469,
+        "MISSING_KOSPI": 1469,
+        "MISSING_LOOKBACK": 1165,
+        "OUTSIDE_SESSION": 303,
+        "MISSING_STOCK_DATA": 4
+      }
+    },
+    {
+      "market_date": "2026-10-19",
+      "raw_rows": 69,
+      "candidate_samples": 8671,
+      "usable_samples": 0,
+      "excluded_samples": 8671,
+      "usable_ratio": 0.0,
+      "exclusion_reason_counts": {
+        "MISSING_KOSDAQ": 8671,
+        "MISSING_KOSPI": 8671,
+        "MISSING_LOOKBACK": 8671,
+        "MISSING_STOCK_DATA": 8602,
+        "UNVERIFIED_GAP": 8602,
+        "LATE_LOOKBACK_DATA": 91,
+        "OUTSIDE_SESSION": 69
+      }
+    },
+    {
+      "market_date": "2026-10-20",
+      "raw_rows": 8893,
+      "candidate_samples": 8897,
+      "usable_samples": 7717,
+      "excluded_samples": 1180,
+      "usable_ratio": 0.8673710239406541,
+      "exclusion_reason_counts": {
+        "LATE_LOOKBACK_DATA": 265,
+        "MISSING_KOSDAQ": 757,
+        "MISSING_KOSPI": 757,
+        "MISSING_LOOKBACK": 1157,
+        "OUTSIDE_SESSION": 295,
+        "MISSING_STOCK_DATA": 4,
+        "UNVERIFIED_GAP": 160
+      }
+    },
+    {
+      "market_date": "2026-10-21",
+      "raw_rows": 8602,
+      "candidate_samples": 8606,
+      "usable_samples": 7405,
+      "excluded_samples": 1201,
+      "usable_ratio": 0.8604462003253543,
+      "exclusion_reason_counts": {
+        "LATE_LOOKBACK_DATA": 1197,
+        "MISSING_KOSDAQ": 774,
+        "MISSING_KOSPI": 774,
+        "MISSING_LOOKBACK": 866,
+        "MISSING_STOCK_DATA": 4,
+        "OUTSIDE_SESSION": 4
+      }
+    },
+    {
+      "market_date": "2026-10-22",
+      "raw_rows": 8646,
+      "candidate_samples": 8650,
+      "usable_samples": 7718,
+      "excluded_samples": 932,
+      "usable_ratio": 0.8922543352601157,
+      "exclusion_reason_counts": {
+        "LATE_LOOKBACK_DATA": 374,
+        "MISSING_KOSDAQ": 510,
+        "MISSING_KOSPI": 510,
+        "MISSING_LOOKBACK": 910,
+        "MISSING_STOCK_DATA": 4,
+        "UNVERIFIED_GAP": 160,
+        "OUTSIDE_SESSION": 48
+      }
+    },
+    {
+      "market_date": "2026-10-23",
+      "raw_rows": 8866,
+      "candidate_samples": 8870,
+      "usable_samples": 7718,
+      "excluded_samples": 1152,
+      "usable_ratio": 0.8701240135287486,
+      "exclusion_reason_counts": {
+        "LATE_LOOKBACK_DATA": 357,
+        "MISSING_KOSDAQ": 730,
+        "MISSING_KOSPI": 730,
+        "MISSING_LOOKBACK": 1130,
+        "OUTSIDE_SESSION": 268,
+        "MISSING_STOCK_DATA": 4,
+        "UNVERIFIED_GAP": 160
+      }
+    },
+    {
+      "market_date": "2026-10-26",
+      "raw_rows": 8976,
+      "candidate_samples": 8980,
+      "usable_samples": 7718,
+      "excluded_samples": 1262,
+      "usable_ratio": 0.8594654788418709,
+      "exclusion_reason_counts": {
+        "LATE_LOOKBACK_DATA": 346,
+        "MISSING_KOSDAQ": 840,
+        "MISSING_KOSPI": 840,
+        "MISSING_LOOKBACK": 1240,
+        "OUTSIDE_SESSION": 378,
+        "MISSING_STOCK_DATA": 4,
+        "UNVERIFIED_GAP": 160
+      }
+    },
+    {
+      "market_date": "2026-10-27",
+      "raw_rows": 8971,
+      "candidate_samples": 8975,
+      "usable_samples": 7715,
+      "excluded_samples": 1260,
+      "usable_ratio": 0.8596100278551532,
+      "exclusion_reason_counts": {
+        "LATE_LOOKBACK_DATA": 344,
+        "MISSING_KOSDAQ": 835,
+        "MISSING_KOSPI": 835,
+        "MISSING_LOOKBACK": 1235,
+        "OUTSIDE_SESSION": 373,
+        "MISSING_STOCK_DATA": 4,
+        "UNVERIFIED_GAP": 160
+      }
+    },
+    {
+      "market_date": "2026-10-28",
+      "raw_rows": 8888,
+      "candidate_samples": 8892,
+      "usable_samples": 7716,
+      "excluded_samples": 1176,
+      "usable_ratio": 0.8677462887989204,
+      "exclusion_reason_counts": {
+        "LATE_LOOKBACK_DATA": 266,
+        "MISSING_KOSDAQ": 752,
+        "MISSING_KOSPI": 752,
+        "MISSING_LOOKBACK": 1152,
+        "OUTSIDE_SESSION": 290,
+        "MISSING_STOCK_DATA": 4
+      }
+    },
+    {
+      "market_date": "2026-10-29",
+      "raw_rows": 69,
+      "candidate_samples": 8671,
+      "usable_samples": 0,
+      "excluded_samples": 8671,
+      "usable_ratio": 0.0,
+      "exclusion_reason_counts": {
+        "MISSING_KOSDAQ": 8671,
+        "MISSING_KOSPI": 8671,
+        "MISSING_LOOKBACK": 8671,
+        "MISSING_STOCK_DATA": 8602,
+        "UNVERIFIED_GAP": 8602,
+        "LATE_LOOKBACK_DATA": 91,
+        "OUTSIDE_SESSION": 69
+      }
+    },
+    {
+      "market_date": "2026-10-30",
+      "raw_rows": 2069,
+      "candidate_samples": 2099,
+      "usable_samples": 147,
+      "excluded_samples": 1952,
+      "usable_ratio": 0.07003334921391138,
+      "exclusion_reason_counts": {
+        "LATE_LOOKBACK_DATA": 353,
+        "MISSING_KOSDAQ": 1796,
+        "MISSING_KOSPI": 1796,
+        "MISSING_LOOKBACK": 1183,
+        "OUTSIDE_SESSION": 295,
+        "MISSING_STOCK_DATA": 30,
+        "UNVERIFIED_GAP": 186
+      }
+    }
+  ],
+  "by_symbol": [
+    {
+      "symbol": "000660",
+      "raw_rows": 5182,
+      "candidate_samples": 6494,
+      "usable_samples": 4101,
+      "excluded_samples": 2393,
+      "usable_ratio": 0.6315060055435787,
+      "exclusion_reason_counts": {
+        "MISSING_KOSDAQ": 2122,
+        "MISSING_KOSPI": 2122,
+        "MISSING_LOOKBACK": 2032,
+        "MISSING_STOCK_DATA": 1312,
+        "UNVERIFIED_GAP": 1369,
+        "LATE_LOOKBACK_DATA": 452,
+        "OUTSIDE_SESSION": 156
+      }
+    },
+    {
+      "symbol": "005380",
+      "raw_rows": 5164,
+      "candidate_samples": 6494,
+      "usable_samples": 4100,
+      "excluded_samples": 2394,
+      "usable_ratio": 0.6313520172466892,
+      "exclusion_reason_counts": {
+        "MISSING_KOSDAQ": 2122,
+        "MISSING_KOSPI": 2122,
+        "MISSING_LOOKBACK": 2032,
+        "MISSING_STOCK_DATA": 1330,
+        "UNVERIFIED_GAP": 1369,
+        "LATE_LOOKBACK_DATA": 438,
+        "OUTSIDE_SESSION": 156
+      }
+    },
+    {
+      "symbol": "005490",
+      "raw_rows": 5164,
+      "candidate_samples": 6494,
+      "usable_samples": 4101,
+      "excluded_samples": 2393,
+      "usable_ratio": 0.6315060055435787,
+      "exclusion_reason_counts": {
+        "MISSING_KOSDAQ": 2120,
+        "MISSING_KOSPI": 2120,
+        "MISSING_LOOKBACK": 2032,
+        "MISSING_STOCK_DATA": 1330,
+        "UNVERIFIED_GAP": 1369,
+        "LATE_LOOKBACK_DATA": 443,
+        "OUTSIDE_SESSION": 156
+      }
+    },
+    {
+      "symbol": "005930",
+      "raw_rows": 5182,
+      "candidate_samples": 6494,
+      "usable_samples": 4101,
+      "excluded_samples": 2393,
+      "usable_ratio": 0.6315060055435787,
+      "exclusion_reason_counts": {
+        "MISSING_KOSDAQ": 2121,
+        "MISSING_KOSPI": 2121,
+        "MISSING_LOOKBACK": 2032,
+        "MISSING_STOCK_DATA": 1312,
+        "UNVERIFIED_GAP": 1369,
+        "LATE_LOOKBACK_DATA": 453,
+        "OUTSIDE_SESSION": 156
+      }
+    },
+    {
+      "symbol": "006400",
+      "raw_rows": 5164,
+      "candidate_samples": 6494,
+      "usable_samples": 4101,
+      "excluded_samples": 2393,
+      "usable_ratio": 0.6315060055435787,
+      "exclusion_reason_counts": {
+        "MISSING_KOSDAQ": 2120,
+        "MISSING_KOSPI": 2120,
+        "MISSING_LOOKBACK": 2032,
+        "MISSING_STOCK_DATA": 1330,
+        "UNVERIFIED_GAP": 1369,
+        "LATE_LOOKBACK_DATA": 443,
+        "OUTSIDE_SESSION": 156
+      }
+    },
+    {
+      "symbol": "017670",
+      "raw_rows": 4917,
+      "candidate_samples": 6482,
+      "usable_samples": 4031,
+      "excluded_samples": 2451,
+      "usable_ratio": 0.6218759642085776,
+      "exclusion_reason_counts": {
+        "MISSING_KOSDAQ": 2185,
+        "MISSING_KOSPI": 2185,
+        "MISSING_LOOKBACK": 2216,
+        "MISSING_STOCK_DATA": 1565,
+        "UNVERIFIED_GAP": 1565,
+        "LATE_LOOKBACK_DATA": 431,
+        "OUTSIDE_SESSION": 144
+      }
+    },
+    {
+      "symbol": "034020",
+      "raw_rows": 4918,
+      "candidate_samples": 6484,
+      "usable_samples": 4037,
+      "excluded_samples": 2447,
+      "usable_ratio": 0.6226095003084515,
+      "exclusion_reason_counts": {
+        "MISSING_KOSDAQ": 2176,
+        "MISSING_KOSPI": 2176,
+        "MISSING_LOOKBACK": 2219,
+        "MISSING_STOCK_DATA": 1566,
+        "UNVERIFIED_GAP": 1566,
+        "LATE_LOOKBACK_DATA": 433,
+        "OUTSIDE_SESSION": 146
+      }
+    },
+    {
+      "symbol": "035420",
+      "raw_rows": 5164,
+      "candidate_samples": 6494,
+      "usable_samples": 4100,
+      "excluded_samples": 2394,
+      "usable_ratio": 0.6313520172466892,
+      "exclusion_reason_counts": {
+        "MISSING_KOSDAQ": 2122,
+        "MISSING_KOSPI": 2122,
+        "MISSING_LOOKBACK": 2032,
+        "MISSING_STOCK_DATA": 1330,
+        "UNVERIFIED_GAP": 1369,
+        "LATE_LOOKBACK_DATA": 438,
+        "OUTSIDE_SESSION": 156
+      }
+    },
+    {
+      "symbol": "035720",
+      "raw_rows": 5162,
+      "candidate_samples": 6505,
+      "usable_samples": 4088,
+      "excluded_samples": 2417,
+      "usable_ratio": 0.6284396617986164,
+      "exclusion_reason_counts": {
+        "MISSING_KOSDAQ": 2133,
+        "MISSING_KOSPI": 2133,
+        "MISSING_LOOKBACK": 2056,
+        "MISSING_STOCK_DATA": 1343,
+        "UNVERIFIED_GAP": 1729,
+        "LATE_LOOKBACK_DATA": 469,
+        "OUTSIDE_SESSION": 167
+      }
+    },
+    {
+      "symbol": "036930",
+      "raw_rows": 4916,
+      "candidate_samples": 6495,
+      "usable_samples": 4025,
+      "excluded_samples": 2470,
+      "usable_ratio": 0.619707467282525,
+      "exclusion_reason_counts": {
+        "MISSING_KOSDAQ": 2188,
+        "MISSING_KOSPI": 2188,
+        "MISSING_LOOKBACK": 2243,
+        "MISSING_STOCK_DATA": 1579,
+        "UNVERIFIED_GAP": 1926,
+        "LATE_LOOKBACK_DATA": 460,
+        "OUTSIDE_SESSION": 157
+      }
+    },
+    {
+      "symbol": "042700",
+      "raw_rows": 4915,
+      "candidate_samples": 6481,
+      "usable_samples": 4036,
+      "excluded_samples": 2445,
+      "usable_ratio": 0.6227434037957106,
+      "exclusion_reason_counts": {
+        "MISSING_KOSDAQ": 2173,
+        "MISSING_KOSPI": 2173,
+        "MISSING_LOOKBACK": 2216,
+        "MISSING_STOCK_DATA": 1566,
+        "UNVERIFIED_GAP": 1566,
+        "LATE_LOOKBACK_DATA": 429,
+        "OUTSIDE_SESSION": 143
+      }
+    },
+    {
+      "symbol": "051910",
+      "raw_rows": 5164,
+      "candidate_samples": 6494,
+      "usable_samples": 4101,
+      "excluded_samples": 2393,
+      "usable_ratio": 0.6315060055435787,
+      "exclusion_reason_counts": {
+        "MISSING_KOSDAQ": 2119,
+        "MISSING_KOSPI": 2119,
+        "MISSING_LOOKBACK": 2032,
+        "MISSING_STOCK_DATA": 1330,
+        "UNVERIFIED_GAP": 1369,
+        "LATE_LOOKBACK_DATA": 444,
+        "OUTSIDE_SESSION": 156
+      }
+    },
+    {
+      "symbol": "055550",
+      "raw_rows": 5159,
+      "candidate_samples": 6491,
+      "usable_samples": 4096,
+      "excluded_samples": 2395,
+      "usable_ratio": 0.6310275766445849,
+      "exclusion_reason_counts": {
+        "MISSING_KOSDAQ": 2120,
+        "MISSING_KOSPI": 2120,
+        "MISSING_LOOKBACK": 2031,
+        "MISSING_STOCK_DATA": 1332,
+        "UNVERIFIED_GAP": 1371,
+        "LATE_LOOKBACK_DATA": 444,
+        "OUTSIDE_SESSION": 153
+      }
+    },
+    {
+      "symbol": "058470",
+      "raw_rows": 4918,
+      "candidate_samples": 6484,
+      "usable_samples": 4037,
+      "excluded_samples": 2447,
+      "usable_ratio": 0.6226095003084515,
+      "exclusion_reason_counts": {
+        "MISSING_KOSDAQ": 2175,
+        "MISSING_KOSPI": 2175,
+        "MISSING_LOOKBACK": 2219,
+        "MISSING_STOCK_DATA": 1566,
+        "UNVERIFIED_GAP": 1566,
+        "LATE_LOOKBACK_DATA": 432,
+        "OUTSIDE_SESSION": 146
+      }
+    },
+    {
+      "symbol": "080220",
+      "raw_rows": 4915,
+      "candidate_samples": 6494,
+      "usable_samples": 4024,
+      "excluded_samples": 2470,
+      "usable_ratio": 0.6196489066830921,
+      "exclusion_reason_counts": {
+        "MISSING_KOSDAQ": 2190,
+        "MISSING_KOSPI": 2190,
+        "MISSING_LOOKBACK": 2242,
+        "MISSING_STOCK_DATA": 1579,
+        "UNVERIFIED_GAP": 1926,
+        "LATE_LOOKBACK_DATA": 462,
+        "OUTSIDE_SESSION": 156
+      }
+    },
+    {
+      "symbol": "086520",
+      "raw_rows": 4916,
+      "candidate_samples": 6482,
+      "usable_samples": 4031,
+      "excluded_samples": 2451,
+      "usable_ratio": 0.6218759642085776,
+      "exclusion_reason_counts": {
+        "MISSING_KOSDAQ": 2183,
+        "MISSING_KOSPI": 2183,
+        "MISSING_LOOKBACK": 2217,
+        "MISSING_STOCK_DATA": 1566,
+        "UNVERIFIED_GAP": 1566,
+        "LATE_LOOKBACK_DATA": 429,
+        "OUTSIDE_SESSION": 144
+      }
+    },
+    {
+      "symbol": "096770",
+      "raw_rows": 4917,
+      "candidate_samples": 6483,
+      "usable_samples": 4037,
+      "excluded_samples": 2446,
+      "usable_ratio": 0.6227055375597718,
+      "exclusion_reason_counts": {
+        "MISSING_KOSDAQ": 2174,
+        "MISSING_KOSPI": 2174,
+        "MISSING_LOOKBACK": 2218,
+        "MISSING_STOCK_DATA": 1566,
+        "UNVERIFIED_GAP": 1566,
+        "LATE_LOOKBACK_DATA": 432,
+        "OUTSIDE_SESSION": 145
+      }
+    },
+    {
+      "symbol": "103590",
+      "raw_rows": 4918,
+      "candidate_samples": 6484,
+      "usable_samples": 4036,
+      "excluded_samples": 2448,
+      "usable_ratio": 0.6224552745219001,
+      "exclusion_reason_counts": {
+        "MISSING_KOSDAQ": 2176,
+        "MISSING_KOSPI": 2176,
+        "MISSING_LOOKBACK": 2219,
+        "MISSING_STOCK_DATA": 1566,
+        "UNVERIFIED_GAP": 1566,
+        "LATE_LOOKBACK_DATA": 426,
+        "OUTSIDE_SESSION": 146
+      }
+    },
+    {
+      "symbol": "105560",
+      "raw_rows": 5160,
+      "candidate_samples": 6492,
+      "usable_samples": 4097,
+      "excluded_samples": 2395,
+      "usable_ratio": 0.6310844115834874,
+      "exclusion_reason_counts": {
+        "MISSING_KOSDAQ": 2123,
+        "MISSING_KOSPI": 2123,
+        "MISSING_LOOKBACK": 2032,
+        "MISSING_STOCK_DATA": 1332,
+        "UNVERIFIED_GAP": 1371,
+        "LATE_LOOKBACK_DATA": 442,
+        "OUTSIDE_SESSION": 154
+      }
+    },
+    {
+      "symbol": "218410",
+      "raw_rows": 4917,
+      "candidate_samples": 6482,
+      "usable_samples": 4031,
+      "excluded_samples": 2451,
+      "usable_ratio": 0.6218759642085776,
+      "exclusion_reason_counts": {
+        "MISSING_KOSDAQ": 2183,
+        "MISSING_KOSPI": 2183,
+        "MISSING_LOOKBACK": 2216,
+        "MISSING_STOCK_DATA": 1565,
+        "UNVERIFIED_GAP": 1565,
+        "LATE_LOOKBACK_DATA": 431,
+        "OUTSIDE_SESSION": 144
+      }
+    },
+    {
+      "symbol": "222800",
+      "raw_rows": 4917,
+      "candidate_samples": 6483,
+      "usable_samples": 4035,
+      "excluded_samples": 2448,
+      "usable_ratio": 0.6223970384081444,
+      "exclusion_reason_counts": {
+        "MISSING_KOSDAQ": 2176,
+        "MISSING_KOSPI": 2176,
+        "MISSING_LOOKBACK": 2218,
+        "MISSING_STOCK_DATA": 1566,
+        "UNVERIFIED_GAP": 1566,
+        "LATE_LOOKBACK_DATA": 430,
+        "OUTSIDE_SESSION": 145
+      }
+    },
+    {
+      "symbol": "403870",
+      "raw_rows": 4915,
+      "candidate_samples": 6494,
+      "usable_samples": 4022,
+      "excluded_samples": 2472,
+      "usable_ratio": 0.6193409300893132,
+      "exclusion_reason_counts": {
+        "MISSING_KOSDAQ": 2193,
+        "MISSING_KOSPI": 2193,
+        "MISSING_LOOKBACK": 2242,
+        "MISSING_STOCK_DATA": 1579,
+        "UNVERIFIED_GAP": 1926,
+        "LATE_LOOKBACK_DATA": 461,
+        "OUTSIDE_SESSION": 156
+      }
+    }
+  ],
+  "warnings": [
+    "No profitability validation or model training.",
+    "Observed event dates only; no exchange holiday calendar inferred.",
+    "Short date span: stable final test/generalization confidence not established.",
+    "Missing optional macro and session-open context do not exclude core samples.",
+    "Flags and missing horizons are task-specific filters, not whole-sample exclusions."
+  ],
+  "source_inventory": {
+    "ml_raw_candles": {
+      "TOSS/1m": 110664
+    },
+    "ml_market_indicator_candles": {
+      "TOSS_MARKET_INDICATOR/1m": 9770
+    },
+    "ml_macro_observations": {
+      "TOSS_EXCHANGE_RATE/": 43,
+      "TOSS_US_PROXY:DIA/": 47,
+      "TOSS_US_PROXY:IEF/": 51,
+      "TOSS_US_PROXY:QQQ/": 57,
+      "TOSS_US_PROXY:SPY/": 50,
+      "TOSS_US_PROXY:VIXY/": 55
+    }
+  }
+}

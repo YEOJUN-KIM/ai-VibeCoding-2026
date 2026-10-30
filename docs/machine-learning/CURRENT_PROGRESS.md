@@ -1,6 +1,6 @@
 # 머신러닝 자동매매 구현 현황
 
-최신 확인일: **2026-10-30**. 수집 파이프라인은 운영·안정화 중이며 V1 수집 안정화와 V2 품질 의미·백테스트 날짜 선택 보수를 완료했습니다. 아래 2026-10-02 건수·실험 결과는 과거 이력으로 구분합니다.
+최신 확인일: **2026-10-30**. V1/V2/V2.1 수집 안정화에 이어 ML Data Readiness Audit + Curated Dataset v1을 구현하고 실제 누적 DB로 검증했습니다. 모델 학습과 매매 연결은 아직 수행하지 않았습니다. 아래 2026-10-02 건수·실험 결과는 과거 이력으로 구분합니다.
 
 이 문서는 머신러닝 자동매매 프로젝트에서 지금까지 구현하고 실제로 확인한 내용을 한곳에 정리합니다. 세부 설계와 실행 명령은 각 단계 문서를 참고합니다.
 
@@ -11,9 +11,15 @@
 - V2 보수: 완료. 최종 원천 부재와 수집 gap을 구분하고, 백테스트 날짜 선택을 KST `event_at` 기준으로 수정했습니다. replay는 계속 `available_at`을 사용합니다.
 - 10/28 재생성 품질: raw missing 6, provider absent 6, collection gap 0, unverified 0. **data completeness PASS / collection health WARN**입니다. 09:01~15:30은 22종목 각 390개, 지수 각 390개입니다.
 - 10/15·10/16·10/21 재검사: 실제 원천 봉 2,947개를 추가 수신 시각으로 백필했습니다. 기존 RAW 35,234개와 전략 17·22개 대상의 불변을 확인했습니다.
-- ML Dataset 구성·실제 모델 학습: **아직 시작 전**. 다일 데이터의 시점·session 선택을 먼저 설계할 단계입니다.
+- ML Data Readiness Audit + Curated Dataset v1: **구현 및 실제 DB 생성 검증 완료**. 읽기 전용 스냅샷, 연속 40개 completed 봉, 국내 지수 point-in-time 결합, optional macro와 연속형 미래 label을 분리했습니다. 실제 모델 학습·PAPER/LIVE 연결은 수행하지 않았습니다. 시간 정책·실제 수치·제약은 [Dataset v1](04_DATA_READINESS.md)을 참고합니다.
 
-검증은 Python **339개**, JavaScript **22개** 통과입니다. 실행 중인 장중 서버는 유지했으며, 자동 품질 워커의 V2 코드는 다음 정상 서버 재시작부터 적용됩니다. 과거 날짜의 품질 보고서는 수동 재생성까지 검증했습니다. 세부 수치와 제한은 [수집 안정화 V1/V2](COLLECTION_STABILITY.md), 날짜 선택은 [백테스트 설명](03_BACKTEST.md)을 참고합니다.
+Dataset v1 검증은 Python **362개**, JavaScript **22개** 통과입니다. 실행 중인 장중 서버는 유지했습니다. 수집 안정화 단계의 세부 수치와 제한은 [수집 안정화 V1/V2](COLLECTION_STABILITY.md), 날짜 선택은 [백테스트 설명](03_BACKTEST.md)을 참고합니다.
+
+### Curated Dataset v1 실제 검증 (2026-10-30)
+
+14개 usable 날짜·22/22종목, RAW 110,664개에서 후보 142,774개를 감사했습니다. usable **89,368개 (62.59%)**, 제외 53,406개입니다. pipeline **PARTIALLY_READY**, 첫 탐색적 실험 **READY FOR FIRST ML EXPERIMENT**이며 수익성/일반화 신뢰는 NOT_READY입니다. feature point-in-time 위반·historical backfill feature 누수는 0입니다. 기존 macro cycle-start 시각은 RAW를 유지하고 완료 run 시각으로 사용 가능 경계를 늦췄습니다.
+
+전체 Python **362개**·JavaScript **22개** 통과. 모델 학습/매매 연결은 하지 않았습니다. 실제 날짜별·종목별 표, label 수, hash와 한계는 [Dataset v1 보고서](04_DATA_READINESS.md)를 참고합니다.
 
 ### 2026-10-12 운용 준비 이력
 
@@ -157,7 +163,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\generate-ml-quality-report.ps
 
 ## 검증 결과
 
-최신 2026-10-30 검증: 전체 Python 339개·전체 JavaScript 22개 통과, 컴파일·앱 import·Git 공백 검사 통과. `replay`, `Config`, `ReplayBroker`, `ReplayRisk`는 이전 구현과 AST가 같으며 RAW 저장·전략·리스크·PAPER/LIVE·V1 transport 소스는 변경하지 않았습니다.
+수집 안정화 단계 2026-10-30 검증 이력: 전체 Python 339개·전체 JavaScript 22개 통과, 컴파일·앱 import·Git 공백 검사 통과. `replay`, `Config`, `ReplayBroker`, `ReplayRisk`는 이전 구현과 AST가 같으며 RAW 저장·전략·리스크·PAPER/LIVE·V1 transport 소스는 변경하지 않았습니다.
 
 다음은 2026-10-02의 검증 이력입니다. 이후 계정·UI 변경을 포함한 최신 전체 테스트 실행 결과를 뜻하지 않습니다.
 
@@ -168,10 +174,10 @@ powershell -ExecutionPolicy Bypass -File .\scripts\generate-ml-quality-report.ps
 
 ## 다음 작업
 
-1. PAPER 모드와 서버를 유지해 최소 5거래일, 가능하면 20거래일 이상 데이터를 모읍니다.
-2. 종목·국내 지수·환율·미국 지표를 판단 시각 기준으로 결합합니다.
-3. 미래 수익률에서 수수료·세금·슬리피지를 뺀 학습 정답을 만듭니다.
-4. 구현한 이동평균 백테스트를 누적된 여러 거래일로 반복하고 자료 범위·체결 가정·비용을 검증합니다. 첫 실행과 명령은 [03_BACKTEST.md](03_BACKTEST.md)를 참고합니다.
-5. 시간순 검증으로 첫 단순 모델이 기준선보다 나은지 비교합니다.
+1. Dataset v1에서 필요한 continuous label의 non-null sample을 선택합니다. 아직 binary threshold는 고정하지 않습니다.
+2. 기존 MA 전략의 pre-risk BUY candidate를 정확하게 재현할 별도 profile을 정의합니다. 현재 flag는 추측 없이 null입니다.
+3. 과거 train → 이후 validation → 최신 test 순서와 경계 horizon purge를 설계하고 첫 탐색적 모델을 실험합니다. random split을 사용하지 않습니다.
+4. PAPER 모드와 서버를 유지해 20거래일 이상 usable 데이터를 누적합니다. 현재 14개 usable 날짜로 안정적인 최종 test와 수익성 일반화를 확정하지 않습니다.
+5. 이동평균 백테스트와 자료 범위·체결 가정·비용을 비교합니다. 기존 실행 방법은 [03_BACKTEST.md](03_BACKTEST.md)를 참고합니다.
 
 학습용 뉴스·공시 원본의 시점별 저장과 모델 결합은 아직 구현하지 않았습니다. 웹앱의 뉴스·공시 조회 기능과는 별개입니다. 먼저 가격·시장·판단 데이터 누적과 다일 백테스트를 안정화한 뒤 추가합니다.
