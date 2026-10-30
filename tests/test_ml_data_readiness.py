@@ -1,12 +1,16 @@
 import copy
+import hashlib
+import json
 from datetime import datetime, timedelta
 from decimal import Decimal as D
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from auto_trader.ml.data_readiness import (
-    Config, KST, TABLES, audit_series, build_samples, generate, macro_feature_rows, net_return)
+    Config, KST, TABLES, audit_series, build_samples, generate, macro_feature_rows, net_return,
+    output_paths, verify_artifacts, main)
 
 
 class ReadinessTests(unittest.TestCase):
@@ -131,14 +135,50 @@ class ReadinessTests(unittest.TestCase):
         temp_root = Path(__file__).resolve().parents[1]/'.tmp'
         temp_root.mkdir(exist_ok=True)
         with tempfile.TemporaryDirectory(dir=temp_root) as a, tempfile.TemporaryDirectory(dir=temp_root) as b:
-            report, first = generate(data, {'as_of': self.as_of}, Config(), ['A'], a)
-            _, second = generate(data, {'as_of': self.as_of}, Config(), ['A'], b)
+            report, first = generate(data, {'as_of': self.as_of}, Config(), ['A'], a, Path(a)/'generated')
+            _, second = generate(data, {'as_of': self.as_of}, Config(), ['A'], b, Path(b)/'generated')
             self.assertEqual(first['dataset_hash'], second['dataset_hash'])
             self.assertEqual(first['artifacts'], second['artifacts'])
             self.assertTrue(set(first['feature_list']).isdisjoint(first['label_list']))
             self.assertEqual(report['feature_point_in_time_violations'], 0)
-            self.assertEqual(Path(a, 'samples.csv').read_bytes(), Path(b, 'samples.csv').read_bytes())
+            self.assertEqual(Path(a, 'generated', 'samples.csv').read_bytes(), Path(b, 'generated', 'samples.csv').read_bytes())
+            self.assertFalse(Path(a, 'samples.csv').exists())
+            self.assertTrue(Path(a, 'readiness-report.json').is_file())
+            self.assertTrue(verify_artifacts(first))
+            self.assertTrue(verify_artifacts(second))
         self.assertEqual(before, data)
+
+    def test_default_output_layout_uses_version(self):
+        for version in ('v1', 'v2', 'v3'):
+            self.assertEqual(output_paths(version), (Path('artifacts/ml/datasets')/version,
+                Path('artifacts/ml/generated/datasets')/version))
+
+    def test_default_cli_splits_outputs_and_preserves_verification(self):
+        self.fixture(42)
+        data = dict(zip(TABLES, (self.stocks, self.indices, [], [], [])))
+        temp_root = Path(__file__).resolve().parents[1]/'.tmp'
+        temp_root.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temp_root) as folder:
+            metadata, generated = Path(folder)/'metadata', Path(folder)/'generated'
+            with patch('sys.argv', ['readiness', '--verify-determinism']), \
+                 patch('auto_trader.ml.data_readiness.output_paths', return_value=(metadata, generated)), \
+                 patch('auto_trader.ml.data_readiness.load_snapshot', return_value=(data, {'as_of': self.as_of})):
+                main()
+            manifest = json.loads((metadata/'manifest.json').read_text(encoding='utf-8'))
+            check = json.loads((metadata/'determinism-check.json').read_text(encoding='utf-8'))
+            self.assertTrue(check['matches'])
+            self.assertEqual(check['dataset_hash'], manifest['dataset_hash'])
+            self.assertEqual(manifest['artifacts']['samples.csv'], hashlib.sha256((generated/'samples.csv').read_bytes()).hexdigest())
+            self.assertFalse((metadata/'samples.csv').exists())
+            self.assertEqual(Path(manifest['artifact_locations']['samples.csv']).name, 'samples.csv')
+            self.assertTrue(verify_artifacts(manifest))
+            with patch('sys.argv', ['readiness', '--verify-artifacts', '--output', str(metadata)]), \
+                 patch('auto_trader.ml.data_readiness.load_snapshot') as snapshot:
+                main()
+                snapshot.assert_not_called()
+            (generated/'samples.csv').write_text('corrupt', encoding='utf-8')
+            with self.assertRaisesRegex(ValueError, 'samples.csv'):
+                verify_artifacts(manifest)
 
     def test_paper_cost_rounding(self):
         self.assertAlmostEqual(net_return(D(10000), D(10000), Config()), (9995-1-19)/(10005+1)-1)

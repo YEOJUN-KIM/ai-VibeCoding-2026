@@ -6,7 +6,7 @@
 .venv\Scripts\python.exe -m auto_trader.ml.data_readiness --version v1
 ```
 
-기본 출력은 `artifacts/ml/datasets/v1/`이다. PostgreSQL의 단일 `REPEATABLE READ READ ONLY` 트랜잭션으로 RAW·국내 지수·macro·decision·collection evidence를 읽는다. 스키마 초기화, migration, INSERT/UPDATE/DELETE, provider API, 주문 API를 호출하지 않는다. 실행 중 서버나 수집 스케줄을 변경하지 않는다. RAW는 원본 관측 계층이고 Curated는 사용 조건과 출처를 기록한 파생 artifact다. 보간·합성·forward fill은 없다.
+기본 출력은 metadata/report용 `artifacts/ml/datasets/v1/`과 대용량 CSV용 `artifacts/ml/generated/datasets/v1/`로 분리한다. PostgreSQL의 단일 `REPEATABLE READ READ ONLY` 트랜잭션으로 RAW·국내 지수·macro·decision·collection evidence를 읽는다. 스키마 초기화, migration, INSERT/UPDATE/DELETE, provider API, 주문 API를 호출하지 않는다. 실행 중 서버나 수집 스케줄을 변경하지 않는다. RAW는 원본 관측 계층이고 Curated는 사용 조건과 출처를 기록한 파생 artifact다. 보간·합성·forward fill은 없다.
 
 `manifest.json`은 입력 테이블별 SHA-256, 코드 revision과 builder 파일 hash, 비용·시간·feature·label 규칙, 출력 CSV hash를 담는다. 생성 시각과 MVCC snapshot ID는 실행 메타데이터라 달라질 수 있다. `dataset_hash`는 설정·종목·정렬된 전체 sample 내용의 canonical JSON SHA-256이다. 변경 없는 DB를 다른 시각에 실행해도 grid가 늘어나지 않도록 감사 종료 시각은 스냅샷 안의 최신 저장 수신/작업 시각으로 정한다.
 
@@ -54,6 +54,41 @@ PAPER decisions는 요구 필드별 null 수, action 분포, 시간 순서, RAW 
 비용은 실행 당시 settings의 PAPER fee/tax/slippage를 읽는다. 1주 단위 entry에 매수 slippage/fee, exit에 매도 slippage/fee/tax를 적용하고, PAPER와 같이 각 fee/tax를 KRW 1 단위 ROUND_DOWN 한다. 수량에 따른 반올림 차이가 있으므로 manifest에 1주 가정을 기록한다. 실제 포트폴리오 backtest의 대체 결과가 아니다.
 
 ## 출력과 readiness
+
+저장 구조는 다음을 표준으로 한다. `output_paths(version)`에서 버전별 기본 경로를 한 번에 결정하므로 향후 v2/v3 profile도 같은 배치를 사용한다. 현재 구현된 Dataset profile과 CLI `--version`은 v1이다.
+
+```text
+artifacts/ml/
+├─ datasets/v1/                  # Git 관리 metadata/report
+│  ├─ manifest.json
+│  ├─ readiness-report.json
+│  ├─ readiness-by-date.csv
+│  ├─ readiness-by-symbol.csv
+│  ├─ candle-audit.csv
+│  ├─ determinism-check.json
+│  └─ artifact-verification.json
+└─ generated/datasets/v1/        # Git ignore, 재생성 가능한 대용량 파일
+   ├─ samples.csv
+   └─ excluded-samples.csv
+```
+
+`artifacts/ml/datasets/`는 Git 관리용 metadata/report/hash/audit이고 ignore하지 않는다. `artifacts/ml/generated/`는 대용량 dataset·feature/training matrix·prediction dump·intermediate artifact를 보관하며 기존 `.gitignore` 규칙 `artifacts/ml/generated/`가 모든 하위 파일을 제외한다. 새 PC에서 clone했을 때 두 대용량 CSV가 내려오지 않는 것이 정상이다. DB 연결과 의존성 준비 후 프로젝트 루트에서 로컬 재생성한다.
+
+```powershell
+.venv\Scripts\python.exe -m auto_trader.ml.data_readiness --verify-determinism
+```
+
+`--output`은 metadata 위치, `--generated-output`은 대용량 CSV 위치를 각각 재정의하며 기본값은 버전에서 독립적으로 결정한다. 임시 실행은 **두 옵션을 모두 임시 경로로 지정**하여 기본 Dataset을 덮어쓰지 않는다. 명시적인 재생성 명령은 선택한 출력 경로의 파일을 갱신한다. 이번 배치 정리에서는 기존 실제 Dataset을 재생성하지 않았다.
+
+manifest의 `artifact_locations`는 기존 `artifacts` hash와 같은 파일명 key를 쓴다. 기본 경로는 저장소 루트 기준 `/` 경로이며, 저장소 밖의 사용자 지정 출력만 절대 경로로 기록한다. 기존 dataset/input/file hash와 determinism의 의미는 파일 위치에 의존하지 않는다. 생성 당시의 `builder_sha256`, git revision, snapshot과 created_at은 배치 정리 후에도 당시의 생성 provenance로 보존한다.
+
+2026-10-30 배치 정리 검증: 사용자가 미리 이동한 `samples.csv` 349,803,463 bytes와 `excluded-samples.csv` 24,404,098 bytes는 복사·재생성·덮어쓰기 없이 유지했다. 작업 전후 두 파일의 SHA-256·크기·수정 시각이 일치하고 기존 manifest의 모든 필드 값과 hash를 보존했다. `.gitignore`의 전체 generated 규칙이 이미 있어 수정하지 않았으며 개별 CSV ignore 규칙도 없었다. generated 하위는 추적 파일/추적 후보가 없고 metadata는 계속 tracked 상태다. 전체 Python **364개**·JavaScript **22개**, readiness 테스트 **16개**, 기존 실제 CSV/metadata 5개의 hash 검사, 컴파일·공백 검사가 통과했다. 기존 감사·feature·label·usability 정의 17개의 AST도 동일하다. 아래 362개 테스트와 실제 Dataset 수치는 최초 생성 당시의 기록이다.
+
+기존 파일의 위치와 hash만 검증하려면 DB 접근이나 재생성 없이 실행한다. clone 직후 generated CSV가 아직 없으면 이 검사는 누락 파일로 실패하므로 먼저 로컬 데이터를 준비해야 한다.
+
+```powershell
+.venv\Scripts\python.exe -m auto_trader.ml.data_readiness --verify-artifacts
+```
 
 `samples.csv`는 core usable, `excluded-samples.csv`는 제외 사유가 있는 후보다. 날짜·종목 요약 CSV, 정확한 누락 timestamp와 V2.1 gap 분류를 담은 `candle-audit.csv`, 상세 `readiness-report.json`, `manifest.json`을 만든다. CSV의 symbol은 문자열로 읽어 선행 0을 보존한다.
 
@@ -197,7 +232,7 @@ PAPER decision 87,681건, 시간 연결 순서 위반 0건, RAW candle 연결 �
 
 비용: fee=0.00015, sell tax=0.002, 양방향 slippage=0.0005. 1주 PAPER rounding 가정.
 
-Dataset hash: `94b7c402ed71a9e43a556f1a4a0d8bbe2f149938c55ac2be2baaa701a69d67e1`. 파일은 `artifacts/ml/datasets/v1/`.
+Dataset hash: `94b7c402ed71a9e43a556f1a4a0d8bbe2f149938c55ac2be2baaa701a69d67e1`. metadata/report는 `artifacts/ml/datasets/v1/`, 두 대용량 sample CSV는 `artifacts/ml/generated/datasets/v1/`에 있다.
 
 
 검증: 전체 Python **362개**, 전체 JavaScript **22개** 통과. 신규 readiness 테스트 **14개** 포함. CSV 별도 검증은 artifact-verification.json, 동일 실제 스냅샷 2회 빌드 비교는 determinism-check.json에 저장한다. 컴파일·Git 공백 검사 통과.

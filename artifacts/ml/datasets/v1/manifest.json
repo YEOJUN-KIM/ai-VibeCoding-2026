@@ -178,5 +178,13 @@
     "readiness-by-date.csv": "3f4178932c1fb6c05d3a00d91567d1ba7a682ac7c13390d1d8851414588114b5",
     "readiness-by-symbol.csv": "57f69b2481bb9c984247c253ded34e3b715226ca9d0b63c94933903d96793cde",
     "samples.csv": "4a6f56cd0412dc522da2d5049c1a58a5727f1cb5cd3add8b237c36d7566b9a7b"
+  },
+  "artifact_location_base": "REPOSITORY_ROOT (absolute paths for external custom outputs)",
+  "artifact_locations": {
+    "readiness-by-date.csv": "artifacts/ml/datasets/v1/readiness-by-date.csv",
+    "readiness-by-symbol.csv": "artifacts/ml/datasets/v1/readiness-by-symbol.csv",
+    "candle-audit.csv": "artifacts/ml/datasets/v1/candle-audit.csv",
+    "samples.csv": "artifacts/ml/generated/datasets/v1/samples.csv",
+    "excluded-samples.csv": "artifacts/ml/generated/datasets/v1/excluded-samples.csv"
   }
 }

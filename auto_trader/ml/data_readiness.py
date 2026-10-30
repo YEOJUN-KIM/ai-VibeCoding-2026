@@ -383,9 +383,44 @@ def write_csv(path, rows, fields=None):
             writer.writerow({k: canonical(v) if isinstance(v, (dict, list)) else encode(v) if isinstance(v, (datetime, Decimal)) else v for k, v in row.items()})
 
 
-def generate(data, meta, config, symbols, output):
-    output = Path(output)
+def output_paths(version='v1', output=None, generated_output=None):
+    """Keep reports tracked and reproducible bulk files under generated/."""
+    metadata = Path(output) if output is not None else Path('artifacts/ml/datasets')/version
+    generated = (Path(generated_output) if generated_output is not None else
+                 Path('artifacts/ml/generated/datasets')/version)
+    return metadata, generated
+
+
+def artifact_locations(output, generated_output):
+    root = Path(__file__).resolve().parents[2]
+    paths = {name: output/name for name in ('readiness-by-date.csv', 'readiness-by-symbol.csv', 'candle-audit.csv')}
+    paths.update({name: generated_output/name for name in ('samples.csv', 'excluded-samples.csv')})
+    locations = {}
+    for name, path in paths.items():
+        path = path.resolve()
+        locations[name] = (path.relative_to(root) if path.is_relative_to(root) else path).as_posix()
+    return locations
+
+
+def verify_artifacts(manifest):
+    """Check file hashes without loading the DB or rebuilding any dataset."""
+    root = Path(__file__).resolve().parents[2]
+    locations = manifest['artifact_locations']
+    for name, expected in manifest['artifacts'].items():
+        path = Path(locations[name])
+        if not path.is_absolute():
+            path = root/path
+        with path.open('rb') as stream:
+            actual = hashlib.file_digest(stream, 'sha256').hexdigest()
+        if actual != expected:
+            raise ValueError(f'Artifact hash mismatch: {name}')
+    return True
+
+
+def generate(data, meta, config, symbols, output=None, generated_output=None, version='v1'):
+    output, generated_output = output_paths(version, output, generated_output)
     output.mkdir(parents=True, exist_ok=True)
+    generated_output.mkdir(parents=True, exist_ok=True)
     stocks, indices, macros, decisions, runs = [data[t] for t in TABLES]
     dates = sorted({r['event_at'].astimezone(KST).date().isoformat() for r in stocks+indices})
     audits = audit_series(stocks, 'symbol', symbols, dates, runs, meta['as_of'])
@@ -402,8 +437,8 @@ def generate(data, meta, config, symbols, output):
     feature_list = sorted({k for s in good for k in s['features']})
     flatten = lambda s: {**{k: v for k, v in s.items() if k not in ('features', 'labels')}, **s['features'], **s['labels']}
     fields = sorted({k for s in samples for k in flatten(s)})
-    write_csv(output/'samples.csv', [flatten(s) for s in good], fields)
-    write_csv(output/'excluded-samples.csv', [flatten(s) for s in excluded], fields)
+    write_csv(generated_output/'samples.csv', [flatten(s) for s in good], fields)
+    write_csv(generated_output/'excluded-samples.csv', [flatten(s) for s in excluded], fields)
     write_csv(output/'readiness-by-date.csv', by_date)
     write_csv(output/'readiness-by-symbol.csv', by_symbol)
     write_csv(output/'candle-audit.csv', audits)
@@ -447,7 +482,8 @@ def generate(data, meta, config, symbols, output):
         revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
     except (OSError, subprocess.CalledProcessError):
         revision = 'unknown'
-    manifest = dict(dataset_version='v1', created_at=datetime.now(timezone.utc), git_revision=revision,
+    locations = artifact_locations(output, generated_output)
+    manifest = dict(dataset_version=version, created_at=datetime.now(timezone.utc), git_revision=revision,
         builder_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(), source_tables=list(TABLES),
         input_hashes=input_hashes, data_hash=digest(input_hashes), dataset_hash=dataset_hash,
         snapshot=meta, config=asdict(config), date_range=[dates[0], dates[-1]] if dates else [], symbols=symbols,
@@ -461,7 +497,10 @@ def generate(data, meta, config, symbols, output):
         usable_samples=len(good), excluded_samples=len(excluded), exclusion_reason_counts=reason_counts,
         chronological_dates=usable_dates, split_policy='No random split. No fixed final test until longer coverage. Use past train, later validation, latest test with horizon purge at boundaries.',
         readiness_criteria='NOT_READY if no core samples; ML_READY >=20 usable dates, all symbols usable, >=80% usable; otherwise PARTIALLY_READY. First exploratory experiment >=5 usable dates and >0 samples.',
-        artifacts={p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(output.glob('*.csv'))})
+        artifact_location_base='REPOSITORY_ROOT (absolute paths for external custom outputs)',
+        artifact_locations=locations,
+        artifacts={name: hashlib.sha256((generated_output/name if name in ('samples.csv', 'excluded-samples.csv') else output/name).read_bytes()).hexdigest()
+                   for name in sorted(locations)})
     (output/'readiness-report.json').write_text(json.dumps(report, default=encode, ensure_ascii=False, indent=2)+'\n', encoding='utf-8')
     (output/'manifest.json').write_text(json.dumps(manifest, default=encode, ensure_ascii=False, indent=2)+'\n', encoding='utf-8')
     return report, manifest
@@ -469,16 +508,24 @@ def generate(data, meta, config, symbols, output):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--output', default='artifacts/ml/datasets/v1')
+    parser.add_argument('--output', help='Metadata/report directory (default: artifacts/ml/datasets/<version>)')
+    parser.add_argument('--generated-output', help='Bulk CSV directory (default: artifacts/ml/generated/datasets/<version>)')
     parser.add_argument('--version', choices=['v1'], default='v1')
     parser.add_argument('--lookback', type=int, default=40)
     parser.add_argument('--verify-determinism', action='store_true', help='Rebuild from the same in-memory read-only snapshot and compare content hash')
+    parser.add_argument('--verify-artifacts', action='store_true', help='Verify existing files using manifest locations/hashes, without accessing the DB or rebuilding')
     args = parser.parse_args()
+    if args.verify_artifacts:
+        output, _ = output_paths(args.version, args.output, args.generated_output)
+        manifest = json.loads((output/'manifest.json').read_text(encoding='utf-8'))
+        verify_artifacts(manifest)
+        print('Artifact hashes verified:', len(manifest['artifacts']))
+        return
     config = Config(lookback=args.lookback, fee_rate=str(settings.paper_fee_rate),
                     sell_tax_rate=str(settings.paper_sell_tax_rate), slippage_rate=str(settings.paper_slippage_rate))
     data, meta = load_snapshot()
     symbols = sorted(set(settings.watch_symbols) | {r['symbol'] for r in data[TABLES[0]]})
-    report, manifest = generate(data, meta, config, symbols, args.output)
+    report, manifest = generate(data, meta, config, symbols, args.output, args.generated_output, args.version)
     if args.verify_determinism:
         stocks, indices, macros, decisions, runs = [data[t] for t in TABLES]
         dates = report['market_dates']
@@ -489,7 +536,8 @@ def main():
                             usable_samples=sum(s['usable'] for s in rebuilt), candidate_samples=len(rebuilt))
         verification['matches'] = (verification['dataset_hash'] == manifest['dataset_hash']
                                    and verification['usable_samples'] == report['usable_samples'])
-        (Path(args.output)/'determinism-check.json').write_text(json.dumps(verification, indent=2)+'\n', encoding='utf-8')
+        output, _ = output_paths(args.version, args.output, args.generated_output)
+        (output/'determinism-check.json').write_text(json.dumps(verification, indent=2)+'\n', encoding='utf-8')
         if not verification['matches']:
             raise RuntimeError('Same-snapshot determinism verification failed')
     print(json.dumps({k: report[k] for k in ('readiness', 'first_ml_experiment', 'raw_candles', 'candidate_samples',

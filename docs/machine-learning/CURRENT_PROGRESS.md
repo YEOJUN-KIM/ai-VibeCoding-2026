@@ -13,9 +13,11 @@
 - 10/15·10/16·10/21 재검사: 실제 원천 봉 2,947개를 추가 수신 시각으로 백필했습니다. 기존 RAW 35,234개와 전략 17·22개 대상의 불변을 확인했습니다.
 - ML Data Readiness Audit + Curated Dataset v1: **구현 및 실제 DB 생성 검증 완료**. 읽기 전용 스냅샷, 연속 40개 completed 봉, 국내 지수 point-in-time 결합, optional macro와 연속형 미래 label을 분리했습니다. 실제 모델 학습·PAPER/LIVE 연결은 수행하지 않았습니다. 시간 정책·실제 수치·제약은 [Dataset v1](04_DATA_READINESS.md)을 참고합니다.
 
-Dataset v1 검증은 Python **362개**, JavaScript **22개** 통과입니다. 실행 중인 장중 서버는 유지했습니다. 수집 안정화 단계의 세부 수치와 제한은 [수집 안정화 V1/V2](COLLECTION_STABILITY.md), 날짜 선택은 [백테스트 설명](03_BACKTEST.md)을 참고합니다.
+Dataset v1 최초 생성 검증은 Python **362개**, JavaScript **22개** 통과이며, 이후 산출물 배치 정리 회귀 검증은 Python **364개**, JavaScript **22개** 통과입니다. 실행 중인 장중 서버는 유지했습니다. 수집 안정화 단계의 세부 수치와 제한은 [수집 안정화 V1/V2](COLLECTION_STABILITY.md), 날짜 선택은 [백테스트 설명](03_BACKTEST.md)을 참고합니다.
 
 ### Curated Dataset v1 실제 검증 (2026-10-30)
+
+산출물 배치: `artifacts/ml/datasets/<version>/`는 Git 관리 metadata/report/hash/audit, `artifacts/ml/generated/datasets/<version>/`는 재생성 가능한 대용량 CSV/matrix/dump이며 Git ignore한다. 이미 이동된 v1 CSV 두 개는 재생성·복사·덮어쓰기 없이 유지했고 manifest의 `artifact_locations`로 연결했다. 새 PC의 clone에는 대용량 CSV가 없는 것이 정상이며 `.venv\Scripts\python.exe -m auto_trader.ml.data_readiness --verify-determinism`으로 로컬 재생성한다. 파일 hash만 검사할 때는 `--verify-artifacts`를 사용한다. 저장 위치 정리는 Dataset 내용·아래 판정·기존 hash를 변경하지 않는다.
 
 14개 usable 날짜·22/22종목, RAW 110,664개에서 후보 142,774개를 감사했습니다. usable **89,368개 (62.59%)**, 제외 53,406개입니다. pipeline **PARTIALLY_READY**, 첫 탐색적 실험 **READY FOR FIRST ML EXPERIMENT**이며 수익성/일반화 신뢰는 NOT_READY입니다. feature point-in-time 위반·historical backfill feature 누수는 0입니다. 기존 macro cycle-start 시각은 RAW를 유지하고 완료 run 시각으로 사용 가능 경계를 늦췄습니다.
 
