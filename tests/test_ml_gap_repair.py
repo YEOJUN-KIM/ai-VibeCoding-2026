@@ -229,3 +229,81 @@ class GapRepairRepositoryTests(unittest.TestCase):
         with data_pipeline.connect() as conn:
             row = conn.execute("SELECT available_at FROM ml_raw_candles").fetchone()
         self.assertEqual(row["available_at"], self.start + timedelta(minutes=10))
+
+    def test_bounded_opening_resume_restores_cursor_without_rewriting_rows(self):
+        self.now = self.start + timedelta(minutes=10)
+        self.client._domestic_candles.return_value = [self.bar(m) for m in range(10)]
+        options = dict(symbols=('005930', '000660'), indicators=(), kind='opening_0910',
+                       clock=lambda: self.now, budget_seconds=5, max_pages=1)
+        first = gap_repair.reconcile_session(self.client, self.start.date(), **options)
+        self.assertEqual(first['inserted_rows'], 10)
+        self.assertEqual(first['budget']['pages'], 1)
+        self.assertEqual(first['resume']['targets'], [('stock', '000660')])
+        self.assertEqual(gap_repair.pending_opening_reconciliations(self.start.date())['opening_0910'],
+                         {**first['resume'], 'targets': [['stock', '000660']]})
+        call = self.client._domestic_candles.call_args
+        self.assertEqual(call.args[2], 11)  # ten-minute grid + cursor overlap, one page
+        self.assertEqual(call.kwargs['before'], self.now.isoformat())
+        self.now += timedelta(minutes=1)
+        second = gap_repair.reconcile_session(self.client, self.start.date(), resume=first['resume'], **options)
+        self.assertEqual(second['inserted_rows'], 10)
+        self.assertIsNone(second['resume'])
+        self.assertEqual(gap_repair.pending_opening_reconciliations(self.start.date()), {})
+        replay = gap_repair.reconcile_session(self.client, self.start.date(), resume=first['resume'], **options)
+        self.assertEqual(replay['inserted_rows'], 0)
+        self.assertEqual(self.client._domestic_candles.call_count, 2)
+        with data_pipeline.connect() as conn:
+            rows = conn.execute('SELECT symbol,available_at FROM ml_raw_candles ORDER BY symbol').fetchall()
+        self.assertEqual(len(rows), 20)
+        self.assertTrue(all(r['available_at'] == self.now - timedelta(minutes=1)
+                            for r in rows if r['symbol'] == '005930'))
+
+    def test_bounded_timeout_and_429_remain_retryable_targets(self):
+        self.now = self.start + timedelta(minutes=5)
+        for symbol, error, category in (
+            ('005930', TossApiError('timeout', error_code='timeout'), 'TIMEOUT'),
+            ('000660', TossApiError('limited', status_code=429), 'RATE_LIMIT'),
+        ):
+            with self.subTest(category=category):
+                self.client._domestic_candles.side_effect = [error, [self.bar(0)]]
+                options = dict(symbols=(symbol,), indicators=(), kind='opening_0905',
+                               clock=lambda: self.now, budget_seconds=5, max_pages=2)
+                failed = gap_repair.reconcile_session(self.client, self.start.date(), **options)
+                self.assertEqual(failed['error_details']['stock:'+symbol]['category'], category)
+                recovered = gap_repair.reconcile_session(self.client, self.start.date(),
+                                                         resume=failed['resume'], **options)
+                self.assertEqual(recovered['inserted_rows'], 1)
+
+    def test_time_yield_keeps_completed_response_and_unvisited_targets(self):
+        self.now = self.start + timedelta(minutes=5)
+        elapsed = [0.0]
+        def response(*args, **kwargs):
+            elapsed[0] += 2.0
+            return [self.bar(0)]
+        self.client._domestic_candles.side_effect = response
+        with patch('auto_trader.brokers.toss.request_budget.monotonic', side_effect=lambda: elapsed[0]):
+            result = gap_repair.reconcile_session(self.client, self.start.date(),
+                symbols=('005930', '000660'), indicators=(), kind='opening_0905',
+                clock=lambda: self.now, budget_seconds=1, max_pages=2)
+        self.assertEqual(result['inserted_rows'], 1)
+        self.assertEqual(result['resume']['targets'], [('stock', '000660')])
+        self.assertEqual(result['budget']['reason'], 'time_budget')
+
+    def test_opening_yields_instead_of_waiting_for_other_maintenance(self):
+        with gap_repair._repair_lock:
+            result = self.repair(kind='opening_0910', budget_seconds=5)
+        self.assertEqual(result['status'], 'DEFERRED')
+        self.client._domestic_candles.assert_not_called()
+
+    def test_bounded_windows_advance_past_absent_bar_to_later_gap(self):
+        self.save(range(1, 390))
+        self.client._domestic_candles.side_effect = [[self.bar(-1)], [self.bar(390)]]
+        options = dict(symbols=('005930',), indicators=(), kind='opening_0910',
+                       clock=lambda: self.now, budget_seconds=5, max_pages=1)
+        first = gap_repair.reconcile_session(self.client, self.start.date(), **options)
+        self.assertEqual(first['inserted_rows'], 0)
+        self.assertIn('stock:005930', first['resume']['windows'])
+        second = gap_repair.reconcile_session(self.client, self.start.date(), resume=first['resume'], **options)
+        self.assertEqual(second['inserted_rows'], 1)
+        self.assertIsNone(second['resume'])
+        self.assertEqual([call.args[2] for call in self.client._domestic_candles.call_args_list], [200, 2])

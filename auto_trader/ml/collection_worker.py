@@ -11,28 +11,32 @@ from zoneinfo import ZoneInfo
 from ..toss import TossClient
 from .collect_candles import collect_candles
 from .collect_market_indicators import collect_market_indicators
-from .gap_repair import reconcile_session
+from .gap_repair import reconcile_session, pending_opening_reconciliations
 
 
 KST = ZoneInfo("Asia/Seoul")
 FIRST_COLLECTION = time(9, 1, 2)
 LAST_COLLECTION = time(15, 31, 2)
+OPENING_REPAIR_SECONDS = 5.0
+OPENING_REPAIR_PAGES = 2
 logger = logging.getLogger(__name__)
 
 
-def next_worker_event(now: datetime, completed: set) -> tuple[datetime, str]:
+def next_worker_event(now: datetime, completed: set, deferred=None, last_repair=None) -> tuple[datetime, str]:
     """Catch up a delayed opening/final check rather than skipping its slot."""
     local = now.astimezone(KST)
+    deferred = deferred or {}
     choices = [(next_collection_at(now), "regular")]
     if local.weekday() < 5:
         for kind, at in (("opening_0905", time(9, 5, 10)), ("opening_0910", time(9, 10, 10)), ("final", time(15, 35))):
             scheduled = datetime.combine(local.date(), at, KST)
             if (local.date(), kind) in completed:
                 continue
-            if kind != "final" and local.time() > time(9, 12):
+            if kind != "final" and (local.time() >= LAST_COLLECTION or
+                                     local.time() > time(9, 12) and kind not in deferred):
                 continue
-            choices.append((max(scheduled, local), kind))
-    return min(choices, key=lambda choice: choice[0])
+            choices.append((max(scheduled, local, deferred.get(kind, scheduled)), kind))
+    return min(choices, key=lambda choice: (choice[0], choice[1] != 'regular', choice[1] == last_repair))
 
 
 def next_collection_at(now: datetime) -> datetime:
@@ -90,6 +94,10 @@ class CandleCollectionWorker:
         self.enabled = enabled
         self._task: asyncio.Task | None = None
         self._reconciled = set()
+        self._repair_resume = {}
+        self._repair_not_before = {}
+        self._repair_day = None
+        self._last_repair_kind = None
         self._status = {
             "enabled": enabled,
             "running": False,
@@ -136,6 +144,9 @@ class CandleCollectionWorker:
 
     async def run_once(self, collected_at: datetime | None = None) -> dict:
         started_at = collected_at or datetime.now(timezone.utc)
+        previous = self._status['last_started_at']
+        if previous is not None and previous.astimezone(KST).date() == started_at.astimezone(KST).date():
+            self._status['regular_interval_seconds'] = (started_at - previous).total_seconds()
         self._status.update(
             running=True,
             phase="collecting",
@@ -231,10 +242,30 @@ class CandleCollectionWorker:
             _, market_open = await asyncio.to_thread(self.client.kr_market_open_today)
             if not market_open:
                 return {"status": "SKIPPED", "reason": "holiday"}
+            options = {}
+            if kind.startswith('opening'):
+                now = datetime.now(timezone.utc)
+                seconds = min(OPENING_REPAIR_SECONDS, (next_collection_at(now) - now).total_seconds() - 1.0)
+                if seconds <= 0:
+                    return {'status': 'DEFERRED', 'kind': kind, 'reason': 'regular_due', 'inserted_rows': 0}
+                # Freeze the opening grid across slices, even if regular work
+                # delays its first execution. Stored observations remain the
+                # source of truth when a slice or process is interrupted.
+                at = time(9, 5, 10) if kind == 'opening_0905' else time(9, 10, 10)
+                resume = self._repair_resume.get(kind) or {
+                    'report_date': day.isoformat(), 'kind': kind,
+                    'as_of': datetime.combine(day, at, KST).isoformat(),
+                    'targets': [('stock', item) for item in self.symbols] +
+                               [('indicator', item) for item in self.market_indicators]}
+                options = {'budget_seconds': seconds, 'max_pages': OPENING_REPAIR_PAGES, 'resume': resume}
             result = await asyncio.to_thread(reconcile_session, self.client, day,
                                              symbols=self.symbols, indicators=self.market_indicators,
-                                             kind=kind, skip_completed=kind == "final")
-            summary = {key: result[key] for key in ("run_id", "status", "kind", "report_date", "inserted_rows", "errors", "reason") if key in result}
+                                             kind=kind, skip_completed=kind == "final", **options)
+            if result.get('resume'):
+                self._repair_resume[kind] = result['resume']
+            else:
+                self._repair_resume.pop(kind, None)
+            summary = {key: result[key] for key in ("run_id", "status", "kind", "report_date", "inserted_rows", "errors", "reason", "budget") if key in result}
             self._status.update(last_reconciliation=summary,
                                 total_inserted_rows=self._status["total_inserted_rows"] + result.get("inserted_rows", 0))
             return result
@@ -248,7 +279,20 @@ class CandleCollectionWorker:
 
     async def _run(self) -> None:
         while True:
-            scheduled_at, kind = next_worker_event(datetime.now(timezone.utc), self._reconciled)
+            now = datetime.now(timezone.utc)
+            if self._repair_day != now.astimezone(KST).date():
+                self._repair_day = now.astimezone(KST).date()
+                self._repair_resume.clear()
+                self._repair_not_before.clear()
+                self._last_repair_kind = None
+                try:
+                    self._repair_resume.update(await asyncio.to_thread(
+                        pending_opening_reconciliations, self._repair_day))
+                    self._repair_not_before.update({kind: now for kind in self._repair_resume})
+                except Exception:
+                    logger.warning('Could not restore opening repair cursors; final scan remains scheduled')
+            scheduled_at, kind = next_worker_event(now, self._reconciled, self._repair_not_before,
+                                                  self._last_repair_kind)
             self._status.update(
                 phase="waiting",
                 next_run_at=scheduled_at,
@@ -259,8 +303,23 @@ class CandleCollectionWorker:
             )
             await asyncio.sleep(delay)
             if kind == "regular":
+                self._status['regular_schedule_lag_seconds'] = max(
+                    0, (datetime.now(timezone.utc) - scheduled_at).total_seconds())
                 await self.run_once(datetime.now(timezone.utc))
             else:
                 self._reconciled = {key for key in self._reconciled if key[0] == scheduled_at.date()}
-                self._reconciled.add((scheduled_at.date(), kind))
-                await self.run_reconciliation_once(kind, scheduled_at.date())
+                result = await self.run_reconciliation_once(kind, scheduled_at.date())
+                if kind.startswith('opening'):
+                    self._last_repair_kind = kind
+                    # One shared slice per regular interval, across both scans.
+                    next_regular = next_collection_at(datetime.now(timezone.utc))
+                    for opening in ('opening_0905', 'opening_0910'):
+                        self._repair_not_before[opening] = next_regular
+                pending = kind.startswith('opening') and (result.get('resume') or
+                          result.get('status') in {'DEFERRED', 'FAILED'})
+                if not pending:
+                    self._reconciled.add((scheduled_at.date(), kind))
+                    self._repair_not_before.pop(kind, None)
+                if kind == 'final':
+                    self._repair_resume.clear()
+                    self._repair_not_before.clear()

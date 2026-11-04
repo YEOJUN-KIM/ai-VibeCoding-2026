@@ -9,6 +9,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 from .types import TossApiError
+from .request_budget import current_budget, request_wait, request_lock
 
 
 class TossTransport:
@@ -80,9 +81,17 @@ class TossTransport:
         group = self._request_group(request)
         deadline = monotonic() + 20
         for attempt in range(3):
+            budget = current_budget.get()
+            if budget is not None:
+                budget.remaining()
             try:
-                return self._json_request_once(request)
+                result = self._json_request_once(request)
+                if budget is not None:
+                    budget.last_error = None
+                return result
             except TossApiError as exc:
+                if budget is not None:
+                    budget.last_error = exc
                 chart_transient = group in {"MARKET_DATA_CHART", "MARKET_INDICATOR_CHART"} and (
                     exc.error_code in {"timeout", "network"}
                     or (exc.status_code is not None and 500 <= exc.status_code < 600)
@@ -93,12 +102,12 @@ class TossTransport:
                 remaining = max(backoff, self._group_rate_limit_until.get(group, 0) - monotonic())
                 if monotonic() + remaining > deadline:
                     raise
-                self._request_waiter.wait(remaining)
+                request_wait(self._request_waiter, remaining)
 
 
     def _json_request_once(self, request: Request) -> dict:
         group = self._request_group(request)
-        with self._group_lock(group):
+        with request_lock(self._group_lock(group)):
             remaining = self._group_rate_limit_until.get(group, 0.0) - monotonic()
             if remaining > 0:
                 raise TossApiError(
@@ -109,9 +118,13 @@ class TossTransport:
                 monotonic() - self._group_last_request_at.get(group, 0.0)
             )
             if request_delay > 0:
-                self._request_waiter.wait(request_delay)
+                request_wait(self._request_waiter, request_delay)
             try:
-                with urlopen(request, timeout=self.timeout) as response:
+                budget = current_budget.get()
+                timeout = min(self.timeout, budget.remaining()) if budget is not None else self.timeout
+                if budget is not None:
+                    budget.requests += 1
+                with urlopen(request, timeout=timeout) as response:
                     payload = self._read_json(response)
                     headers = response.headers
                 self._group_last_request_at[group] = monotonic()
@@ -167,7 +180,7 @@ class TossTransport:
 
 
     def _invalidate_access_token(self, rejected_token: str) -> None:
-        with self._token_lock:
+        with request_lock(self._token_lock):
             if self._access_token == rejected_token:
                 self._access_token = None
                 self._token_expires_at = None
@@ -204,7 +217,7 @@ class TossTransport:
             return self._access_token
         if not self.configured:
             raise TossApiError("TOSS_CLIENT_ID와 TOSS_CLIENT_SECRET을 먼저 설정하세요.")
-        with self._token_lock:
+        with request_lock(self._token_lock):
             now = datetime.now(timezone.utc)
             if self._access_token and self._token_expires_at and now < self._token_expires_at:
                 return self._access_token

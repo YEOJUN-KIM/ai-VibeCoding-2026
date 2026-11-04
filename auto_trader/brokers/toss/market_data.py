@@ -9,6 +9,7 @@ from ...stock_search import normalize as normalize_stock_query, stock_match_rank
 from ...chart_candles import CHART_RANGES, chart_candles
 from ...models import LiveCandidateList, LiveFavoriteStock, LiveStockCandle, LiveStockCandidate, LiveStockDetail, LiveStockSearchPage, LiveStockSearchResult, Stock
 from .types import TossApiError
+from .request_budget import current_budget, request_lock as budgeted_lock
 
 
 class TossMarketData:
@@ -350,7 +351,7 @@ class TossMarketData:
         with self._candle_lock:
             request_lock = self._candle_request_locks.setdefault(cache_key, Lock())
         # 같은 종목·주기의 중복 페이지 수집만 직렬화한다. 서로 다른 종목은 병렬 조회된다.
-        with request_lock:
+        with budgeted_lock(request_lock):
             cached = self._candle_cache.get(cache_key)
             if cached is not None and monotonic() < cached[0] and cached[1] >= count:
                 return cached[2][-count:]
@@ -359,7 +360,8 @@ class TossMarketData:
             seen_cursors: set[str] = {before} if before else set()
             max_pages = max(1, (count + 199) // 200)
             for page_index in range(max_pages):
-                query_values = {"symbol": normalized, "interval": interval, "count": 200}
+                query_values = {"symbol": normalized, "interval": interval,
+                                "count": min(200, count - len(raw_rows)) if current_budget.get() else 200}
                 if cursor:
                     query_values["before"] = cursor
                 query = urlencode(query_values)
@@ -413,7 +415,7 @@ class TossMarketData:
             return cached[2][-count:]
         with self._candle_lock:
             request_lock = self._candle_request_locks.setdefault(cache_key, Lock())
-        with request_lock:
+        with budgeted_lock(request_lock):
             cached = self._candle_cache.get(cache_key)
             if cached is not None and monotonic() < cached[0] and cached[1] >= count:
                 return cached[2][-count:]
