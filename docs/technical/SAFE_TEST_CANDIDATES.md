@@ -150,30 +150,62 @@
 
 **아래는 이번에 실행하지 않은 제안이다. 후속 별도 승인이 필요하다.** 전체 unittest discover, Node 전체 glob, 앱 import smoke check, compileall, 패키지 설치는 이 문서로 승인되지 않는다.
 
-1. 문서 기준 SHA와 테스트·의존 파일 변경 여부를 다시 대조하고 Claude 독립 검토를 마친다.
+1. 문서 기준 SHA와 테스트·의존 파일 변경 여부를 다시 대조한다. 사용자 전달에 따르면 Claude 독립 리뷰와 GPT 주요 판단 검토가 이루어졌으며, 아래 실행 안내만 보완한다. 리뷰 반영을 실제 실행 검증 완료로 해석하지 않는다.
 2. 운영 `.env`·키·계좌·DB 덤프·RAW·백업이 없는 독립 공간에서 신뢰할 수 있는 기존 런타임을 선택한다. 운영 `.venv`나 ignored 파일을 복사하지 않는다.
 3. Python의 sitecustomize/usercustomize/.pth 등 시작 hook, Node의 NODE_OPTIONS/preload 및 도구 wrapper가 앱·DB·통신·파일 쓰기를 추가하지 않는지 별도로 검토한다. 비밀 환경변수 값은 출력하지 않는다.
 4. 네트워크·운영 DB·증권 접근을 환경 권한으로 차단하고, 쓰기는 승인된 임시 산출물 경로만 허용한다. Worktree만으로 이 조건이 충족되지는 않는다.
-5. Python 3.11 이상/Pydantic v2와 Node·Intl 지원 여부를 확인한다. 이번에 버전 조회·import·설치는 하지 않았다. 부족한 의존성은 별도 설치 승인 대상이다.
-6. 실행 CWD는 `D:\SourceBank\ai-VibeCoding-2026-codex-pilot`로 명시하고 아래처럼 한 파일씩만 실행한다. 출력 저장은 별도 승인된 경로에 한정한다.
+5. 실제 Python·Node 실행 파일의 절대 경로와 버전, Python 3.11 이상/Pydantic v2, Node의 Intl·ICU 한국어/시간대 지원 여부를 확인한다. 아래 `python`, `node`는 명령 형태를 보여 주는 표기이며 이 PC의 실행 파일을 확인한 결과가 아니다. 이번에 경로·버전 조회·import·설치는 하지 않았다. 부족한 의존성은 별도 설치 승인 대상이다.
+6. 실행 CWD는 `D:\SourceBank\ai-VibeCoding-2026-codex-pilot`로 명시하고 아래처럼 한 파일씩만 실행한다. 프로젝트가 올바르게 import되는 경로도 별도 확인한다. 출력 저장은 별도 승인된 경로에 한정한다.
+
+### Python: 예상 개수와 0개 실행 방지
+
+소스의 테스트 정의를 읽어 확인한 예상 개수다. 실제 실행 결과가 아니다.
+
+| 파일 | 예상 unittest 테스트 개수 | 후속 실행 결과에서 확인할 사항 |
+|---|---:|---|
+| `tests/test_chart_candles.py` | 3개 | 대상 메서드와 `Ran 3 tests`, 실패·오류·skip 없음 |
+| `tests/test_long_term.py` | 4개 | 대상 메서드와 `Ran 4 tests`, 실패·오류·skip 없음 |
 
 ```powershell
 # 후속 승인용 예시 — 이번 작업에서는 미실행
 python -B -m unittest discover -s tests -p test_chart_candles.py -v
 python -B -m unittest discover -s tests -p test_long_term.py -v
-node --test tests/test_chart_viewport.js
-node --test tests/test_settings_summary.js
-node --test tests/test_market_hours.js
 ```
 
-Python의 `-B`는 bytecode 쓰기만 억제하며 일반 파일 쓰기·네트워크를 차단하지 않는다. Node VM은 가짜 브라우저 환경으로 함수를 검사하기 위한 도구이며 운영 접근을 강제 차단하는 보안 장치는 아니다.
+`unittest discover`는 검색 결과가 0개여도 종료 코드 0과 `OK`를 표시할 수 있다. 종료 코드나 `OK`만으로 성공 처리하지 않는다. 예상 테스트 이름·실행 개수·오류·실패·skip 여부를 함께 확인한다. 0개 또는 예상 개수와 다르면 **미검증/수집 이상**으로 보고하고, CWD·패턴·대상 파일·import 경로를 확인하기 전 통과로 처리하지 않는다. 이 확인을 자동으로 강제하는 스크립트는 이번에 추가하지 않는다.
+
+### JavaScript: 일반 assert 스크립트 직접 실행
+
+후보 3개는 현재 `node:test`의 `test()`로 케이스를 등록하는 구조가 아니라, 내장 assert와 가짜 DOM/VM을 사용하는 일반 스크립트다. 따라서 후속 명령안은 직접 실행 형태로 제시한다.
+
+```powershell
+# 후속 승인용 예시 — 이번 작업에서는 미실행
+node tests/test_chart_viewport.js
+node tests/test_settings_summary.js
+node tests/test_market_hours.js
+```
+
+`node 파일.js`는 스크립트를 직접 실행하고 assertion 실패·미처리 오류 또는 설정된 실패 종료 코드로 실패를 알린다. `node --test 파일.js`는 Node 테스트 러너를 통해 실행하며 파일 단위 결과도 보고할 수 있다. 일반 assert 스크립트에서 러너가 표시한 테스트 수를 assertion 수나 개별 기능 검증 수로 해석하지 않는다. 직접 실행도 종료 코드와 해당 스크립트의 완료 로그를 함께 확인해야 하며, 실제 통과 여부는 아직 미검증이다.
+
+**동명 파일 구분:** `tests/test_market_hours.js`는 이번 우선 후보로, 화면 표시 코드에 가짜 fetch·interval을 주입하는 JavaScript 테스트다. `tests/test_market_hours.py`는 Python의 시장 시간 계산·MarketHours 관련 별도 테스트이며 위 5개 후보에 포함되지 않는다. Python 파일은 앞의 추가 조사 분류를 유지하고, JS 후보의 판단·명령·검증 결과를 Python 파일에 적용하지 않는다.
+
+### Python 옵션의 한계
+
+| 옵션 | 제한적으로 하는 일 | 보장하지 않는 것 |
+|---|---|---|
+| `-I` | 격리 모드. `-E`, `-s`를 포함하며 스크립트 디렉터리/현재 디렉터리 등의 import 경로를 제한 | 운영체제 수준의 격리, DB·네트워크·파일 쓰기 차단. 프로젝트 import가 실패할 수도 있으므로 그대로 덧붙이지 않음 |
+| `-E` | `PYTHON*` 환경변수의 해석을 무시 | 다른 환경변수·프로그램 설정 읽기, 모든 시작 hook과 부수 효과 차단 |
+| `-s` | 사용자 site-packages를 import 검색 경로에 추가하지 않음 | 시스템·가상환경의 site 초기화, `.pth`·sitecustomize 등 모든 시작 hook 차단 |
+| `-B` | import 시 `.pyc` bytecode 파일 쓰기를 억제 | 일반 파일 쓰기·DB·네트워크·프로세스 실행 차단 |
+
+이 옵션들은 단독 또는 조합으로 사용해도 실행 안전성을 완전히 보장하지 않는다. `-I`/`-E`/`-s`로 import 경로가 달라질 수 있으므로 승인된 실행 파일·프로젝트 import 경로·의존성과 시작 hook을 별도로 확인해야 한다. 위 Python 명령안에는 `-B`만 사용했으며 다른 옵션을 무조건 추가하라는 의미가 아니다. 운영 접근 차단과 실행 환경 격리는 별도 조건이다. Node VM도 가짜 브라우저 환경으로 함수를 검사하기 위한 도구이며 운영 접근을 강제 차단하는 보안 장치는 아니다.
 
 ## 상태·한계와 독립 검토 요청
 
 - 완료: 정적 조사와 문서 작성. API·DB 계약 및 앱 코드는 변경하지 않았다.
 - 미실행: 자동 테스트, 앱 동작 검증, 사용자 동작 확인, 운영 적용. 후보가 실제로 통과한다는 증거는 없다.
 - 판단의 한계: 후보 5개의 읽은 프로젝트 경로에 한정. 외부 패키지·시작 hook·동적 실행 환경은 미확인. 보류 파일은 위험이 확정됐거나 추가 조사가 필요한 경우를 함께 포함한다.
-- Claude 요청 사항: 후보 5개의 모든 import와 최상단 실행, JS scope의 fetch/interval 대체, Python의 settings 비의존 여부, 보류 분류·73개 파일 집계와 누락, 제안 명령의 수집 범위를 독립적으로 읽기 검토. 이번 PR 파일을 동시에 수정하지 말고 우선 검토 의견으로 인계한다.
+- Claude 리뷰 후속: 사용자께서 전달한 독립 리뷰의 실행 안내 보완을 반영했다. 실제 실행 파일의 절대 경로·버전, Node ICU/Intl 지원, `long_term` 본문·의존 경로의 추가 정독 필요성은 미검증 항목으로 유지한다. 초기 정적 조사 결과를 유지하되 이 추가 정독이나 실제 실행까지 완료했다고 보고하지 않는다. 다른 AI와 같은 파일을 동시에 수정하지 않는다.
 - GPT 요청 사항: ‘정적 후보’와 ‘실행 안전 검증 완료’가 구분되는지, 실행 승인 조건·공통 지침 준수·두 문서 범위 확인.
 - 사용자 확인: Draft PR의 Files changed에서 두 문서만 추가됐는지, 후보·근거·미검증·금지 사항을 확인한다. 문서 검토에는 앱·DB 실행이 필요 없다. 이후 실제 테스트 실행과 main 병합은 각각 별도 승인 대상이다.
 - 핵심 개념: import는 선언 읽기만이 아니라 모듈 최상단 코드를 실행한다. mock은 적용 대상·시점 밖의 동작까지 자동 차단하지 않는다.
