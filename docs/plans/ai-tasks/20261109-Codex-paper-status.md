@@ -39,7 +39,7 @@
 - Claude 인계 대상: tests/test_paper_status.js 및 Claude 독립 기록. app.js 수정 권한은 Codex에게 유지. 별도 메시지 전송이나 교차 리뷰 완료를 주장하지 않음.
 - 선행 구현 SHA와 Draft PR은 PR 본문 및 완료 보고에서 확인. Claude 회귀 검토는 해당 SHA와 테스트 변경의 결합 상태를 대상으로 해야 하며 본 브랜치에서 테스트 파일을 가져오거나 실행하지 않음.
 
-### 상태 계약
+### 초기 구현 상태 계약 (후속 승인 변경은 아래 기록 우선)
 
 - paperStatusGuide(strategy, workspace={}, risk={})와 renderDataSummary(strategy, workspace={}, risk={})의 이름·인자·선언 순서를 유지. paperStatusGuide는 문자열 label/reason/next를 반환. 선언 경계로 소스를 추출하는 기존 테스트와 호환되도록 외부 helper를 추가하지 않음.
 - label 목록 그대로 유지: 전략 정지, 긴급 정지, 거래 시간 확인 대기, 휴장일 대기, 거래 시간 대기, 주말 대기, 운영 시간 대기, API 요청 한도 대기, 시세 지연, 시세 대기, 신규 매수 제한, 일부 종목 시세 대기, 정상 감시 중.
@@ -61,7 +61,7 @@
 - 핵심 개발 개념: 첫 일치 분기가 결정하는 우선순위, 상태 판정 계약과 사용자 안내 문구의 분리.
 - commit/push 및 PR 번호·URL·최종 SHA: 자기 SHA 반복 커밋을 피하기 위해 PR 본문과 완료 보고에 기록. 전송 전 기준 SHA..HEAD 전체 변경을 검토하고 일반 push 후 원격 SHA와 Draft head/base를 확인.
 
-### 미검증 위험과 GPT 검토 사항
+### 초기 구현의 미검증 위험과 GPT 검토 사항 (후속 변경 전 기록)
 
 - emergency_stopped:true와 running:true 조합은 기존 코드에서 긴급 정지 분기로 들어가지 않음. 생산 가능성·백엔드 불변조건·주문 차단 여부는 미검증. 이번에 판정·주문 로직을 변경하지 않고 독립 위험으로 기록.
 - running:true이며 data_message·시각이 비어 있는 입력은 기존대로 정상 감시 중으로 표시될 수 있고 요약은 시세 수신 대기로 표시되어 어긋날 수 있음. 새 시세 확인의 신뢰성은 별도 계약 검토 대상이며 이번 분기 보존.
@@ -70,3 +70,41 @@
 - 실제 브라우저 줄바꿈·좁은 화면 가독성·시간대 출력·HTML 이스케이프·Claude 테스트 결합은 미검증. 테스트의 가짜 DOM 결과도 실제 브라우저 보장이 아님.
 - GPT 검토: 모든 label·조건 순서 불변, 문구 정확성, Claude 기대 출력 계약, 위 의심 상태의 후속 독립 조사 필요성. app.js의 동시 편집은 충돌 위험이므로 인계 시 재확인.
 - 통합: Draft 검토 대상으로만 제공. Claude 교차 리뷰·승인된 검증·사용자 확인이 남음. main 병합 및 배포는 별도 사용자 승인 필요.
+
+## 후속 제한 수정 — Issue #3 댓글 6730735539
+
+### 작업 정의와 승인
+
+- 기존 작업 ID·담당 Codex·브랜치·Worktree·기준 main SHA 및 허용 두 파일을 그대로 사용. 이번 시작 HEAD는 `0ee560fe7edb8f19c602d497433ea1dce3cada59`.
+- 승인 근거: 이 채팅의 Work 후속 감독 지시. [조사 댓글](https://github.com/YEOJUN-KIM/ai-VibeCoding-2026/issues/3#issuecomment-6730735539)의 두 UI 분기만 구현하고 자기 작업 기록 갱신, 담당 브랜치 일반 commit/push와 기존 Draft PR #5 갱신 허용. 조사 댓글 자체의 미승인 제안과 현재 구현 승인을 구분함.
+- 완료 조건: 충돌 안내가 !running 앞에서 우선하고, 첫 시세 준비 안내는 기존 모든 분기 뒤·정상 기본값 앞에 위치. 정확한 label/reason/next와 두 준비 문자열 준수. backend·주문·위험·API·DB·renderDataSummary 변경 없음. 실행 검증 없이 정적 검토·diff --check만 수행.
+- 금지 유지: Node·문법 검사·테스트·Docker·브라우저·서버/FOLIO·DB·증권 API·운영 워커·LIVE·비밀 파일 열람·설치·main 병합/배포·타 Worktree 변경. 새 세션/인프라/PR 생성 없음. Issue #3 보고는 Work 담당이며 중복 게시하지 않음.
+- 승인 상태: 위 제한 수정과 Git/기존 PR 반영 승인. 진행 상태: 구현 후 자체 정적 검토, 후속 최종 SHA 상호 리뷰 대기. 실행 검증 승인 없음.
+
+### 착수 및 권한 점검
+
+- AGENTS.md, CLAUDE.md, AI_COLLABORATION.md, SAFE_TEST_CANDIDATES.md, 실제 app.js, 양 작업 기록과 승인 댓글 재확인. 테스트 파일은 원격 고정 SHA로 읽기만 함.
+- 로컬 main `7029a108bc0459bcf0e13ddc6aa9dae824baa053`, Codex 시작 HEAD `0ee560fe7edb8f19c602d497433ea1dce3cada59`, Claude `0a26f4be0769e38212e91660bbf0d38cbf9d7b55`. 세 Worktree의 시작 status가 clean임을 읽기 전용 확인. 다른 Worktree 변경·파일 가져오기 없음.
+- 로컬 origin URL은 값을 출력하지 않고 예상 저장소와 일치하는지 판정하여 True 확인. GitHub connector에서 main 기준 SHA, PR #4/#5 OPEN Draft 및 두 head 일치 확인. 브랜치 목록 끝까지 조회: main, docs/ai-collab-setup, codex/ai-collab-pilot-safe-tests, 이번 Codex/Claude 브랜치. 기존 담당 분리와 실제 수정 파일 범위가 겹치지 않음.
+- 원격 읽기 권한 프롬프트를 Work가 취소함. Work 안내상 자동 승인 검토가 미확인 권한/신뢰 프롬프트에 y 응답 위험으로 거절. 동일 요청·승인 재시도 및 우회 없음. 사용자 지시로 원격 조회는 기존 GitHub connector 사용. commit/push가 권한에 막히면 차단 명령과 완료 diff를 보고하고 중단하며 간접 실행으로 우회하지 않음.
+- 허용 정적 확인: GitHub Issue/PR/브랜치/고정 파일/compare 조회, Get-Content·rg로 소스/지침 읽기, git --no-optional-locks status, git rev-parse, git worktree list, git branch -r, git diff/log/show, git diff --check 및 git diff --cached --check. 원격 URL은 일치 여부만 보고. 테스트·앱 코드 평가 없음.
+
+### 구현된 현재 상태 계약
+
+- `strategy.running && strategy.emergency_stopped`를 !running 분기 앞에 추가. label=`긴급 정지 확인 필요`, reason=`긴급 정지 표시와 실행 표시가 서로 맞지 않습니다.`, next=`현재 상태를 다시 조회하고 실행 상태를 확인하세요.`. HOLIDAY·API·신규 매수 제한 등보다 우선. 주문 중단 보장·재시작 권유 없음. 정상 정지/기존 긴급 정지는 원문 그대로.
+- 정상 기본 반환 직전에만 `!strategy.last_data_at && !strategy.last_decision_at && (!message || 준비문구목록.includes(message))` 검사. 기존 message는 data_message의 null/부재를 빈 문자열로 정규화.
+- 정확한 준비문구: `전략 적용 완료 · 시작하면 새 종목의 시세를 조회합니다.`, `관리 범위 적용 완료 · 시작하면 시세를 조회합니다.`. 임의 부분일치·공백 정규화·넓은 시각 부재 검사 추가 없음.
+- 준비 안내 label=`시세 대기`, reason=`시세 수신과 조건 확인 기록이 아직 없습니다.`, next=`다음 조회에서 상태를 다시 확인하세요. 대기가 계속되면 거래 시간과 증권사 연결 상태를 확인하세요.`.
+- 현재 순서: 충돌 → 기존 !running → 시장 상태 → 운영 시간 외 메시지 → API 한도 → 지연 → 전체 시세 대기 → 매수 제한 → 일부 시세 대기 → 제한적 준비 안내 → 정상 기본값. 기존 분기 조건·순서·문구·counts·지연 임계값은 변경하지 않음.
+- 함수명/인자/선언 경계·label/reason/next 반환 형식 및 renderDataSummary 그대로. 기존 렌더 경로에서 guide와 배지가 새 label을 함께 사용. 빈 메시지 요약은 시세 수신 대기, 준비문구 요약은 원문, 시각은 수신 전/확인 전을 유지.
+
+### 자체 정적 검토와 Claude 인터페이스
+
+- PR #4 시작 head `0a26f4be0769e38212e91660bbf0d38cbf9d7b55` 테스트 및 기록을 읽기 전용 검토. 기존 테스트 39행의 `guide({running:true}).next.includes('추가 확인')`가 이번 준비 안내와 불일치할 것으로 정적 판단했고, 충돌 assertComplete는 필드 모양만 검사함을 확인. app.js를 되돌리거나 Claude 파일을 수정하지 않음.
+- commit 전 Claude 담당 브랜치가 예정된 테스트·기록 두 파일만 추가 변경한 `f21ddcb91f9f40ca40b5ca1f1c724b0ca2aedfa1`로 갱신됨. 읽기 전용 compare와 새 테스트 대조에서 39행은 정상 시세 메시지 입력으로 한정되어 위 불일치가 해소됐으며, 충돌 우선순위·비보장 문구·준비 상태·경계/배지 단언 추가를 확인. 정확한 두 준비문구와 새 label이 구현과 일치하고 예비 정적 검토에서 추가 불일치 발견 없음. 최종 양 SHA 상호 리뷰 완료나 테스트 실행 통과를 뜻하지 않음. Claude 파일 수정·별도 메시지/Issue 댓글 없음.
+- 합성 계약: OPEN/running/비긴급/두 시각 null 및 메시지 빈 문자열·null·생략·각 준비문구 → 시세 대기. 같은 입력에 risk.new_buys_allowed=false → 매수 제한 우선; HOLIDAY/MARKET_UNKNOWN/API/0/N/일부 counts는 기존 분기 우선. 유효한 시각 또는 정상 메시지에는 이 준비 분기가 적용되지 않음. 충돌은 모든 시장·메시지·risk 조합보다 우선. 한 시각만 있으면 기존 동작 유지.
+- 선택 이유: 두 국소 분기만 추가해 기존 계약과 실행 로직 영향을 제한. 장점은 의존성·백엔드 변경이 없다는 점, 한계는 문자열 의존·공백/잘못된 날짜·재시작 잔여 데이터·실제 화면을 해결하지 않는다는 점. 핵심 개념은 early return 우선순위와 표시 안내/실행 안전성의 분리.
+- 동기 상태 조회의 torn snapshot 가능성, 잠금 밖 start/stop 경쟁과 주문 단계 긴급 플래그 최종 검사 부재는 별도 미검증 위험으로 유지. 새 label은 이 위험을 해결하거나 주문 차단을 보장하지 않음.
+- 자동 테스트·Node/문법·Docker·실제 브라우저·사용자 확인 모두 미실행. 이전 Docker 1회 exit 0는 이번 검증 결과가 아님. PC preview BLOCKED 유지, 우회/서버 실행 없음. 운영 적용 없음.
+- 사용자 확인은 우선 PR diff의 두 분기와 정확 문구를 읽는 방식. 실행·PC 화면 확인은 별도 격리/플랫폼 허용 경로 및 승인 필요. 최종 양 SHA 교차 검토는 Work 요청 후 수행하며 이전 SHA 리뷰 완료를 새 SHA의 리뷰 완료로 승계하지 않음.
+- commit/push/최종 SHA·원격 일치·clean·Draft 확인 결과와 후속 검토 상태는 기존 PR #5 및 최종 보고에 기록. 자기 SHA 기록을 위한 반복 commit 없음.

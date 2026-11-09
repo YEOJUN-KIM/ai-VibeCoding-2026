@@ -127,6 +127,7 @@ function decisionContext(item,strategy,workspace,risk,orders,now=Date.now()){
 function renderDecisions(stocks,strategy,workspace={},risk={},orders=[]){const names=new Map(stocks.map(s=>[s.symbol,s.name]));$('#watchlist-body').innerHTML=strategy.snapshots.length?recentSnapshots(strategy).map(item=>`<tr><td>${stockCell(names.get(item.symbol)||item.name,item.symbol)}</td><td>${won.format(Number(item.price))}</td><td>${item.short_average?number.format(Number(item.short_average)):'-'}</td><td>${item.long_average?number.format(Number(item.long_average)):'-'}</td><td>${decisionDisplay(decisionContext(item,strategy,workspace,risk,orders))}</td></tr>`).join(''):'<tr><td class="empty" colspan="5">전략을 시작하면 판단 기록이 표시됩니다.</td></tr>';}
 function paperStatusGuide(strategy,workspace={},risk={}){
  const message=strategy.data_message||'';
+ if(strategy.running&&strategy.emergency_stopped)return {label:'긴급 정지 확인 필요',reason:'긴급 정지 표시와 실행 표시가 서로 맞지 않습니다.',next:'현재 상태를 다시 조회하고 실행 상태를 확인하세요.'};
  if(!strategy.running)return {label:strategy.emergency_stopped?'긴급 정지':'전략 정지',reason:'자동 주문과 보유분 청산 감시가 멈춰 있습니다.',next:!workspace.selected_strategy_id?'계좌·전략에서 저장 전략을 선택하세요.':!workspace.snapshot_ready?'계좌·전략에서 계좌 준비 상태를 확인하세요.':'계좌·전략에서 전략 시작을 누르세요.'};
  const opening=strategy.market_next_open_at?`다음 거래 시작 ${new Date(strategy.market_next_open_at).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'})} · 설정 운영 시간과 겹칠 때 자동 확인합니다.`:'다음 거래 시간과 설정 운영 시간이 겹치면 자동 확인합니다.';
  if(strategy.operating_state==='MARKET_UNKNOWN')return {label:'거래 시간 확인 대기',reason:'시장이 거래 중인지 확인하지 못해 조건 판단과 모의 주문을 기다리고 있습니다.',next:'거래 시간을 자동으로 다시 확인합니다. 계속되면 증권사 연결 상태를 확인하세요.'};
@@ -141,6 +142,11 @@ function paperStatusGuide(strategy,workspace={},risk={}){
  if((counts&&Number(counts[1])===0)||(!counts&&/오류|지연|대기/.test(message)))return {label:'시세 대기',reason:counts?`${counts[2]}개 종목 모두 판단에 필요한 시세를 기다리고 있습니다.`:'판단에 필요한 시세를 아직 받지 못했습니다. 시세 수신 상태는 아래 요약에서 확인할 수 있습니다.',next:'다음 조회에서 자동으로 다시 확인합니다. 대기가 계속되면 시장 거래 시간과 증권사 연결 상태를 확인하세요.'};
  if(risk.new_buys_allowed===false)return {label:'신규 매수 제한',reason:risk.block_reason||'계좌 공통 투자 한도로 새로 매수할 수 없습니다.',next:'투자 한도에서 사용량과 제한 이유를 확인하세요. 실행 중인 보유분 청산 감시는 유지됩니다. 시세와 청산 조건에 따라 모의 매도를 판단합니다.'};
  if(counts&&Number(counts[1])<Number(counts[2]))return {label:'일부 종목 시세 대기',reason:`${counts[2]}개 종목 중 ${counts[1]}개는 판단을 계속하고, ${Number(counts[2])-Number(counts[1])}개는 필요한 시세를 기다립니다.`,next:'대기 종목은 아래에서 확인하세요. 다음 조회에서 자동으로 다시 확인합니다. 판단 가능한 종목도 매수 조건과 잔액·투자 한도를 충족해야 모의 주문을 검토합니다.'};
+ const preparingFirstFeed=!strategy.last_data_at&&!strategy.last_decision_at&&(!message||[
+  '전략 적용 완료 · 시작하면 새 종목의 시세를 조회합니다.',
+  '관리 범위 적용 완료 · 시작하면 시세를 조회합니다.'
+ ].includes(message));
+ if(preparingFirstFeed)return {label:'시세 대기',reason:'시세 수신과 조건 확인 기록이 아직 없습니다.',next:'다음 조회에서 상태를 다시 확인하세요. 대기가 계속되면 거래 시간과 증권사 연결 상태를 확인하세요.'};
  return {label:'정상 감시 중',reason:'최신 시세로 진입·청산 조건을 확인하고 있습니다. 실행 중이어도 바로 매수하지는 않습니다.',next:'종목별 판단을 확인하세요. 매수 조건이 맞으면 잔액과 투자 한도를 추가 확인합니다.'};
 }
 function renderDataSummary(strategy,workspace={},risk={}){
