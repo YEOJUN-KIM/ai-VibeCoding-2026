@@ -126,8 +126,12 @@ console.log('PAPER status regression: label precedence matrix, stale-feed thresh
 // Reasons must carry the meaning, not an exact sentence (wording is owned by the UI change).
 // 0/N: every one of the N symbols is waiting for a quote. Must not echo "all ready" and must not read as an error.
 for (const [message, total] of [[NONE_READY, '22'], ['0/10종목 판단 가능 · 대기', '10']]) {
-  const noneReason = guide({running: true, data_message: message}).reason;
+  const noneGuide = guide({running: true, data_message: message});
+  const noneReason = noneGuide.reason;
+  assert.equal(noneGuide.label, '시세 대기', `0/${total}: label must stay 시세 대기`);
   assert.ok(noneReason.includes(total), `0/${total}: reason must mention the total symbol count`);
+  // All-waiting meaning: an "all/entire" wording, or the original readable 0/N form. "Only some are waiting" must fail.
+  assert.match(noneReason, new RegExp(`모두|전체|전부|(?<!\\d)0/${total}종목 판단 가능`), `0/${total}: reason must say every symbol is waiting`);
   assert.match(noneReason, /대기|기다/, `0/${total}: reason must say the symbols are waiting`);
   assert.doesNotMatch(noneReason, /오류|실패|장애/, `0/${total}: waiting must not read as an error`);
 }
