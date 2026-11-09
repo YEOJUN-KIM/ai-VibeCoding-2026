@@ -123,10 +123,17 @@ for (const [name, strategy, workspace, risk, expected] of scenarios) {
 }
 console.log('PAPER status regression: label precedence matrix, stale-feed thresholds and non-empty reason/next passed.');
 
-// Reasons that carry data must keep it.
-assert.equal(guide({running: true, data_message: NONE_READY}).reason, NONE_READY);
-assert.equal(guide({running: true, data_message: SOME_READY}).reason.includes('22'), true);
-assert.equal(guide({running: true, data_message: SOME_READY}).reason.includes('7'), true);
+// Reasons must carry the meaning, not an exact sentence (wording is owned by the UI change).
+// 0/N: every one of the N symbols is waiting for a quote. Must not echo "all ready" and must not read as an error.
+for (const [message, total] of [[NONE_READY, '22'], ['0/10종목 판단 가능 · 대기', '10']]) {
+  const noneReason = guide({running: true, data_message: message}).reason;
+  assert.ok(noneReason.includes(total), `0/${total}: reason must mention the total symbol count`);
+  assert.match(noneReason, /대기|기다/, `0/${total}: reason must say the symbols are waiting`);
+  assert.doesNotMatch(noneReason, /오류|실패|장애/, `0/${total}: waiting must not read as an error`);
+}
+// 7/22: both the total and the ready count are visible.
+const someReason = guide({running: true, data_message: SOME_READY}).reason;
+assert.ok(someReason.includes('22') && someReason.includes('7'), '7/22: reason must mention total and ready counts');
 assert.equal(guide({running: true, data_message: SOME_READY}, {}, BLOCK).reason, '일일 손실 한도');
 // Three stopped states must tell the user three different next steps.
 const nextNoStrategy = guide({running: false}, {}).next;
