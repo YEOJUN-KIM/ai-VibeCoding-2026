@@ -36,7 +36,7 @@ assert.equal(guide({running:false,operating_state:'MARKET_UNKNOWN'}).label,'전�
 assert.equal(guide({running:true,data_message:'API 요청 한도 대기: 다음 조회'}).label,'API 요청 한도 대기');
 assert.equal(guide({running:true,last_data_at:'2026-10-03T10:00:00+09:00',checked_at:'2026-10-03T10:02:00+09:00'}).label,'시세 지연');
 assert.equal(guide({running:true,operating_state:'WEEKEND',last_data_at:'2026-10-03T10:00:00+09:00',checked_at:'2026-10-03T10:02:00+09:00'}).label,'주말 대기');
-assert.ok(guide({running:true}).next.includes('추가 확인'));
+assert.ok(guide({running:true,data_message:'실제 현재가 · 완료된 1분봉 · 모의 체결'}).next.includes('추가 확인'));
 console.log('PAPER status: stop precedence, preparation, hours, API wait, partial feed and buy-only limits passed.');
 const nodes=new Map();
 context.$=selector=>{if(!nodes.has(selector))nodes.set(selector,{textContent:'',innerHTML:'',dataset:{},querySelector(){return null;}});return nodes.get(selector);};
@@ -62,6 +62,9 @@ const NONE_READY = '0/22종목 판단 가능 · 대기';
 const SOME_READY = '7/22종목 판단 가능 · 대기';
 const ALL_READY = '22/22종목 판단 가능';
 const BLOCK = {new_buys_allowed: false, block_reason: '일일 손실 한도'};
+const CONFLICT_LABEL = '긴급 정지 확인 필요';
+const PREP_APPLY = '전략 적용 완료 · 시작하면 새 종목의 시세를 조회합니다.';
+const PREP_SCOPE = '관리 범위 적용 완료 · 시작하면 시세를 조회합니다.';
 const FIELDS = ['label', 'reason', 'next'];
 const WAITING_LABELS = ['휴장일 대기', '거래 시간 대기', '주말 대기', '운영 시간 대기', '거래 시간 확인 대기', '일부 종목 시세 대기', '시세 대기', 'API 요청 한도 대기'];
 const assertComplete = (result, name) => {
@@ -113,7 +116,39 @@ const scenarios = [
   ['40s interval keeps 120s gap not stale', {running: true, interval_seconds: 40, ...STALE}, {}, {}, '정상 감시 중'],
   ['40s interval 121s gap is stale', {running: true, interval_seconds: 40, last_data_at: T0, checked_at: '2026-10-03T10:02:01+09:00'}, {}, {}, '시세 지연'],
   ['stale check needs checked_at', {running: true, last_data_at: T0}, {}, {}, '정상 감시 중'],
-  ['stale check needs last_data_at', {running: true, checked_at: STALE.checked_at}, {}, {}, '정상 감시 중'],
+  ['stale check needs last_data_at', {running: true, data_message: OK_MSG, checked_at: STALE.checked_at}, {}, {}, '정상 감시 중'],
+  // Contract with the UI change (PR #5 follow-up): running && emergency_stopped is a display conflict and wins over everything.
+  ['conflict base', {running: true, emergency_stopped: true, operating_state: 'OPEN', data_message: ''}, {}, {}, CONFLICT_LABEL],
+  ['conflict beats normal feed', {running: true, emergency_stopped: true, data_message: OK_MSG}, {}, {}, CONFLICT_LABEL],
+  ['conflict beats HOLIDAY', {running: true, emergency_stopped: true, operating_state: 'HOLIDAY'}, {}, {}, CONFLICT_LABEL],
+  ['conflict beats MARKET_UNKNOWN', {running: true, emergency_stopped: true, operating_state: 'MARKET_UNKNOWN'}, {}, {}, CONFLICT_LABEL],
+  ['conflict beats API limit', {running: true, emergency_stopped: true, data_message: API_MSG}, {}, {}, CONFLICT_LABEL],
+  ['conflict beats buy limit', {running: true, emergency_stopped: true, data_message: OK_MSG}, {}, BLOCK, CONFLICT_LABEL],
+  ['conflict beats 0/22 and stale feed', {running: true, emergency_stopped: true, data_message: NONE_READY, ...STALE}, {}, {}, CONFLICT_LABEL],
+  ['conflict beats first-feed preparation', {running: true, emergency_stopped: true, data_message: PREP_APPLY}, {}, {}, CONFLICT_LABEL],
+  // Contract: before the first quote, with no timestamps, an empty or exact "applied" message is waiting, not normal monitoring.
+  ['preparing: message omitted', {running: true, operating_state: 'OPEN'}, {}, {}, '시세 대기'],
+  ['preparing: message null', {running: true, operating_state: 'OPEN', data_message: null, last_data_at: null, last_decision_at: null}, {}, {}, '시세 대기'],
+  ['preparing: message empty', {running: true, operating_state: 'OPEN', data_message: ''}, {}, {}, '시세 대기'],
+  ['preparing: strategy applied message', {running: true, operating_state: 'OPEN', data_message: PREP_APPLY}, {}, {}, '시세 대기'],
+  ['preparing: scope applied message', {running: true, operating_state: 'OPEN', data_message: PREP_SCOPE}, {}, {}, '시세 대기'],
+  ['preparing: checked_at alone does not matter', {running: true, data_message: PREP_APPLY, checked_at: STALE.checked_at}, {}, {}, '시세 대기'],
+  // Preparation is the last fallback: every older priority still wins.
+  ['preparing loses to HOLIDAY', {running: true, operating_state: 'HOLIDAY', data_message: PREP_APPLY}, {}, {}, '휴장일 대기'],
+  ['preparing loses to MARKET_UNKNOWN', {running: true, operating_state: 'MARKET_UNKNOWN', data_message: ''}, {}, {}, '거래 시간 확인 대기'],
+  ['preparing loses to API limit message', {running: true, data_message: API_MSG}, {}, {}, 'API 요청 한도 대기'],
+  ['preparing loses to buy limit (empty message)', {running: true, data_message: ''}, {}, BLOCK, '신규 매수 제한'],
+  ['preparing loses to buy limit (applied message)', {running: true, data_message: PREP_SCOPE}, {}, BLOCK, '신규 매수 제한'],
+  // Not preparing: any timestamp, or any other message, keeps the old result.
+  ['near-miss message is not preparing', {running: true, data_message: '전략 적용 완료 · 시작하면 시세를 조회합니다.'}, {}, {}, '정상 감시 중'],
+  ['applied message with last_data_at only', {running: true, data_message: PREP_APPLY, last_data_at: T0}, {}, {}, '정상 감시 중'],
+  ['applied message with last_decision_at only', {running: true, data_message: PREP_APPLY, last_decision_at: T0}, {}, {}, '정상 감시 중'],
+  ['empty message with last_data_at only', {running: true, data_message: '', last_data_at: T0}, {}, {}, '정상 감시 중'],
+  ['empty message with last_decision_at only', {running: true, data_message: '', last_decision_at: T0}, {}, {}, '정상 감시 중'],
+  ['normal feed with both timestamps', {running: true, data_message: OK_MSG, last_data_at: T0, last_decision_at: T0}, {}, {}, '정상 감시 중'],
+  ['22/22 without timestamps stays normal', {running: true, data_message: ALL_READY}, {}, {}, '정상 감시 중'],
+  ['0/22 without timestamps stays 시세 대기', {running: true, data_message: NONE_READY}, {}, {}, '시세 대기'],
+  ['7/22 without timestamps stays partial', {running: true, data_message: SOME_READY}, {}, {}, '일부 종목 시세 대기'],
 ];
 for (const [name, strategy, workspace, risk, expected] of scenarios) {
   const result = guide(strategy, workspace, risk);
@@ -145,11 +180,44 @@ const nextNoSnapshot = guide({running: false}, {selected_strategy_id: 17}).next;
 const nextReady = guide({running: false}, {selected_strategy_id: 17, snapshot_ready: true}).next;
 assert.equal(new Set([nextNoStrategy, nextNoSnapshot, nextReady]).size, 3);
 assert.equal(guide({running: false, emergency_stopped: true}, {selected_strategy_id: 17, snapshot_ready: true}).label, '긴급 정지');
-// RISK (not an endorsed behavior): running:true with emergency_stopped:true. The engine clears emergency_stopped on start()
-// and sets running=false on stop(), so the combination should not be produced, but paperStatusGuide() has no branch for it.
-// Only the shape is pinned here; the label is deliberately NOT asserted. See the task record.
-assertComplete(guide({running: true, emergency_stopped: true, data_message: OK_MSG}), 'running+emergency_stopped');
-console.log('PAPER status reasons: data-carrying reasons, distinct stopped guidance and emergency conflict shape passed.');
+// running:true with emergency_stopped:true is a display conflict. It is unlikely from the engine (start() clears the flag, stop() clears running)
+// but status() reads both fields without a lock. The UI only says the two indicators disagree and asks for a re-check.
+// It must NOT claim that orders are stopped, nor tell the user to press start or that monitoring is normal.
+const conflictInputs = [
+  {running: true, emergency_stopped: true, operating_state: 'OPEN', data_message: ''},
+  {running: true, emergency_stopped: true, data_message: OK_MSG},
+  {running: true, emergency_stopped: true, operating_state: 'HOLIDAY'},
+  {running: true, emergency_stopped: true, data_message: API_MSG},
+];
+for (const [index, input] of conflictInputs.entries()) {
+  const conflict = guide(input, {selected_strategy_id: 17, snapshot_ready: true}, BLOCK);
+  const name = `conflict #${index}`;
+  assert.equal(conflict.label, CONFLICT_LABEL, name);
+  assertComplete(conflict, name);
+  assert.match(conflict.reason, /긴급 정지/, `${name}: reason must name the emergency-stop indicator`);
+  assert.match(conflict.reason, /맞지 않|불일치|엇갈/, `${name}: reason must say the indicators disagree`);
+  assert.match(conflict.next, /다시 조회|재조회|새로고침/, `${name}: next must ask for a fresh status check`);
+  assert.match(conflict.next, /확인/, `${name}: next must ask the user to verify`);
+  for (const field of ['reason', 'next']) {
+    assert.doesNotMatch(conflict[field], /주문|보장|전략 시작|정상 감시|청산 감시|멈춰 있습니다|중단되었|차단되었/, `${name}: ${field} must not assert order or monitoring state`);
+  }
+}
+// Normal stops are unchanged and keep their own wording.
+assert.equal(guide({running: false, emergency_stopped: false}).label, '전략 정지');
+assert.equal(guide({running: false, emergency_stopped: true}).label, '긴급 정지');
+assert.notEqual(guide({running: false, emergency_stopped: true}).reason, guide({running: true, emergency_stopped: true}).reason);
+// First-feed preparation is its own waiting guidance, distinct from the normal-monitoring text.
+const normalGuide = guide({running: true, data_message: OK_MSG});
+for (const [name, input] of [['omitted', {running: true}], ['null', {running: true, data_message: null}], ['empty', {running: true, data_message: ''}], ['apply', {running: true, data_message: PREP_APPLY}], ['scope', {running: true, data_message: PREP_SCOPE}]]) {
+  const preparing = guide(input);
+  assert.equal(preparing.label, '시세 대기', `preparing ${name}`);
+  assertComplete(preparing, `preparing ${name}`);
+  assert.notEqual(preparing.reason, normalGuide.reason, `preparing ${name}: must not reuse the normal-monitoring reason`);
+  assert.notEqual(preparing.next, normalGuide.next, `preparing ${name}: must not reuse the normal-monitoring next`);
+  assert.doesNotMatch(preparing.reason + preparing.next, /정상 감시|최신 시세로 진입/, `preparing ${name}: must not claim normal monitoring`);
+  assert.doesNotMatch(preparing.reason + preparing.next, /오류|실패|장애/, `preparing ${name}: waiting must not read as an error`);
+}
+console.log('PAPER status reasons: data-carrying reasons, distinct stopped guidance, emergency conflict and first-feed preparation passed.');
 
 // ---- renderDataSummary with waiting rows (stubs added only as far as needed) ----
 context.recentSnapshots = strategy => strategy.snapshots || [];
@@ -197,3 +265,59 @@ assert.equal(nodes.get('#paper-operation-label').textContent, '휴장일 대기'
 assert.equal(nodes.get('#paper-last-data').textContent, '수신 전');
 assert.equal(nodes.get('#strategy-data-updated').textContent, '조건 확인 전');
 console.log('PAPER status rendering (waiting rows): counts, 3-row fold, stopped hiding and escapeHtml wrapping passed.');
+
+// ---- Badge/summary rendering for the emergency conflict and first-feed preparation (fake DOM only) ----
+const renderState = (strategy, risk = {}) => {
+  nodes.clear();
+  context.renderDataSummary(strategy, {selected_strategy_id: 17, snapshot_ready: true}, risk);
+  return {
+    html: nodes.get('#strategy-data-status').innerHTML,
+    pill: nodes.get('#strategy-pill').textContent,
+    label: nodes.get('#paper-operation-label').textContent,
+    reason: nodes.get('#paper-operation-reason').textContent,
+    lastData: nodes.get('#paper-last-data').textContent,
+    lastDecision: nodes.get('#paper-last-decision').textContent,
+  };
+};
+for (const [name, strategy, risk] of [
+  ['conflict base', {running: true, emergency_stopped: true, operating_state: 'OPEN', data_message: ''}, {}],
+  ['conflict + HOLIDAY', {running: true, emergency_stopped: true, operating_state: 'HOLIDAY'}, {}],
+  ['conflict + API limit', {running: true, emergency_stopped: true, data_message: API_MSG}, {}],
+  ['conflict + buy limit', {running: true, emergency_stopped: true, data_message: OK_MSG}, BLOCK],
+]) {
+  const view = renderState(strategy, risk);
+  assert.equal(view.pill, CONFLICT_LABEL, `${name}: pill`);
+  assert.equal(view.label, CONFLICT_LABEL, `${name}: operation label`);
+  assert.match(view.reason, /긴급 정지/, `${name}: operation reason`);
+  assert.ok(view.html.includes(CONFLICT_LABEL), `${name}: guide block shows the conflict label`);
+  assert.doesNotMatch(view.html, /정상 감시 중/, `${name}: must not show normal monitoring`);
+}
+const stoppedView = renderState({running: false, emergency_stopped: true, data_message: NONE_READY});
+assert.equal(stoppedView.pill, '긴급 정지');
+assert.ok(!stoppedView.html.includes('paper-data-summary'));
+assert.equal(renderState({running: false, emergency_stopped: false}).pill, '전략 정지');
+for (const [name, strategy, expectedSummary] of [
+  ['omitted', {running: true, operating_state: 'OPEN'}, '<span>시세 수신 대기</span>'],
+  ['null', {running: true, operating_state: 'OPEN', data_message: null, last_data_at: null, last_decision_at: null}, '<span>시세 수신 대기</span>'],
+  ['empty', {running: true, operating_state: 'OPEN', data_message: ''}, '<span>시세 수신 대기</span>'],
+  ['apply', {running: true, operating_state: 'OPEN', data_message: PREP_APPLY}, `<span>${PREP_APPLY}</span>`],
+  ['scope', {running: true, operating_state: 'OPEN', data_message: PREP_SCOPE}, `<span>${PREP_SCOPE}</span>`],
+]) {
+  const view = renderState(strategy);
+  assert.equal(view.pill, '시세 대기', `preparing ${name}: pill`);
+  assert.equal(view.label, '시세 대기', `preparing ${name}: operation label`);
+  assert.ok(view.html.includes('paper-data-summary') && view.html.includes(expectedSummary), `preparing ${name}: summary chip`);
+  assert.equal(view.lastData, '수신 전', `preparing ${name}: last data`);
+  assert.equal(view.lastDecision, '확인 전', `preparing ${name}: last decision`);
+  assert.doesNotMatch(view.html, /정상 감시 중/, `preparing ${name}: must not show normal monitoring`);
+}
+// A recorded timestamp or a different message is not preparation.
+assert.equal(renderState({running: true, operating_state: 'OPEN', data_message: OK_MSG, last_data_at: '2026-10-03T01:02:03Z', last_decision_at: '2026-10-03T01:01:00Z'}).label, '정상 감시 중');
+assert.equal(renderState({running: true, operating_state: 'OPEN', data_message: PREP_APPLY, last_data_at: '2026-10-03T01:02:03Z'}).label, '정상 감시 중');
+// Existing priorities still win over preparation in the rendered badge.
+assert.equal(renderState({running: true, operating_state: 'HOLIDAY', data_message: PREP_APPLY}).pill, '휴장일 대기');
+assert.equal(renderState({running: true, operating_state: 'MARKET_UNKNOWN', data_message: ''}).pill, '거래 시간 확인 대기');
+assert.equal(renderState({running: true, data_message: '', operating_state: 'OPEN'}, BLOCK).pill, '신규 매수 제한');
+assert.equal(renderState({running: true, data_message: SOME_READY, operating_state: 'OPEN'}).pill, '일부 종목 시세 대기');
+assert.equal(renderState({running: true, data_message: ALL_READY, operating_state: 'OPEN'}).pill, '정상 감시 중');
+console.log('PAPER status rendering (contract): emergency conflict badge, first-feed preparation badge/summary and priorities passed.');
