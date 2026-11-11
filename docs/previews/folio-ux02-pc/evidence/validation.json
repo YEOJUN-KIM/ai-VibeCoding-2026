@@ -1,6 +1,6 @@
 {
-  "date": "2026-11-11T00:35:48.483Z",
-  "htmlSha256": "aa8d609cd2be88e6f2281656b9cf3b3f4d577720fb330d7e5d1f64f6b3ce82fa",
+  "date": "2026-11-11T02:50:52.980Z",
+  "htmlSha256": "707a4f7088a51f8890631c43eeaa4187caaa8eb6096f909f03dd80249a31b614",
   "sourceSha256": "5e011062ea527b40f3e985a3b485a1694d6640d271a73054873d32a3169b3127",
   "mode": "headless Chrome, file URL, all network requests aborted",
   "syntax": "PASS",
@@ -10,7 +10,7 @@
       "name": "HTML browser parse and duplicate IDs",
       "result": "PASS",
       "detail": {
-        "count": 79,
+        "count": 80,
         "compatMode": "CSS1Compat"
       }
     },
@@ -23,34 +23,13 @@
       "name": "period day",
       "result": "PASS",
       "detail": {
+        "samples": 12,
+        "first": "2026-11-11 09:00 10223000",
+        "last": "2026-11-11 14:30 10258000",
         "gain": 35000,
         "percent": 0.34236525481756824,
-        "samples": [
-          {
-            "date": "2026-11-11",
-            "time": "09:00",
-            "amount": 10223000,
-            "t": 1794355200000
-          },
-          {
-            "date": "2026-11-11",
-            "time": "14:30",
-            "amount": 10258000,
-            "t": 1794375000000
-          }
-        ],
-        "points": [
-          [
-            16,
-            134.265218950732
-          ],
-          [
-            984,
-            105.734781049268
-          ]
-        ],
-        "pointer": "6 positions",
-        "keyboard": "Home/End/Left/Right/Escape",
+        "pointer": "every sample + both edges",
+        "keyboard": "Home/End/Left/Right/Escape over all samples",
         "axisAndTooltip": "same samples"
       }
     },
@@ -58,34 +37,13 @@
       "name": "period week",
       "result": "PASS",
       "detail": {
+        "samples": 6,
+        "first": "2026-11-04 15:30 10130000",
+        "last": "2026-11-11 14:30 10258000",
         "gain": 128000,
         "percent": 1.263573543928924,
-        "samples": [
-          {
-            "date": "2026-11-04",
-            "time": null,
-            "amount": 10130000,
-            "t": 1793718000000
-          },
-          {
-            "date": "2026-11-11",
-            "time": "14:30",
-            "amount": 10258000,
-            "t": 1794375000000
-          }
-        ],
-        "points": [
-          [
-            16,
-            172.64889766370516
-          ],
-          [
-            984,
-            67.35110233629482
-          ]
-        ],
-        "pointer": "6 positions",
-        "keyboard": "Home/End/Left/Right/Escape",
+        "pointer": "every sample + both edges",
+        "keyboard": "Home/End/Left/Right/Escape over all samples",
         "axisAndTooltip": "same samples"
       }
     },
@@ -93,34 +51,13 @@
       "name": "period month",
       "result": "PASS",
       "detail": {
+        "samples": 24,
+        "first": "2026-10-11 09:00 10000000",
+        "last": "2026-11-11 14:30 10258000",
         "gain": 258000,
         "percent": 2.58,
-        "samples": [
-          {
-            "date": "2026-10-11",
-            "time": null,
-            "amount": 10000000,
-            "t": 1791644400000
-          },
-          {
-            "date": "2026-11-11",
-            "time": "14:30",
-            "amount": 10258000,
-            "t": 1794375000000
-          }
-        ],
-        "points": [
-          [
-            16,
-            203.33333333333334
-          ],
-          [
-            984,
-            36.666666666666686
-          ]
-        ],
-        "pointer": "6 positions",
-        "keyboard": "Home/End/Left/Right/Escape",
+        "pointer": "every sample + both edges",
+        "keyboard": "Home/End/Left/Right/Escape over all samples",
         "axisAndTooltip": "same samples"
       }
     },
@@ -128,34 +65,13 @@
       "name": "period year",
       "result": "PASS",
       "detail": {
+        "samples": 24,
+        "first": "2026-10-11 09:00 10000000",
+        "last": "2026-11-11 14:30 10258000",
         "gain": 258000,
         "percent": 2.58,
-        "samples": [
-          {
-            "date": "2026-10-11",
-            "time": null,
-            "amount": 10000000,
-            "t": 1791644400000
-          },
-          {
-            "date": "2026-11-11",
-            "time": "14:30",
-            "amount": 10258000,
-            "t": 1794375000000
-          }
-        ],
-        "points": [
-          [
-            16,
-            203.33333333333334
-          ],
-          [
-            984,
-            36.666666666666686
-          ]
-        ],
-        "pointer": "6 positions",
-        "keyboard": "Home/End/Left/Right/Escape",
+        "pointer": "every sample + both edges",
+        "keyboard": "Home/End/Left/Right/Escape over all samples",
         "axisAndTooltip": "same samples"
       }
     },
@@ -168,6 +84,33 @@
       "name": "Reload resets demo memory",
       "result": "PASS",
       "detail": "PASS"
+    },
+    {
+      "name": "Sticky save bar 1366x768",
+      "result": "PASS",
+      "detail": {
+        "focusedFieldsChecked": 22,
+        "stickyExercisedWhileFocusing": true,
+        "actions": "save, undo, reset"
+      }
+    },
+    {
+      "name": "Sticky save bar 1920x1080",
+      "result": "PASS",
+      "detail": {
+        "focusedFieldsChecked": 22,
+        "stickyExercisedWhileFocusing": true,
+        "actions": "save, undo, reset"
+      }
+    },
+    {
+      "name": "Sticky save bar 2560x1440",
+      "result": "PASS",
+      "detail": {
+        "focusedFieldsChecked": 22,
+        "stickyExercisedWhileFocusing": false,
+        "actions": "save, undo, reset"
+      }
     },
     {
       "name": "Network and browser errors",
@@ -183,22 +126,91 @@
         768
       ],
       "scrollWidth": 1366,
+      "mainWidth": 1052,
       "shell": {
         "x": 218,
-        "y": 0,
+        "y": -861,
         "width": 1148,
         "height": 1629.25,
-        "right": 1366
+        "right": 1366,
+        "bottom": 768.25
       },
       "chart": {
-        "x": 279,
-        "y": 723.328125,
-        "width": 900,
+        "x": 291,
+        "y": -137.671875,
+        "width": 1002,
         "height": 240,
-        "right": 1179
+        "right": 1293,
+        "bottom": 102.328125
       },
       "overflow": [],
-      "collisions": []
+      "collisions": [],
+      "geo": {
+        "chartPanel": {
+          "l": 266,
+          "r": 1318,
+          "t": -211.859375,
+          "b": 179.921875,
+          "w": 1052,
+          "h": 391.78125
+        },
+        "holdings": {
+          "l": 266,
+          "r": 1318,
+          "t": 346.296875,
+          "b": 690.25,
+          "w": 1052,
+          "h": 343.953125
+        },
+        "summary": {
+          "l": 266,
+          "r": 1318,
+          "t": 199.921875,
+          "b": 326.296875,
+          "w": 1052,
+          "h": 126.375
+        },
+        "pnl": {
+          "l": 266,
+          "r": 1318,
+          "t": -368.234375,
+          "b": -231.859375,
+          "w": 1052,
+          "h": 136.375
+        },
+        "sections": [
+          {
+            "l": 0,
+            "t": 0,
+            "w": 0
+          },
+          {
+            "l": 0,
+            "t": 0,
+            "w": 0
+          },
+          {
+            "l": 0,
+            "t": 0,
+            "w": 0
+          },
+          {
+            "l": 0,
+            "t": 0,
+            "w": 0
+          }
+        ],
+        "histPanels": [
+          {
+            "l": 0,
+            "w": 0
+          },
+          {
+            "l": 0,
+            "w": 0
+          }
+        ]
+      }
     },
     {
       "tab": "settings",
@@ -207,22 +219,63 @@
         768
       ],
       "scrollWidth": 1366,
+      "mainWidth": 1052,
       "shell": {
         "x": 218,
-        "y": 0,
+        "y": -737,
         "width": 1148,
         "height": 1504.84375,
-        "right": 1366
+        "right": 1366,
+        "bottom": 767.84375
       },
       "chart": {
         "x": 0,
         "y": 0,
         "width": 0,
         "height": 0,
-        "right": 0
+        "right": 0,
+        "bottom": 0
       },
       "overflow": [],
-      "collisions": []
+      "collisions": [],
+      "geo": {
+        "chartPanel": null,
+        "holdings": null,
+        "summary": null,
+        "pnl": null,
+        "sections": [
+          {
+            "l": 266,
+            "t": -312.421875,
+            "w": 1052
+          },
+          {
+            "l": 266,
+            "t": -26.265625,
+            "w": 1052
+          },
+          {
+            "l": 266,
+            "t": 157.109375,
+            "w": 1052
+          },
+          {
+            "l": 266,
+            "t": 345.703125,
+            "w": 1052
+          }
+        ],
+        "histPanels": [
+          {
+            "l": 0,
+            "w": 0
+          },
+          {
+            "l": 0,
+            "w": 0
+          }
+        ]
+      }
     },
     {
       "tab": "history",
@@ -231,22 +284,63 @@
         768
       ],
       "scrollWidth": 1366,
+      "mainWidth": 1052,
       "shell": {
         "x": 218,
-        "y": 0,
+        "y": -984,
         "width": 1148,
         "height": 1752.265625,
-        "right": 1366
+        "right": 1366,
+        "bottom": 768.265625
       },
       "chart": {
         "x": 0,
         "y": 0,
         "width": 0,
         "height": 0,
-        "right": 0
+        "right": 0,
+        "bottom": 0
       },
       "overflow": [],
-      "collisions": []
+      "collisions": [],
+      "geo": {
+        "chartPanel": null,
+        "holdings": null,
+        "summary": null,
+        "pnl": null,
+        "sections": [
+          {
+            "l": 0,
+            "t": 0,
+            "w": 0
+          },
+          {
+            "l": 0,
+            "t": 0,
+            "w": 0
+          },
+          {
+            "l": 0,
+            "t": 0,
+            "w": 0
+          },
+          {
+            "l": 0,
+            "t": 0,
+            "w": 0
+          }
+        ],
+        "histPanels": [
+          {
+            "l": 266,
+            "w": 1052
+          },
+          {
+            "l": 266,
+            "w": 1052
+          }
+        ]
+      }
     },
     {
       "tab": "home",
@@ -255,22 +349,91 @@
         1080
       ],
       "scrollWidth": 1920,
+      "mainWidth": 1560,
       "shell": {
         "x": 218,
-        "y": 0,
-        "width": 1224,
-        "height": 1629.25,
-        "right": 1442
+        "y": -43,
+        "width": 1656,
+        "height": 1123.3125,
+        "right": 1874,
+        "bottom": 1080.3125
       },
       "chart": {
-        "x": 279,
-        "y": 723.328125,
-        "width": 900,
+        "x": 291,
+        "y": 684.71875,
+        "width": 874,
         "height": 240,
-        "right": 1179
+        "right": 1165,
+        "bottom": 924.71875
       },
       "overflow": [],
-      "collisions": []
+      "collisions": [],
+      "geo": {
+        "chartPanel": {
+          "l": 266,
+          "r": 1190,
+          "t": 610.53125,
+          "b": 1002.3125,
+          "w": 924,
+          "h": 391.78125
+        },
+        "holdings": {
+          "l": 1210,
+          "r": 1826,
+          "t": 610.53125,
+          "b": 1002.3125,
+          "w": 616,
+          "h": 391.78125
+        },
+        "summary": {
+          "l": 1210,
+          "r": 1826,
+          "t": 445.765625,
+          "b": 590.53125,
+          "w": 616,
+          "h": 144.765625
+        },
+        "pnl": {
+          "l": 266,
+          "r": 1190,
+          "t": 445.765625,
+          "b": 590.53125,
+          "w": 924,
+          "h": 144.765625
+        },
+        "sections": [
+          {
+            "l": 0,
+            "t": 0,
+            "w": 0
+          },
+          {
+            "l": 0,
+            "t": 0,
+            "w": 0
+          },
+          {
+            "l": 0,
+            "t": 0,
+            "w": 0
+          },
+          {
+            "l": 0,
+            "t": 0,
+            "w": 0
+          }
+        ],
+        "histPanels": [
+          {
+            "l": 0,
+            "w": 0
+          },
+          {
+            "l": 0,
+            "w": 0
+          }
+        ]
+      }
     },
     {
       "tab": "settings",
@@ -279,22 +442,63 @@
         1080
       ],
       "scrollWidth": 1920,
+      "mainWidth": 1560,
       "shell": {
         "x": 218,
-        "y": 0,
-        "width": 1224,
-        "height": 1504.84375,
-        "right": 1442
+        "y": -253,
+        "width": 1656,
+        "height": 1332.8125,
+        "right": 1874,
+        "bottom": 1079.8125
       },
       "chart": {
         "x": 0,
         "y": 0,
         "width": 0,
         "height": 0,
-        "right": 0
+        "right": 0,
+        "bottom": 0
       },
       "overflow": [],
-      "collisions": []
+      "collisions": [],
+      "geo": {
+        "chartPanel": null,
+        "holdings": null,
+        "summary": null,
+        "pnl": null,
+        "sections": [
+          {
+            "l": 266,
+            "t": 171.578125,
+            "w": 770
+          },
+          {
+            "l": 1056,
+            "t": 171.578125,
+            "w": 770
+          },
+          {
+            "l": 266,
+            "t": 548.90625,
+            "w": 770
+          },
+          {
+            "l": 1056,
+            "t": 548.90625,
+            "w": 770
+          }
+        ],
+        "histPanels": [
+          {
+            "l": 0,
+            "w": 0
+          },
+          {
+            "l": 0,
+            "w": 0
+          }
+        ]
+      }
     },
     {
       "tab": "history",
@@ -303,22 +507,63 @@
         1080
       ],
       "scrollWidth": 1920,
+      "mainWidth": 1560,
       "shell": {
         "x": 218,
-        "y": 0,
-        "width": 1224,
-        "height": 1752.265625,
-        "right": 1442
+        "y": -180,
+        "width": 1656,
+        "height": 1259.71875,
+        "right": 1874,
+        "bottom": 1079.71875
       },
       "chart": {
         "x": 0,
         "y": 0,
         "width": 0,
         "height": 0,
-        "right": 0
+        "right": 0,
+        "bottom": 0
       },
       "overflow": [],
-      "collisions": []
+      "collisions": [],
+      "geo": {
+        "chartPanel": null,
+        "holdings": null,
+        "summary": null,
+        "pnl": null,
+        "sections": [
+          {
+            "l": 0,
+            "t": 0,
+            "w": 0
+          },
+          {
+            "l": 0,
+            "t": 0,
+            "w": 0
+          },
+          {
+            "l": 0,
+            "t": 0,
+            "w": 0
+          },
+          {
+            "l": 0,
+            "t": 0,
+            "w": 0
+          }
+        ],
+        "histPanels": [
+          {
+            "l": 266,
+            "w": 770
+          },
+          {
+            "l": 1056,
+            "w": 770
+          }
+        ]
+      }
     },
     {
       "tab": "home",
@@ -327,22 +572,91 @@
         1440
       ],
       "scrollWidth": 2560,
+      "mainWidth": 1800,
       "shell": {
         "x": 218,
         "y": 0,
-        "width": 1224,
-        "height": 1629.25,
-        "right": 1442
+        "width": 1896,
+        "height": 1114.921875,
+        "right": 2114,
+        "bottom": 1114.921875
       },
       "chart": {
-        "x": 279,
-        "y": 723.328125,
-        "width": 900,
+        "x": 291,
+        "y": 719.328125,
+        "width": 1018,
         "height": 240,
-        "right": 1179
+        "right": 1309,
+        "bottom": 959.328125
       },
       "overflow": [],
-      "collisions": []
+      "collisions": [],
+      "geo": {
+        "chartPanel": {
+          "l": 266,
+          "r": 1334,
+          "t": 645.140625,
+          "b": 1036.921875,
+          "w": 1068,
+          "h": 391.78125
+        },
+        "holdings": {
+          "l": 1354,
+          "r": 2066,
+          "t": 645.140625,
+          "b": 1036.921875,
+          "w": 712,
+          "h": 391.78125
+        },
+        "summary": {
+          "l": 1354,
+          "r": 2066,
+          "t": 488.765625,
+          "b": 625.140625,
+          "w": 712,
+          "h": 136.375
+        },
+        "pnl": {
+          "l": 266,
+          "r": 1334,
+          "t": 488.765625,
+          "b": 625.140625,
+          "w": 1068,
+          "h": 136.375
+        },
+        "sections": [
+          {
+            "l": 0,
+            "t": 0,
+            "w": 0
+          },
+          {
+            "l": 0,
+            "t": 0,
+            "w": 0
+          },
+          {
+            "l": 0,
+            "t": 0,
+            "w": 0
+          },
+          {
+            "l": 0,
+            "t": 0,
+            "w": 0
+          }
+        ],
+        "histPanels": [
+          {
+            "l": 0,
+            "w": 0
+          },
+          {
+            "l": 0,
+            "w": 0
+          }
+        ]
+      }
     },
     {
       "tab": "settings",
@@ -351,22 +665,63 @@
         1440
       ],
       "scrollWidth": 2560,
+      "mainWidth": 1800,
       "shell": {
         "x": 218,
         "y": 0,
-        "width": 1224,
-        "height": 1504.84375,
-        "right": 1442
+        "width": 1896,
+        "height": 1315.21875,
+        "right": 2114,
+        "bottom": 1315.21875
       },
       "chart": {
         "x": 0,
         "y": 0,
         "width": 0,
         "height": 0,
-        "right": 0
+        "right": 0,
+        "bottom": 0
       },
       "overflow": [],
-      "collisions": []
+      "collisions": [],
+      "geo": {
+        "chartPanel": null,
+        "holdings": null,
+        "summary": null,
+        "pnl": null,
+        "sections": [
+          {
+            "l": 266,
+            "t": 424.578125,
+            "w": 890
+          },
+          {
+            "l": 1176,
+            "t": 424.578125,
+            "w": 890
+          },
+          {
+            "l": 266,
+            "t": 801.90625,
+            "w": 890
+          },
+          {
+            "l": 1176,
+            "t": 801.90625,
+            "w": 890
+          }
+        ],
+        "histPanels": [
+          {
+            "l": 0,
+            "w": 0
+          },
+          {
+            "l": 0,
+            "w": 0
+          }
+        ]
+      }
     },
     {
       "tab": "history",
@@ -375,22 +730,63 @@
         1440
       ],
       "scrollWidth": 2560,
+      "mainWidth": 1800,
       "shell": {
         "x": 218,
         "y": 0,
-        "width": 1224,
-        "height": 1752.265625,
-        "right": 1442
+        "width": 1896,
+        "height": 1259.71875,
+        "right": 2114,
+        "bottom": 1259.71875
       },
       "chart": {
         "x": 0,
         "y": 0,
         "width": 0,
         "height": 0,
-        "right": 0
+        "right": 0,
+        "bottom": 0
       },
       "overflow": [],
-      "collisions": []
+      "collisions": [],
+      "geo": {
+        "chartPanel": null,
+        "holdings": null,
+        "summary": null,
+        "pnl": null,
+        "sections": [
+          {
+            "l": 0,
+            "t": 0,
+            "w": 0
+          },
+          {
+            "l": 0,
+            "t": 0,
+            "w": 0
+          },
+          {
+            "l": 0,
+            "t": 0,
+            "w": 0
+          },
+          {
+            "l": 0,
+            "t": 0,
+            "w": 0
+          }
+        ],
+        "histPanels": [
+          {
+            "l": 266,
+            "w": 890
+          },
+          {
+            "l": 1176,
+            "w": 890
+          }
+        ]
+      }
     }
   ],
   "consoleErrors": [],
