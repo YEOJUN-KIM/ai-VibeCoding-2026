@@ -3,6 +3,7 @@ const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),asse
 const {pathToFileURL}=require('node:url');
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'C:/Users/User/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright');
 const root=__dirname,file=path.join(root,'folio-ux02-pc.html'),out=path.join(root,'evidence');
+const series=JSON.parse(fs.readFileSync(path.join(root,'fixtures/asset-series.fictional.json'),'utf8')).samples;
 const html=fs.readFileSync(file,'utf8'),original=fs.readFileSync(path.join(root,'reference/folio-ux02-original.html'),'utf8');
 fs.mkdirSync(out,{recursive:true});
 const sha=s=>crypto.createHash('sha256').update(s).digest('hex');
@@ -11,7 +12,7 @@ scripts.forEach(s=>new vm.Script(s));
 assert.equal(sha(Buffer.from(original)),'5e011062ea527b40f3e985a3b485a1694d6640d271a73054873d32a3169b3127');
 // All original interaction code outside chart block remains byte-identical in text.
 const originalJS=[...original.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)][0][1];
-assert.equal(scripts[0].split('const sample=')[0].split('// Source has')[0],originalJS.split('const periods=')[0]);
+assert.equal(scripts[0].split('// FICTIONAL, timestamped')[0],originalJS.split('const periods=')[0]);
 assert.equal(scripts[0].split('function holdingTable()')[1],originalJS.split('function holdingTable()')[1]);
 const results={date:new Date().toISOString(),htmlSha256:sha(fs.readFileSync(file)),sourceSha256:sha(fs.readFileSync(path.join(root,'reference/folio-ux02-original.html'))),mode:'headless Chrome, file URL, all network requests aborted',syntax:'PASS',preservedInteractionCode:'PASS',checks:[],layouts:[],consoleErrors:[],externalRequests:[]};
 let browser;
@@ -27,29 +28,45 @@ let browser;
  assert.equal(await page.locator('.nav [data-page]').count(),5);assert.equal(await page.locator('[data-tab]').count(),3);
  assert.equal(await page.locator('.chart-panel h2,.chart-panel .sub,#plot text').count(),0);check('Removed visible chart heading/subtitle/Y numbers','PASS');
  const baseline=await page.evaluate(()=>({holdings:JSON.stringify(holdings),saved:JSON.stringify(saved)}));
+ const expectedCount={day:12,week:6,month:24,year:24};
  for(const k of ['day','week','month','year']){
   await page.locator(`[data-period="${k}"]`).click();
-  const data=await page.evaluate(()=>({key:currentPeriod,p:periods[currentPeriod],pts:chartPoints,title:document.querySelector('#period-title').textContent,value:document.querySelector('#period-value').textContent}));
-  assert.equal(data.key,k);let first=data.p.samples[0],last=data.p.samples.at(-1),gain=last.amount-first.amount;
-  assert.equal(last.amount,10258000);assert(data.value.includes(gain.toLocaleString('ko-KR')));assert(data.value.includes((gain/first.amount*100).toFixed(2)+'%'));
-  assert(data.p.samples.every(s=>s.t>=Date.parse('2026-10-11T00:00:00+09:00')));assert(data.p.samples.every((s,i,a)=>!i||s.t>a[i-1].t));
+  const data=await page.evaluate(()=>({key:currentPeriod,p:periods[currentPeriod],pts:chartPoints,title:document.querySelector('#period-title').textContent,value:document.querySelector('#period-value').textContent,wealth:document.querySelector('.wealth-value').textContent}));
+  assert.equal(data.key,k);const S=data.p.samples,first=S[0],last=S.at(-1),gain=last.amount-first.amount;
+  assert.equal(S.length,expectedCount[k]);assert.equal(data.pts.length,S.length);
+  assert.equal(last.amount,10258000);assert(data.wealth.includes('10,258,000'));
+  assert(data.value.includes(gain.toLocaleString('ko-KR')));assert(data.value.includes((gain/first.amount*100).toFixed(2)+'%'));
+  // Every plotted sample exists verbatim in the fictional fixture; nothing before 2026-10-11.
+  assert(S.every(x=>series.some(r=>r[0]===x.date&&r[1]===x.time&&r[2]===x.amount)));
+  assert(S.every(x=>x.t>=Date.parse('2026-10-11T00:00:00+09:00')));assert(S.every((x,i,a)=>!i||x.t>a[i-1].t));
+  assert(S.every(x=>/^\d\d:\d\d$/.test(x.time)));
+  assert.equal(await page.locator('#chart-count').innerText(),'표본 '+S.length+'개');
+  assert.equal(await page.locator('#asset-chart').getAttribute('aria-valuemax'),String(S.length-1));
   const r=await page.locator('#asset-chart').boundingBox();
-  // Real pointer events at boundaries, any height, and either side of nearest-point midpoint.
-  for(const [fraction,index] of [[0,0],[.2,0],[.49,0],[.51,1],[.8,1],[.999,1]]){
-   await page.mouse.move(r.x+r.width*fraction+.1,r.y+r.height*.9);
+  const tipFor=async index=>{
    assert.equal(await page.locator('#asset-chart').getAttribute('aria-valuenow'),String(index));
-   const tip=await page.locator('#chart-tip').innerText(),sample=data.p.samples[index];
-   assert(tip.includes(sample.date.replaceAll('-','.')));assert(tip.includes(sample.time||'시각 미제공'));assert(tip.includes(sample.amount.toLocaleString('ko-KR')));
-   const delta=sample.amount-first.amount;assert(tip.includes(Math.abs(delta).toLocaleString('ko-KR')+'원'));assert(tip.includes((delta/first.amount*100).toFixed(2)+'%'));
-   const box=await page.locator('#chart-tip').boundingBox();assert(box.x>=r.x&&box.x+box.width<=r.x+r.width+1);assert(box.y>=r.y&&box.y+box.height<=r.y+r.height);
-   const dot=await page.locator('#chart-dot').boundingBox();assert(box.y+box.height<dot.y||box.y>dot.y+dot.height,'tooltip must not cover sample dot');
-  }
+   const tip=await page.locator('#chart-tip').innerText(),sample=S[index],delta=sample.amount-first.amount;
+   assert(tip.includes(sample.date.replaceAll('-','.')));assert(tip.includes(sample.time));assert(tip.includes(sample.amount.toLocaleString('ko-KR')));
+   assert(tip.includes(Math.abs(delta).toLocaleString('ko-KR')+'원'));assert(tip.includes(Math.abs(delta/first.amount*100).toFixed(2)+'%'));
+   const box=await page.locator('#chart-tip').boundingBox();assert(box.x>=r.x-.5&&box.x+box.width<=r.x+r.width+1,'tooltip clipped horizontally');assert(box.y>=r.y-.5&&box.y+box.height<=r.y+r.height+.5,'tooltip clipped vertically '+JSON.stringify({index,box,r}));
+   const dot=await page.locator('#chart-dot').boundingBox(),guide=await page.locator('#chart-guide').boundingBox();
+   assert(dot&&guide&&guide.height>150,'guide line and point visible');assert(dot.x>=r.x-5&&dot.x<=r.x+r.width+5);
+   const overlap=Math.min(box.x+box.width,dot.x+dot.width)-Math.max(box.x,dot.x)>0&&Math.min(box.y+box.height,dot.y+dot.height)-Math.max(box.y,dot.y)>0;assert(!overlap,'tooltip must not cover selected point');
+  };
+  // Real pointer events exactly on every sample (x from the rendered point), plus both edges.
+  for(let i=0;i<S.length;i++){await page.mouse.move(r.x+data.pts[i][0]/1000*r.width,r.y+r.height*.9);await tipFor(i)}
+  await page.mouse.move(r.x+1,r.y+r.height*.5);await tipFor(0);await page.mouse.move(r.x+r.width-1,r.y+r.height*.5);await tipFor(S.length-1);
   assert.equal(await page.locator('#chart-from').innerText(),await page.evaluate(()=>stamp(periods[currentPeriod].samples[0])));
   assert.equal(await page.locator('#chart-to').innerText(),await page.evaluate(()=>stamp(periods[currentPeriod].samples.at(-1))));
-  await page.locator('#asset-chart').focus();await page.keyboard.press('Home');assert.equal(await page.locator('#asset-chart').getAttribute('aria-valuenow'),'0');await page.keyboard.press('ArrowRight');assert.equal(await page.locator('#asset-chart').getAttribute('aria-valuenow'),'1');await page.keyboard.press('ArrowLeft');assert.equal(await page.locator('#asset-chart').getAttribute('aria-valuenow'),'0');await page.keyboard.press('End');assert.equal(await page.locator('#asset-chart').getAttribute('aria-valuenow'),'1');await page.keyboard.press('Escape');assert(await page.locator('#chart-tip').isHidden());
-  if(k==='day')assert(Math.abs(data.pts[1][1]-data.pts[0][1])<35);
-  check('period '+k,{gain,percent:gain/first.amount*100,samples:data.p.samples,points:data.pts,pointer:'6 positions',keyboard:'Home/End/Left/Right/Escape',axisAndTooltip:'same samples'});
-  await page.locator('#asset-chart').focus();await page.keyboard.press('End');await page.screenshot({path:path.join(out,`chart-${k}-1920.png`)});
+  await page.mouse.move(r.x-40,r.y-40);await page.locator('#asset-chart').focus();
+  await page.keyboard.press('Home');await tipFor(0);await page.keyboard.press('ArrowRight');await tipFor(1);await page.keyboard.press('ArrowLeft');await tipFor(0);
+  await page.keyboard.press('ArrowLeft');await tipFor(0);await page.keyboard.press('End');await tipFor(S.length-1);await page.keyboard.press('ArrowRight');await tipFor(S.length-1);
+  for(let i=S.length-2;i>=0;i--){await page.keyboard.press('ArrowLeft');await tipFor(i)}
+  await page.keyboard.press('Escape');assert(await page.locator('#chart-tip').isHidden());
+  const pointsY=data.pts.map(p=>p[1]);assert(new Set(pointsY.map(y=>y.toFixed(1))).size>2,'curve must not be a straight two-point line');
+  if(k==='day')assert(Math.max(...pointsY)-Math.min(...pointsY)<120);
+  check('period '+k,{samples:S.length,first:first.date+' '+first.time+' '+first.amount,last:last.date+' '+last.time+' '+last.amount,gain,percent:gain/first.amount*100,pointer:'every sample + both edges',keyboard:'Home/End/Left/Right/Escape over all samples',axisAndTooltip:'same samples'});
+  await page.locator('#asset-chart').focus();await page.keyboard.press('ArrowLeft');await page.screenshot({path:path.join(out,`chart-${k}-1920.png`)});
  }
  // Representative existing controls, all in the independent in-memory demo.
  await page.locator('[data-tab="settings"]').click();await page.locator('#budget').fill('1000000');await page.locator('#settings-form button[type="submit"]').click();
@@ -60,21 +77,55 @@ let browser;
  for(const p of ['assets','stocks','research','news','paper']){await page.locator(`.nav [data-page="${p}"]`).click();assert(await page.locator('#page-'+p).isVisible())}
  check('Existing interactions','5 menus, 3 tabs, settings save, holdings unchanged, 2 lot snapshots, wait filter, start/pause/emergency');
  await page.reload();assert.equal(await page.evaluate(()=>saved.budget),5129000);assert.equal(await page.evaluate(()=>run),'idle');check('Reload resets demo memory','PASS');
+ const overlapAny=sel=>page.evaluate(sel=>{const els=[...document.querySelectorAll(sel)].filter(e=>e.getClientRects().length);const out=[];for(let i=0;i<els.length;i++)for(let j=i+1;j<els.length;j++){const x=els[i].getBoundingClientRect(),y=els[j].getBoundingClientRect();if(Math.min(x.right,y.right)-Math.max(x.left,y.left)>1&&Math.min(x.bottom,y.bottom)-Math.max(x.top,y.top)>1)out.push([els[i].className,els[j].className])}return out},sel);
  for(const [width,height] of [[1366,768],[1920,1080],[2560,1440]]){
   await page.setViewportSize({width,height});
   for(const tab of ['home','settings','history']){
-   await page.locator(`[data-tab="${tab}"]`).click();await page.mouse.move(220,10);
+   await page.locator(`[data-tab="${tab}"]`).click();await page.mouse.move(220,10);await page.evaluate(()=>scrollTo(0,document.documentElement.scrollHeight));
    const layout=await page.evaluate(()=>{
-    const box=e=>{let r=e.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,right:r.right}};
+    const box=e=>{let r=e.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom}};
     const visible=e=>!!e.getClientRects().length;
     let controls=[...document.querySelectorAll('button,input,select')].filter(visible).filter(e=>!e.closest('dialog'));
     let overflow=controls.filter(e=>{let r=e.getBoundingClientRect();return r.right>innerWidth+1||r.left<0}).map(e=>e.id||e.textContent);
     let collisions=[];for(let i=0;i<controls.length;i++)for(let j=i+1;j<controls.length;j++){let a=controls[i],b=controls[j];if(a.contains(b)||b.contains(a))continue;let x=a.getBoundingClientRect(),y=b.getBoundingClientRect();if(Math.min(x.right,y.right)-Math.max(x.left,y.left)>2&&Math.min(x.bottom,y.bottom)-Math.max(x.top,y.top)>2)collisions.push([a.id||a.textContent,b.id||b.textContent])}
-    return {viewport:[innerWidth,innerHeight],scrollWidth:document.documentElement.scrollWidth,shell:box(document.querySelector('.shell')),chart:box(document.querySelector('#asset-chart')),overflow,collisions};
+    const q=s=>document.querySelector(s),content=q('#main').getBoundingClientRect();
+    return {viewport:[innerWidth,innerHeight],scrollWidth:document.documentElement.scrollWidth,mainWidth:content.width,shell:box(q('.shell')),chart:box(q('#asset-chart')),overflow,collisions};
    });
-   assert(layout.scrollWidth<=width);assert.equal(layout.overflow.length,0);assert.equal(layout.collisions.length,0);assert(layout.shell.width<=1224);if(tab==='home'){assert(layout.chart.width<=902&&layout.chart.width>=800);assert.equal(layout.chart.height,240)}
-   results.layouts.push({tab,...layout});await page.screenshot({path:path.join(out,`${tab}-${width}x${height}.png`),fullPage:true});
+   assert(layout.scrollWidth<=width,'horizontal overflow');assert.equal(layout.overflow.length,0);assert.equal(layout.collisions.length,0);
+   // Main content width targets from the follow-up brief.
+   if(width===1366)assert(layout.mainWidth>=1000&&layout.mainWidth<=1366-218);
+   if(width===1920)assert(layout.mainWidth>=1450&&layout.mainWidth<=1600,'1920 main '+layout.mainWidth);
+   if(width===2560)assert(layout.mainWidth>=1700&&layout.mainWidth<=1900,'2560 main '+layout.mainWidth);
+   const blocks={home:'#paper-home>*',settings:'#settings-form .settings-section,#settings-form .savebar',history:'#paper-history>*'}[tab];
+   assert.deepEqual(await overlapAny(blocks),[],'overlapping blocks in '+tab);
+   const geo=await page.evaluate(()=>{const r=s=>{const e=document.querySelector(s);if(!e||!e.getClientRects().length)return null;const b=e.getBoundingClientRect();return {l:b.left,r:b.right,t:b.top,b:b.bottom,w:b.width,h:b.height}};return {chartPanel:r('.chart-panel'),holdings:r('#paper-home>.holdings'),summary:r('#paper-home>.summary-grid'),pnl:r('#paper-home>.pnl-grid'),sections:[...document.querySelectorAll('#settings-form .settings-section')].map(e=>{const b=e.getBoundingClientRect();return {l:b.left,t:b.top,w:b.width}}),histPanels:[...document.querySelectorAll('#paper-history>.panel')].map(e=>{const b=e.getBoundingClientRect();return {l:b.left,w:b.width}})}});
+   if(tab==='home'){
+    if(width>=1600){assert(geo.chartPanel.r<=geo.holdings.l+1,'chart and holdings side by side');assert(geo.pnl.r<=geo.summary.l+1);assert(Math.abs(geo.chartPanel.t-geo.holdings.t)<2,'row aligned');assert(Math.abs(geo.chartPanel.h-geo.holdings.h)<2,'equal row heights');assert(layout.chart.width>=780&&layout.chart.width<=1100,'chart width '+layout.chart.width)}
+    else{assert(geo.holdings.t>=geo.chartPanel.b-1,'single column below 1600');assert.equal(layout.chart.height,240)}
+   }
+   if(tab==='settings'&&width>=1600){assert(geo.sections[0].t===geo.sections[1].t&&geo.sections[2].t===geo.sections[3].t,'2x2 settings grid');assert(geo.sections.every(s=>s.w>=500))}
+   if(tab==='history'&&width>=1600){assert(geo.histPanels.length===2&&geo.histPanels[1].l>geo.histPanels[0].l+geo.histPanels[0].w-2,'history two columns')}
+   results.layouts.push({tab,...layout,geo});await page.screenshot({path:path.join(out,`${tab}-${width}x${height}.png`),fullPage:true});
   }
+  // Sticky save bar: never covers a focused field; nothing overlapped at page end; actions still work.
+  await page.locator('[data-tab="settings"]').click();await page.evaluate(()=>scrollTo(0,0));
+  const fields=await page.locator('#settings-form').locator('input:visible,select:visible,button:visible,summary:visible').evaluateAll(es=>es.filter(e=>!e.closest('.savebar')).map((e,i)=>{e.dataset.vf=i;return i}));
+  let stuckSeen=false;
+  for(const i of fields){
+   await page.locator(`[data-vf="${i}"]`).focus();
+   const hit=await page.evaluate(i=>{const e=document.querySelector(`[data-vf="${i}"]`),r=e.getBoundingClientRect(),b=document.querySelector('.savebar').getBoundingClientRect();const inter=Math.min(r.right,b.right)-Math.max(r.left,b.left)>0&&Math.min(r.bottom,b.bottom)-Math.max(r.top,b.top)>0;return {inter,barTop:b.top,innerHeight,fieldBottom:r.bottom,stuck:b.bottom>=innerHeight-1}},i);
+   if(hit.stuck)stuckSeen=true;assert(!hit.inter,'save bar covers focused field '+i+' '+JSON.stringify(hit));
+  }
+  await page.evaluate(()=>scrollTo(0,document.documentElement.scrollHeight));
+  const endGeo=await page.evaluate(()=>{const b=document.querySelector('.savebar').getBoundingClientRect();return [...document.querySelectorAll('#settings-form .settings-section,#settings-error')].filter(e=>{const r=e.getBoundingClientRect();return r.height>0&&Math.min(r.bottom,b.bottom)-Math.max(r.top,b.top)>1}).length});
+  assert.equal(endGeo,0,'at page end the bar overlaps nothing');
+  await page.evaluate(()=>scrollTo(0,Math.floor(document.documentElement.scrollHeight/3)));await page.screenshot({path:path.join(out,`settings-sticky-${width}x${height}.png`)});
+  await page.locator('#budget').fill('3000000');assert.equal(await page.evaluate(()=>draft.budget),3000000);
+  await page.locator('#revert').click();assert.equal(await page.locator('#budget').inputValue(),String(await page.evaluate(()=>saved.budget)));
+  await page.locator('#budget').fill('2000000');await page.locator('#defaults').click();assert.equal(await page.locator('#budget').inputValue(),'5129000');assert.equal(await page.evaluate(()=>draft.profile),'균형형');
+  await page.locator('#budget').fill('2500000');await page.locator('#settings-form button[type="submit"]').click();assert.equal(await page.evaluate(()=>saved.budget),2500000);
+  await page.locator('#defaults').click();await page.locator('#settings-form button[type="submit"]').click();assert.equal(await page.evaluate(()=>saved.budget),5129000);
+  check('Sticky save bar '+width+'x'+height,{focusedFieldsChecked:fields.length,stickyExercisedWhileFocusing:stuckSeen,actions:'save, undo, reset'});
  }
  assert.equal(results.consoleErrors.length,0);assert.equal(results.externalRequests.length,0);
  check('Network and browser errors','No external requests or page/console errors observed');
