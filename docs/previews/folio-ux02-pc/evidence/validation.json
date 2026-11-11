@@ -1,0 +1,400 @@
+{
+  "date": "2026-11-11T00:35:48.483Z",
+  "htmlSha256": "aa8d609cd2be88e6f2281656b9cf3b3f4d577720fb330d7e5d1f64f6b3ce82fa",
+  "sourceSha256": "5e011062ea527b40f3e985a3b485a1694d6640d271a73054873d32a3169b3127",
+  "mode": "headless Chrome, file URL, all network requests aborted",
+  "syntax": "PASS",
+  "preservedInteractionCode": "PASS",
+  "checks": [
+    {
+      "name": "HTML browser parse and duplicate IDs",
+      "result": "PASS",
+      "detail": {
+        "count": 79,
+        "compatMode": "CSS1Compat"
+      }
+    },
+    {
+      "name": "Removed visible chart heading/subtitle/Y numbers",
+      "result": "PASS",
+      "detail": "PASS"
+    },
+    {
+      "name": "period day",
+      "result": "PASS",
+      "detail": {
+        "gain": 35000,
+        "percent": 0.34236525481756824,
+        "samples": [
+          {
+            "date": "2026-11-11",
+            "time": "09:00",
+            "amount": 10223000,
+            "t": 1794355200000
+          },
+          {
+            "date": "2026-11-11",
+            "time": "14:30",
+            "amount": 10258000,
+            "t": 1794375000000
+          }
+        ],
+        "points": [
+          [
+            16,
+            134.265218950732
+          ],
+          [
+            984,
+            105.734781049268
+          ]
+        ],
+        "pointer": "6 positions",
+        "keyboard": "Home/End/Left/Right/Escape",
+        "axisAndTooltip": "same samples"
+      }
+    },
+    {
+      "name": "period week",
+      "result": "PASS",
+      "detail": {
+        "gain": 128000,
+        "percent": 1.263573543928924,
+        "samples": [
+          {
+            "date": "2026-11-04",
+            "time": null,
+            "amount": 10130000,
+            "t": 1793718000000
+          },
+          {
+            "date": "2026-11-11",
+            "time": "14:30",
+            "amount": 10258000,
+            "t": 1794375000000
+          }
+        ],
+        "points": [
+          [
+            16,
+            172.64889766370516
+          ],
+          [
+            984,
+            67.35110233629482
+          ]
+        ],
+        "pointer": "6 positions",
+        "keyboard": "Home/End/Left/Right/Escape",
+        "axisAndTooltip": "same samples"
+      }
+    },
+    {
+      "name": "period month",
+      "result": "PASS",
+      "detail": {
+        "gain": 258000,
+        "percent": 2.58,
+        "samples": [
+          {
+            "date": "2026-10-11",
+            "time": null,
+            "amount": 10000000,
+            "t": 1791644400000
+          },
+          {
+            "date": "2026-11-11",
+            "time": "14:30",
+            "amount": 10258000,
+            "t": 1794375000000
+          }
+        ],
+        "points": [
+          [
+            16,
+            203.33333333333334
+          ],
+          [
+            984,
+            36.666666666666686
+          ]
+        ],
+        "pointer": "6 positions",
+        "keyboard": "Home/End/Left/Right/Escape",
+        "axisAndTooltip": "same samples"
+      }
+    },
+    {
+      "name": "period year",
+      "result": "PASS",
+      "detail": {
+        "gain": 258000,
+        "percent": 2.58,
+        "samples": [
+          {
+            "date": "2026-10-11",
+            "time": null,
+            "amount": 10000000,
+            "t": 1791644400000
+          },
+          {
+            "date": "2026-11-11",
+            "time": "14:30",
+            "amount": 10258000,
+            "t": 1794375000000
+          }
+        ],
+        "points": [
+          [
+            16,
+            203.33333333333334
+          ],
+          [
+            984,
+            36.666666666666686
+          ]
+        ],
+        "pointer": "6 positions",
+        "keyboard": "Home/End/Left/Right/Escape",
+        "axisAndTooltip": "same samples"
+      }
+    },
+    {
+      "name": "Existing interactions",
+      "result": "PASS",
+      "detail": "5 menus, 3 tabs, settings save, holdings unchanged, 2 lot snapshots, wait filter, start/pause/emergency"
+    },
+    {
+      "name": "Reload resets demo memory",
+      "result": "PASS",
+      "detail": "PASS"
+    },
+    {
+      "name": "Network and browser errors",
+      "result": "PASS",
+      "detail": "No external requests or page/console errors observed"
+    }
+  ],
+  "layouts": [
+    {
+      "tab": "home",
+      "viewport": [
+        1366,
+        768
+      ],
+      "scrollWidth": 1366,
+      "shell": {
+        "x": 218,
+        "y": 0,
+        "width": 1148,
+        "height": 1629.25,
+        "right": 1366
+      },
+      "chart": {
+        "x": 279,
+        "y": 723.328125,
+        "width": 900,
+        "height": 240,
+        "right": 1179
+      },
+      "overflow": [],
+      "collisions": []
+    },
+    {
+      "tab": "settings",
+      "viewport": [
+        1366,
+        768
+      ],
+      "scrollWidth": 1366,
+      "shell": {
+        "x": 218,
+        "y": 0,
+        "width": 1148,
+        "height": 1504.84375,
+        "right": 1366
+      },
+      "chart": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0,
+        "right": 0
+      },
+      "overflow": [],
+      "collisions": []
+    },
+    {
+      "tab": "history",
+      "viewport": [
+        1366,
+        768
+      ],
+      "scrollWidth": 1366,
+      "shell": {
+        "x": 218,
+        "y": 0,
+        "width": 1148,
+        "height": 1752.265625,
+        "right": 1366
+      },
+      "chart": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0,
+        "right": 0
+      },
+      "overflow": [],
+      "collisions": []
+    },
+    {
+      "tab": "home",
+      "viewport": [
+        1920,
+        1080
+      ],
+      "scrollWidth": 1920,
+      "shell": {
+        "x": 218,
+        "y": 0,
+        "width": 1224,
+        "height": 1629.25,
+        "right": 1442
+      },
+      "chart": {
+        "x": 279,
+        "y": 723.328125,
+        "width": 900,
+        "height": 240,
+        "right": 1179
+      },
+      "overflow": [],
+      "collisions": []
+    },
+    {
+      "tab": "settings",
+      "viewport": [
+        1920,
+        1080
+      ],
+      "scrollWidth": 1920,
+      "shell": {
+        "x": 218,
+        "y": 0,
+        "width": 1224,
+        "height": 1504.84375,
+        "right": 1442
+      },
+      "chart": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0,
+        "right": 0
+      },
+      "overflow": [],
+      "collisions": []
+    },
+    {
+      "tab": "history",
+      "viewport": [
+        1920,
+        1080
+      ],
+      "scrollWidth": 1920,
+      "shell": {
+        "x": 218,
+        "y": 0,
+        "width": 1224,
+        "height": 1752.265625,
+        "right": 1442
+      },
+      "chart": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0,
+        "right": 0
+      },
+      "overflow": [],
+      "collisions": []
+    },
+    {
+      "tab": "home",
+      "viewport": [
+        2560,
+        1440
+      ],
+      "scrollWidth": 2560,
+      "shell": {
+        "x": 218,
+        "y": 0,
+        "width": 1224,
+        "height": 1629.25,
+        "right": 1442
+      },
+      "chart": {
+        "x": 279,
+        "y": 723.328125,
+        "width": 900,
+        "height": 240,
+        "right": 1179
+      },
+      "overflow": [],
+      "collisions": []
+    },
+    {
+      "tab": "settings",
+      "viewport": [
+        2560,
+        1440
+      ],
+      "scrollWidth": 2560,
+      "shell": {
+        "x": 218,
+        "y": 0,
+        "width": 1224,
+        "height": 1504.84375,
+        "right": 1442
+      },
+      "chart": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0,
+        "right": 0
+      },
+      "overflow": [],
+      "collisions": []
+    },
+    {
+      "tab": "history",
+      "viewport": [
+        2560,
+        1440
+      ],
+      "scrollWidth": 2560,
+      "shell": {
+        "x": 218,
+        "y": 0,
+        "width": 1224,
+        "height": 1752.265625,
+        "right": 1442
+      },
+      "chart": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0,
+        "right": 0
+      },
+      "overflow": [],
+      "collisions": []
+    }
+  ],
+  "consoleErrors": [],
+  "externalRequests": [],
+  "browser": "157.0.8103.50",
+  "status": "PASS"
+}
