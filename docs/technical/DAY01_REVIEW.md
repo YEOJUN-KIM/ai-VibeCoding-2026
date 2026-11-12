@@ -2,7 +2,7 @@
 
 작업 기록: [20261112-Claude-DAY01-review](../plans/ai-tasks/20261112-Claude-DAY01-review.md)
 
-상태: **7절 = 엄격 `next_open` 개선본(Codex `348f342`)의 최종 검토 결과(합성 자동 테스트 기준, 유효). 8절 = 실제 저장 데이터 연결 준비(데이터 증거 조사·연구용 추정 모델) 검토로 현재 진행 중이며, 구현 인계 전이므로 8절은 독립 조사와 요구사항만 담는다.** 5절은 `legacy_close` 시기의 이전 결과다. 실제 시장 데이터·PAPER/LIVE·사용자 동작 검증·운영 적용은 하지 않았고 수익성에 대한 어떤 주장도 하지 않는다. **실제 시세 피드에 바로 쓸 수 있는 상태가 아니다**: 엄격 기본 모드는 명시적 `OpenQuote` 시가 증거가 있어야만 체결하며, 저장소에는 그런 증거가 없다(8.1절).
+상태: **7절 = 엄격 `next_open`(Codex `348f342`) 최종 검토 결과(유효). 9절 = 연구용 `research_estimated_open`·입력 어댑터·커버리지(Codex `e412840`)의 독립 검토 결과이며 현재 기준이다. 9절 검토에서 결함 2건(D-R1 중간·D-R2 낮음)이 발견되어 Codex 수정 대기 중이므로 연구용 모드는 "알려진 결함 있음" 상태이며 해당 테스트 2개는 `expectedFailure`로 고정되어 있다.** 5절은 `legacy_close`, 8절은 구현 인계 전 조사·요구사항(8.1 증거 조사는 유효, 8.3 계획은 9절로 대체)이다. 실제 시장 데이터·PAPER/LIVE·사용자 동작 검증·운영 적용은 하지 않았고 수익성에 대한 어떤 주장도 하지 않는다. **실제 시세 피드에 바로 쓸 수 있는 상태가 아니다**: 엄격 기본 모드는 명시적 `OpenQuote` 증거가 있어야만 체결하며 저장소에는 그런 증거가 없고, 연구용 모드는 사후(hindsight) 추정이며 실제 체결이 아니다.
 
 > **1~4절은 구현 전(사전) 요구사항·시나리오 설계 기록이며 역사적 문서다.** 당시의 가설(예: 5분봉 직접 입력, 기존 `RawCandle` 재사용, 초기 체결 모델 가정)은 최종 계약이 아니다. 현재 사양 `docs/specs/DAY01_BACKTEST.md`는 1분봉 입력과 완결 5분 집계를 쓰고, 기본 실행 모드는 `next_open`(명시적 `OpenQuote` 시가 증거가 있을 때만 체결)이며 `legacy_close`(이후 on-time 1분봉 종가 기반 체결)는 명시적으로 선택하는 이전 모드다. **5절은 `legacy_close` 시기의 이전 결과이고, 현재 기준은 7절이다.** 1~4절·5절과 충돌하면 **현재 사양 문서와 7절이 우선**한다.
 
@@ -229,7 +229,7 @@ python -B tests/day01_safe_regression_runner.py tests.test_ml_backtest tests.tes
 
 ## 8. 실제 데이터 연결 준비 검토 (진행 중, 구현 인계 전)
 
-작업 기록: [20261112-Claude-DAY01-data-prep-review](../plans/ai-tasks/20261112-Claude-DAY01-data-prep-review.md). 아래는 소스·스키마·문서만 읽은 독립 조사다(DB·RAW 데이터·외부 API·`.env` 접근 없음). 문서에 적힌 과거 수집 수치(예: 22종목·14 usable 날짜)는 이 조사에서 **재확인하지 않았으며** 현재 보유 데이터의 커버리지를 주장하지 않는다.
+작업 기록: [20261112-Claude-DAY01-data-prep-review](../plans/ai-tasks/20261112-Claude-DAY01-data-prep-review.md). (구현 인계 전 기록이며 최종 결과는 9절.) 아래는 소스·스키마·문서만 읽은 독립 조사다(DB·RAW 데이터·외부 API·`.env` 접근 없음). 문서에 적힌 과거 수집 수치(예: 22종목·14 usable 날짜)는 이 조사에서 **재확인하지 않았으며** 현재 보유 데이터의 커버리지를 주장하지 않는다.
 
 ### 8.1 엄격한 시가 증거가 실제로 가능한가 (결론: 현재 저장 데이터로는 불가능)
 
@@ -256,7 +256,55 @@ python -B tests/day01_safe_regression_runner.py tests.test_ml_backtest tests.tes
 9. **커버리지 함수(순수)**: 호출자가 준 행과 **명시적 기대 날짜**·고정 종목 목록(22종목 등)만 입력받는다. 날짜별·종목별 존재 분 수, 결측 분 구간, 지연 도착 수, `NO_ROWS`(휴장인지 미수집인지 단정하지 않음)를 보고한다. 달력·DB·top50 재구성 금지. 기대 분 격자(390 vs 391)는 호출자가 명시하게 한다.
 10. 신규 결함은 인계된 코드에서 발견되는 대로 코디네이터에 보고한다.
 
-### 8.3 인계 후 검증 계획
+### 8.3 인계 후 검증 계획 (9절로 대체됨)
 
 - 기준선: `tests.test_day01_review`(108), `test_day01.py`(67) = 175, 안전 회귀 55 + 실행기 자체 점검 11. 신규 연구용 모드·어댑터·커버리지 테스트는 `tests/test_day01_research_review.py`에 둔다(합성 행만, `settings`·`database` 비import).
 - 결과·정확한 개수·SHA는 인계 후 이 절을 갱신한다. 현재 8절은 준비 단계이며 검증 결과가 아니다.
+
+## 9. 연구용 추정 시가 모드·입력 어댑터·커버리지 최종 검토 (구현 `e4128405363348b9e87927d1da67d92773df8f4f`, 로컬 cherry-pick `fa5a79c`)
+
+작업 기록: [20261112-Claude-DAY01-data-prep-review](../plans/ai-tasks/20261112-Claude-DAY01-data-prep-review.md). Codex 동기화 merge 없이 이 commit만 cherry-pick했다(변경 6경로: `auto_trader/ml/day01.py`, 신규 `auto_trader/ml/day01_research.py`, `tests/test_day01_research.py`, `docs/specs/DAY01_BACKTEST.md`, `docs/technical/DAY01_DATA_READINESS.md`, Codex 작업 기록).
+
+### 9.1 소스 독립 검토 결과
+
+- **엄격·legacy 불변**: 전략 판단·체결·위험 로직은 `research` 분기 밖에서 동일하다(검토: `evaluate_entry`의 `elapsed`는 엄격 모드에서 `five[-1].end_at == at`이므로 동일, 결정 트리거 식 동일, 만료 유예 0, `mark` 동률 규칙은 연구용 값만 확장). 결과 dict에 `mode`·`uncertain`·추가 요약 키가 더해졌고(값 동작은 불변), 기존 175개 테스트 전부 통과.
+- **분리**: 연구용 모드는 별도 `execution` 값이며 `open_quotes`는 `next_open`에서만 허용된다. 결과는 `execution_model='research_estimated_open_observation_settlement'`, `estimated_open_fills`, `physical_fill_claim=False`, `capacity='configured_order_quantity_not_liquidity'`로 구분되고 가짜 `OpenQuote`는 만들지 않는다.
+- **인과성**: 결정은 실제 도착 시각(`available_at`)에 `research_max_observation_lag_minutes`(기본 2, 0~30) 이내의 신선한 5분봉으로만 하며 `available_at`은 보존된다. 현금·위험·종목 수·노출은 신호 시점 스냅샷으로 예약되고 만료+1분+지연 유예 동안 다른 판단에 반영된다. 체결 결과는 관측 시각에 정산(`execution_at`)되고 `estimated_execution_at`은 반사실 시각이다. 정산 시 사후 위험 재검사는 없고, 모델 시가 이전에 알려진 차단 정보(`RESEARCH_PRE_OPEN`)만 취소 사유가 된다. 후보 봉은 이벤트 순서로 처리되며 앞선 후보가 관측되거나 봉 끝+지연 타임아웃에 이를 때까지 기다린다.
+- **리스크**: 정산 후 이미 알려진 봉을 진입 봉 범위부터 STOP 우선으로 소급 적용(catch-up)하고 최신 알려진 마크로 평가한다. 15:10 동결이 정산보다 먼저이며 15:10 이후 관측은 미청산으로 남는다. 스냅샷을 초과하는 갭은 모델 거래·반사실 손익을 유지하되 `INVALID_RESOURCE_OVERRUN`, 비음수 현금과 별도 비자금 연구 부채(자산에서 차감, 매도 대금으로 상환, 신규 진입 차단·청산 허용)로 기록된다.
+- **어댑터·커버리지**: `adapt_rows`는 `source`·`interval`(1m)·`available_at`·`collected_at`·`collection_run_id`를 보존하고 값을 만들지 않으며 15:30은 `CLOSING_1530`, 그 외 세션 밖은 `OUTSIDE_REPLAY_SESSION`으로 분리·보고한다(전체 replay를 중단시키지 않음). `coverage`는 호출자 행·명시 날짜·고정 종목만 사용하고 `NO_ROWS`/`MISSING`/`COMPLETE`, 결측 분 목록, 지연·백필·0거래량·turnover 준비도, `actual_stored_date_range='UNKNOWN'`을 보고한다.
+
+### 9.2 발견 결함 (Codex 수정 대기, 테스트는 expectedFailure로 고정)
+
+| ID | 심각도 | 내용 | 재현 | 근거 |
+|---|---|---|---|---|
+| D-R1 | 중간 | `run_input` 최상위 `run_status`가 연구 결과가 `INVALID_RESOURCE_OVERRUN`이어도 `'RAN'`이다. 최상위 값만 읽는 소비자는 무효 실행을 성공으로 오인할 수 있다 | `initial_cash=1100`, 신호가 102·모델 시가 150인 합성 행을 `adapt_rows`→`run_input`에 넣으면 `result['research_assumptions']['run_status']=='INVALID_RESOURCE_OVERRUN'`, 최상위 `run_status=='RAN'` | `day01_research.py` `run_input` (`run_status='RAN' if result is not None ...`) |
+| D-R2 | 낮음 | `UNRESOLVED_OBSERVED_AFTER_1510` 실패가 대기 중이던 15:10 이전 주문의 후보 봉이 아닌 무관한 늦은 봉(예: 09:40 봉이 15:20에 도착)에도 기록된다. 사유가 사실과 다르다 | 진입 후 14:50 청산 주문이 후보 봉 없이 대기, 09:40 봉이 15:20 도착 → 실패 사유가 추가됨 | `day01.py` 연구용 정산 블록의 `research_unresolved` 처리(후보 여부 확인 없음) |
+
+### 9.3 관찰 (결함 아님, 문서화됨)
+
+- 앞선 후보 봉이 결측이면 뒤 후보는 그 봉의 끝+지연 타임아웃까지 정산되지 않는다(계약). 오후에 봉이 연속 결측이면 청산 정산이 약 3분 늦어져 15:10 동결 전에 정산되지 못할 수 있다(테스트로 고정).
+- 저장 행에는 turnover가 없으므로 기본 `exact` VWAP은 신호를 만들지 않는다. 연구에서는 `typical_approximation`을 명시해야 한다(커버리지의 `exact_vwap_turnover_ready`로 표시).
+- `tests/test_day01_research.py`는 `from test_day01 import ...`를 사용하므로 `python -B -m unittest discover -s tests -p test_day01_research.py`로만 실행된다(`tests.test_day01_research` 모듈 지정은 import 오류). 결함은 아니며 아래 명령에 반영했다.
+
+### 9.4 독립 테스트와 실행 결과
+
+신규 `tests/test_day01_research_review.py`(43개): 기본값·분리 라벨·보고 필드, 정산 시각·반사실 시각·역소급 없는 원장, 대상 거래량의 수량 비사용·0거래량 veto, 나이 배타·유예 만료, 지연 한계 포함/초과, 앞선 후보 대기와 결측 타임아웃, 청산 대칭·14:50, 15:10 동결·늦은 정산, 신호 시점 예약 경합(종목 수·현금·노출·주문 수), 모델 시가 이후 손실이 BUY를 거절하지 못함·이전 정보는 취소 가능, 정산 시 catch-up(동시 터치 STOP 우선·최신 마크), 같은 시각 매도 우선, 자원 초과·비자금 부채·매도 상환·무효 후 신규 진입 차단과 청산 허용, 어댑터 보존·거부·분리·결정성, 커버리지 상태·날짜·고정 종목·가용성·결정성, `run_input` 연동, 25개 시드 속성 테스트, 정적 import 순도.
+
+| 구분 | 명령 | 결과 |
+|---|---|---|
+| Codex (엄격·legacy) | `python -B -m unittest discover -s tests -p test_day01.py` | 67개 통과 |
+| Codex (연구용) | `python -B -m unittest discover -s tests -p test_day01_research.py` | 27개 통과 |
+| Claude (엄격·legacy·next-open) | `python -B -m unittest tests.test_day01_review` | 108개 통과 |
+| Claude (연구용·어댑터·커버리지) | `python -B -m unittest tests.test_day01_research_review` | 43개 실행, 41 통과 + **expected failure 2(D-R1, D-R2)** |
+| 기존 MA/PAPER/백테스트 안전 회귀 (DAY01과 별개) | `env -u CLAUDE_CODE_MESSAGING_TOKEN -u ORCA_AGENT_SESSION_SPAWN_TOKEN python -B tests/day01_safe_regression_runner.py tests.test_ml_backtest tests.test_strategy_engine tests.test_paper_management tests.test_paper_feed` | 55개 통과, 제외 1(`...test_journal_survives_reset_and_contains_costs_reason_and_owner`: `.paper-history` 쓰기) |
+| 실행기 자체 점검 | 위와 같은 `env -u ...` 접두 + `--selftest` | 11/11 PASS. `env -u` 없이 실행하면 하네스가 주입한 Orca 자식 런타임 변수 이름 2개(`CLAUDE_CODE_MESSAGING_TOKEN`, `ORCA_AGENT_SESSION_SPAWN_TOKEN`) 때문에 **거부**된다(값은 읽거나 출력하지 않음, 거부는 통과로 기록하지 않음) |
+
+합계: DAY01 합성 통과 243(67 + 27 + 108 + 41) + expected failure 2, 기존 안전 회귀 55 별도, 자체 점검 11. 중복 집계는 없다(서로 다른 파일). 변이 검증은 이번 단계에서 수행하지 않았다.
+
+### 9.5 미검증·실제 데이터 요건
+
+- 실제 시장 데이터·실제 저장 행(DB/RAW)은 읽거나 실행하지 않았다. 문서상 22종목·날짜 범위는 재확인하지 않았다.
+- 엄격 체결 증거(시가 시점 가격·체결가능수량)는 현재 저장소 데이터에 없다. 실제 근거가 필요하면 별도 설계·승인으로 실시간 체결/호가와 수신 시각을 영속화하는 수집기가 필요하다(이번 범위 밖).
+- 연구용 모드의 체결은 사후 추정이며 실제 주문·유동성·체결이 아니다. 해당 결과를 엄격/legacy 결과와 비교하거나 수익성으로 해석하지 않는다.
+- D-R1, D-R2 수정본의 재검증은 남아 있다(수정 후 `expectedFailure` 제거 필요).
+- 기존 DB 필요 테스트, PAPER/LIVE, 사용자 동작 검증, 다음날 갭은 미검증·미모델링이다.
