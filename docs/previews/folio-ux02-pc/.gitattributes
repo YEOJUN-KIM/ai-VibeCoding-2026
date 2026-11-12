@@ -1,0 +1,3 @@
+# Preserve delivered artifact bytes and the exact supplied reference across checkouts.
+*.html -text
+VALIDATION.md -text
