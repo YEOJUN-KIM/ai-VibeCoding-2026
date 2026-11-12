@@ -1,0 +1,78 @@
+{
+  "folio-ux02-pc.html": {
+    "sha256": "707a4f7088a51f8890631c43eeaa4187caaa8eb6096f909f03dd80249a31b614",
+    "bytes": 77769
+  },
+  "FOLIO-UX02-PC-preview.zip": {
+    "sha256": "1c5515f7fcbe07c943cf664034dc9bfc86694da905e4202fe2640050dff04d80",
+    "bytes": 26410
+  },
+  "VALIDATION.md": {
+    "sha256": "b5919b2c7ff7be5c7b2c47f85b901053c99ef969713d7f83d735304210ffd281",
+    "bytes": 5630
+  },
+  "evidence/chart-day-1920.png": {
+    "sha256": "1c062c955046658fc57b326d056d74d87588135a55d0d6191dffeabdbfce7e02",
+    "bytes": 107664
+  },
+  "evidence/chart-month-1920.png": {
+    "sha256": "b199a735b24fd9a0a7a6ab0d4dd96d71b0bfd19a196e58a4de8c51b895177de0",
+    "bytes": 116442
+  },
+  "evidence/chart-week-1920.png": {
+    "sha256": "3a00b2f68913e194055291d719a6400306407b191800344a236bbf532ce33245",
+    "bytes": 110641
+  },
+  "evidence/chart-year-1920.png": {
+    "sha256": "10b4a929957fc94bd098188264e7ba6ec95a97c678c4be2213cf06e7c195772c",
+    "bytes": 116286
+  },
+  "evidence/history-1366x768.png": {
+    "sha256": "75f621e258a3a87b7a607e5880ab559abe435ae3718da75e97a2f643ecd3fa31",
+    "bytes": 115850
+  },
+  "evidence/history-1920x1080.png": {
+    "sha256": "8b75cda3fd4d7dbdd93e78752e93354fcff34b9168932920b18b347157c3184c",
+    "bytes": 119038
+  },
+  "evidence/history-2560x1440.png": {
+    "sha256": "d138a518b6e2f8ea0dad597bdc0484e2b12143344f82edcf2e931027844462cc",
+    "bytes": 127685
+  },
+  "evidence/home-1366x768.png": {
+    "sha256": "322ff819356ccfd276d80723ed3b535841c63ad8a90c83c225120f526a8576e7",
+    "bytes": 101759
+  },
+  "evidence/home-1920x1080.png": {
+    "sha256": "890eded4465ce75d86a84e6c5200f728efc04544955da1141c1420e1f55b2b45",
+    "bytes": 104278
+  },
+  "evidence/home-2560x1440.png": {
+    "sha256": "be5e19c49fff13685b638afb6867a6fc65b4d9b597c4b0ba23256fdbc14e340e",
+    "bytes": 114519
+  },
+  "evidence/settings-1366x768.png": {
+    "sha256": "d1d7c9efc504fad74a718f4dbda3d28fb58cc576b289b880423ec5343e84b683",
+    "bytes": 114188
+  },
+  "evidence/settings-1920x1080.png": {
+    "sha256": "ae5206d0e1b0095631e61de951191b4aebf12b741c5f8cf056561cc0e5a45e97",
+    "bytes": 115258
+  },
+  "evidence/settings-2560x1440.png": {
+    "sha256": "aa970494709f7d5f8dfadbe4b89fd7b3657d28ce8f4487322daa22faaeddac18",
+    "bytes": 123439
+  },
+  "evidence/settings-sticky-1366x768.png": {
+    "sha256": "7439977407103b54943f700d2a839ca0b68003f7e4f08f3200ed5d31ba3a6205",
+    "bytes": 70336
+  },
+  "evidence/settings-sticky-1920x1080.png": {
+    "sha256": "28e67331750668d76566ec2c5fd8977da7637117e16b6006c39114ae10725ade",
+    "bytes": 102447
+  },
+  "evidence/settings-sticky-2560x1440.png": {
+    "sha256": "ab2a974c9acda751e22c3aad995397b8a866147998a83bd4400a6f800886e327",
+    "bytes": 123463
+  }
+}

@@ -1,0 +1,15 @@
+﻿{
+    "repoId":  "4f0cd954-c857-4c83-a03e-53635bfa2617",
+    "instanceId":  "30825032-22df-493e-9c92-68f2a8ddd1fe",
+    "path":  "C:/Users/User/orca/workspaces/ai-VibeCoding-2026/folio-ux02-pc-20261111",
+    "head":  "7029a108bc0459bcf0e13ddc6aa9dae824baa053",
+    "branch":  "refs/heads/YEOJUN-KIM/folio-ux02-pc-20261111",
+    "createdAt":  1794356975342,
+    "createdWithAgent":  "codex",
+    "cliProvenance":  {
+                          "kind":  "created-by-cli",
+                          "createdAt":  1794356973678,
+                          "startupAgent":  "codex"
+                      },
+    "baseRef":  "refs/remotes/origin/main"
+}
