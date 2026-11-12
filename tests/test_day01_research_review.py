@@ -2,8 +2,7 @@
 
 Expected values are hand-computed from the written contract, not produced by implementation
 helpers. Imports only auto_trader.ml.day01 and auto_trader.ml.day01_research (no settings,
-database, broker or file access). Tests named test_defect_* pin findings of this review and are
-marked expectedFailure until Codex fixes them.
+database, broker or file access). Tests named test_regression_* pin defects found in this review (fixed in ba765e1).
 """
 import ast
 import random
@@ -181,8 +180,7 @@ class EstimatedOpen(unittest.TestCase):
         self.assertEqual(sells(r), [])
         self.assertEqual(r['summary']['status'], 'UNLIQUIDATED')
 
-    @unittest.expectedFailure
-    def test_defect_unrelated_late_bar_must_not_be_reported_as_unresolved_outcome(self):
+    def test_regression_unrelated_late_bar_is_not_reported_as_unresolved_outcome(self):
         # 14:50 exit is pending with no candidate bars. An unrelated late bar (event 09:30) arriving
         # after 15:10 is not an outcome candidate for this order.
         rows = scenario() + [bar(21, '103'), bar(10, '100', day=DAY, avail=at(380))]
@@ -220,6 +218,72 @@ class FreshDecisions(unittest.TestCase):
         rows[3] = replace(rows[3], available_at=at(45))                           # 09:03 bar arrives at 09:45
         r = rrun(rows, max_signal_to_fill_minutes=D(5))
         self.assertEqual([s for s in r['signals'] if s['at'] >= at(45)], [])      # 09:20 bar is 25 min stale by then
+
+
+class SecondRoundFixes(unittest.TestCase):
+    """Edges around the D-R1/D-R2 fixes (ba765e1)."""
+
+    def frozen_exit(self, *extra):
+        # 14:50 exit pending with no candidate observed before the 15:10 freeze
+        return scenario() + [bar(21, '103')] + list(extra)
+
+    def unresolved(self, r):
+        return [f for f in r['failures'] if f['reason'] == 'UNRESOLVED_OBSERVED_AFTER_1510']
+
+    def test_real_candidate_observed_after_freeze_carries_provenance(self):
+        late = bar(369, '104', avail=at(369) + M1 + timedelta(minutes=1))          # 15:09 bar observed 15:11 (lag 1m)
+        r = rrun(self.frozen_exit(*[bar(i, '104', vol='0') for i in range(351, 369)], late))
+        f, = self.unresolved(r)
+        self.assertEqual((f['candidate_event_at'], f['order_signal_at'], f['symbol'], f['quantity']),
+                         (at(369), at(350), 'AAA', 10))
+        self.assertEqual(f['pending_candidate_from'].strftime('%H:%M'), '15:09')    # cursor advanced past vetoed bars
+        self.assertEqual(r['summary']['status'], 'UNLIQUIDATED')
+
+    def test_candidate_arriving_on_a_later_day_is_still_attributed(self):
+        late = bar(369, '104', avail=at(30, 13))                                    # 15:09 bar observed next day 09:30
+        r = rrun(self.frozen_exit(*[bar(i, '104', vol='0') for i in range(351, 369)], late)
+                 + scenario(day=13)[:15])
+        f, = self.unresolved(r)
+        self.assertEqual((f['at'].day, f['candidate_event_at'].day, f['order_signal_at'].day), (13, 12, 12))
+
+    def test_excluded_bars_are_not_attributed(self):
+        cases = {
+            'before the order signal': bar(40, '100', avail=at(380)),
+            'timed out earlier than the cursor': bar(352, '104', avail=at(380)),   # 14:52 (earlier candidates timed out)
+            'at or after 15:10 event': bar(371, '104', avail=at(380)),
+            'different day event': bar(300, '104', day=13, avail=at(310, 13)),
+        }
+        base = [bar(i, '104', vol='0') for i in range(353, 369)]                     # 14:51/14:52 absent -> timeout
+        for label, row in cases.items():
+            with self.subTest(label):
+                r = rrun(self.frozen_exit(*base, row) + ([] if row.event_at.day == 12 else scenario(day=13)[:15]))
+                self.assertEqual(self.unresolved(r), [], label)
+
+    @unittest.expectedFailure
+    def test_defect_vetoed_candidate_must_not_be_reported_as_a_valid_late_outcome(self):
+        # A 15:09 bar observed 15:20 (lag 10m > 2m limit) or with zero volume could never have been an outcome.
+        for late in (bar(369, '104', avail=at(380)), bar(369, '104', vol='0', avail=at(380))):
+            with self.subTest(vol=late.volume):
+                r = rrun(self.frozen_exit(*[bar(i, '104', vol='0') for i in range(351, 369)], late))
+                self.assertEqual(self.unresolved(r), [])
+
+    def test_run_input_status_stays_invalid_after_debt_retirement_and_flat(self):
+        rows = [raw_from(c) for c in scenario() + [bar(21, '150'), bar(351, '150'), bar(352, '150')]]
+        cfg = replace(Config(), execution='research_estimated_open', initial_cash=D(1100), min_cash_ratio=D(0))
+        out = run_input(adapt_rows(rows, universe=['AAA']), cfg, universe=['AAA'], expected_session_dates=[date(2026, 11, 12)])
+        a = out['result']['research_assumptions']
+        self.assertEqual((a['non_funded_liability'], out['result']['summary']['status']), (D(0), 'FLAT'))
+        self.assertEqual((a['run_status'], out['run_status']), ('INVALID_RESOURCE_OVERRUN', 'INVALID_RESOURCE_OVERRUN'))
+
+    def test_run_input_ran_and_no_replay_rows_are_preserved(self):
+        rows = [raw_from(c) for c in scenario() + [bar(21, '103')]]
+        d = adapt_rows(rows, universe=['AAA'])
+        dates = [date(2026, 11, 12)]
+        research = run_input(d, replace(Config(), execution='research_estimated_open'), universe=['AAA'], expected_session_dates=dates)
+        self.assertEqual(research['run_status'], 'RAN')
+        for mode in ('next_open', 'legacy_close'):
+            self.assertEqual(run_input(d, replace(Config(), execution=mode), universe=['AAA'], expected_session_dates=dates)['run_status'], 'RAN')
+        self.assertEqual(run_input(d, Config(), universe=['BBB'], expected_session_dates=dates)['run_status'], 'NO_REPLAY_ROWS')
 
 
 def sells(r):
@@ -344,8 +408,7 @@ class ResourceInvalid(unittest.TestCase):
         self.assertEqual(r['research_assumptions']['non_funded_liability'], 0)
         self.assertEqual(r['research_assumptions']['run_status'], 'ESTIMATED_ONLY')
 
-    @unittest.expectedFailure
-    def test_defect_run_input_top_level_status_must_surface_invalid_run(self):
+    def test_regression_run_input_top_level_status_surfaces_invalid_run(self):
         rows = [raw_from(c) for c in scenario() + [bar(21, '150')]]
         out = run_input(adapt_rows(rows, universe=['AAA']), replace(Config(), execution='research_estimated_open',
                         initial_cash=D(1100), min_cash_ratio=D(0)), universe=['AAA'], expected_session_dates=[date(2026, 11, 12)])
