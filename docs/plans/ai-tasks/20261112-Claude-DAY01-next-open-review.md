@@ -10,7 +10,7 @@
 | GitHub 저장소 | origin (이번 작업에서 push 없음) |
 | 브랜치 | `YEOJUN-KIM/day01-claude-review-20261112` (기존 브랜치·Worktree 재사용) |
 | Worktree 절대 경로 | `C:\Users\User\orca\workspaces\ai-VibeCoding-2026\day01-claude-review-20261112` |
-| 기준 커밋 전체 SHA | `6408858fa08e2e7e2ffcf4884fa069a246b27391` (origin/main `38b44be617949791eaf3a738a1c014df25322320` 위에 DAY01 구현·리뷰 후보 포함) |
+| 기준 커밋 전체 SHA | `6408858fa08e2e7e2ffcf4884fa069a246b27391` (작업 시작 기준; Codex 구현 `348f34237a90a79fc432e2af2616c13d84b1084a`는 로컬 cherry-pick `efceb08`로 반영) (origin/main `38b44be617949791eaf3a738a1c014df25322320` 위에 DAY01 구현·리뷰 후보 포함) |
 | 수정 허용 파일 | `tests/test_day01_review.py`, `docs/technical/DAY01_REVIEW.md`, `docs/plans/ai-tasks/20261112-Claude-DAY01-next-open-review.md` (이 기록), 신규 `tests/day01_safe_regression_runner.py`(코디네이터 승인: 격리 회귀 실행기). Codex 소유(읽기 전용): `auto_trader/ml/day01.py`, `tests/test_day01.py`, `docs/specs/DAY01_BACKTEST.md`, Codex 작업 기록 |
 | 선행 작업 / commit / PR | Codex next-open 구현 commit — 코디네이터가 인계하면 clean 확인 후 로컬 cherry-pick. PR 없음 |
 | 공통 파일 담당자 / 작업 순서 | 없음. 구현 → 인계 → 독립 검증 → 결함 보고 → 수정본 재검증 |
@@ -20,7 +20,7 @@
 | 미실행 / 금지 작업 | DB·API·서버·워커·broker·주문, `.env`/비밀정보 접근, 설치, 새 통신 체계, 실제 시장 데이터·백테스트·PAPER 연결, push, PR, main 병합, 전체 테스트 탐색, DB가 필요한 기존 테스트(`test_paper`, `test_ml_backtest_selection` 등) |
 | 승인 상태 | 승인 (합성 테스트, 격리 실행기 기반 안전 회귀, 로컬 commit) |
 | 사용자 승인 근거 | 코디네이터 지시(task_551dbc2ee98c): next-open 개선 요청과 안전 회귀 허용(비밀·DB·API 금지, 일회용 stub/환경 격리만) |
-| 진행 상태 | 작업 중 (준비: 요구사항·격리 회귀 설계, 구현 인계 대기) |
+| 진행 상태 | 검토 대기 (통합 후보 준비: 구현 348f342 + 독립 테스트 108개, 알려진 실패 0) |
 
 ## 착수 확인
 
@@ -38,5 +38,5 @@
 ## 결과
 
 - PR 번호·URL / 최종 SHA 확인 위치: PR 없음. 최종 SHA는 완료 보고.
-- 구현 / 자동 테스트 / 실제 동작 / 사용자 확인 / 운영 적용 상태: 준비 단계, 미수행.
-- 미검증 항목·남은 위험·GPT 검토 사항: 구현 인계 후 갱신.
+- 구현 / 자동 테스트 / 실제 동작 / 사용자 확인 / 운영 적용 상태: 구현(Codex) 완료 / 합성 자동 테스트 통과(Codex 67, Claude 독립 108, 기존 안전 회귀 55, 실행기 자체 점검 11) / 미수행 / 미수행 / 해당 없음.
+- 미검증 항목·남은 위험·GPT 검토 사항: docs/technical/DAY01_REVIEW.md 7절 참조. 새 결함 없음. 실제 시가 증거 피드가 없으면 기본 모드는 체결하지 않으며 실제 피드 준비 상태가 아니다. DB 필요 기존 테스트, 실제 데이터, PAPER/LIVE 미검증.

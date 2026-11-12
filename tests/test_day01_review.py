@@ -14,7 +14,7 @@ from decimal import Decimal as D, ROUND_DOWN
 from pathlib import Path
 
 from auto_trader.ml.day01 import (
-    Candle, Config, KST, aggregate_five_minutes, evaluate_entry,
+    Candle, Config, KST, OpenQuote, aggregate_five_minutes, evaluate_entry,
     execution_costs, replay, select_universe,
 )
 
@@ -55,6 +55,7 @@ def entered(*later, **kw):
 
 
 def run(rows, universe=('AAA',), **cfg):
+    cfg.setdefault('execution', 'legacy_close')   # review suite round 1-2 pins the legacy close-proxy mode
     return replay(rows, replace(Config(), **cfg), universe=list(universe))
 
 
@@ -566,7 +567,7 @@ def synth(seed, sym, day):
 
 class Properties(unittest.TestCase):
     def test_invariants_over_random_multi_symbol_multi_day_paths(self):
-        cfg = replace(Config(), order_quantity=20, max_order_amount=D(100000), daily_order_limit=10)
+        cfg = replace(Config(), execution='legacy_close', order_quantity=20, max_order_amount=D(100000), daily_order_limit=10)
         buys = sells_ = 0
         for seed in range(30):
             rows = [r for d in (12, 13) for s in ('AAA', 'BBB') for r in synth(seed, s, d)]
@@ -759,6 +760,322 @@ class SecondRound(unittest.TestCase):
         r = run(entered(bar(21, '102'), late, bar(41, '120'), bar(42, '120')))
         t, = sells(r)
         self.assertEqual((t['reason'], t['event_at'], t['reference_price']), ('TARGET', at(41), TARGET))
+
+
+# ---------------------------------------------------------------- next-open (default mode) ----
+def quote(i, price='100', *, vol='1000', day=DAY, sym='AAA', avail=None):
+    return OpenQuote(sym, at(i, day), avail if avail is not None else at(i, day), D(price), D(vol))
+
+
+def nrun(rows, quotes=(), universe=('AAA',), **cfg):
+    """Default execution mode (next_open) unless overridden."""
+    return replay(rows, replace(Config(), **cfg), universe=list(universe), open_quotes=list(quotes))
+
+
+class NextOpen(unittest.TestCase):
+    def codes(self, r, symbol):
+        return [(x['reason'], x.get('phase')) for x in r['reasons'] if x['symbol'] == symbol]
+
+    def test_default_execution_is_next_open_and_legacy_is_explicit(self):
+        self.assertEqual(Config().execution, 'next_open')
+        r = nrun(scenario() + [bar(20, '102')])
+        self.assertEqual(r['execution_model'], 'causal_next_1m_open_quote')
+        legacy = run(scenario() + [bar(20, '102')])
+        self.assertEqual(legacy['execution_model'], 'later_on_time_1m_close_with_adverse_trigger_proxy')
+        self.assertEqual(legacy['summary']['legacy_close_fills'], 1)
+
+    def test_completed_candles_alone_never_fill_in_default_mode(self):
+        r = nrun(scenario() + [bar(i, '102') for i in range(20, 30)] + [bar(350, '103')])
+        self.assertEqual(r['trades'], [])
+        self.assertTrue(r['execution_evidence']['missing_open_quotes'])
+        self.assertEqual((r['execution_evidence']['supplied_open_quotes'], r['summary']['open_quote_fills'],
+                          r['summary']['legacy_close_fills']), (0, 0, 0))
+        self.assertTrue(any(x['reason'] == 'NO_EXECUTABLE_OPEN_QUOTE_BEFORE_EXPIRY' and x['at'] == at(22)
+                            for x in r['reasons']))
+
+    def test_first_open_strictly_after_signal_and_trade_provenance(self):
+        r = nrun(scenario(), [quote(20, '150'), quote(21, '103')])
+        t, = r['trades']
+        self.assertEqual((t['signal_at'], t['decision_at'], t['event_at'], t['execution_at'], t['observation_at']),
+                         (at(20), at(20), at(21), at(21), at(21)))
+        self.assertEqual((t['price_source'], t['evidence_close']), ('OPEN_QUOTE', None))
+        self.assertEqual((t['reference_price'], t['price'], t['quantity']), (D(103), D('103.0515'), 10))
+        self.assertEqual(r['summary']['open_quote_fills'], 1)
+        self.assertEqual(r['execution_evidence']['on_time_open_quotes'], 2)
+
+    def test_expiry_is_exclusive_on_physical_open_time(self):
+        self.assertEqual(len(nrun(scenario(), [quote(21)])['trades']), 1)              # age 1m
+        r = nrun(scenario(), [quote(22)])                                               # age == 2m
+        self.assertEqual(r['trades'], [])
+        self.assertIn(('ENTRY_SIGNAL_TOO_OLD', 'EXPIRY'), self.codes(r, 'AAA'))
+        ok = nrun(scenario(), [quote(22)], max_signal_to_fill_minutes=D(3))
+        self.assertEqual(ok['trades'][0]['execution_at'], at(22))
+
+    def test_late_quote_is_never_backdated_or_filled(self):
+        r = nrun(scenario(), [quote(21, '103', avail=at(25)), quote(22, '104')], max_signal_to_fill_minutes=D(5))
+        t, = r['trades']
+        self.assertEqual((t['event_at'], t['reference_price']), (at(22), D(104)))
+        self.assertIn(('LATE_OPEN_QUOTE_NOT_EXECUTABLE', None), self.codes(r, 'AAA'))
+
+    def test_capacity_comes_from_quote_not_completed_candle(self):
+        rows = scenario() + [bar(21, '103', vol='100000')]
+        t, = nrun(rows, [quote(21, '103', vol='3')])['trades']
+        self.assertEqual(t['quantity'], 3)
+        r = nrun(scenario(), [quote(21, '103', vol='6')])
+        self.assertEqual(r['trades'][0]['quantity'], 6)
+        self.assertTrue(any(x['reason'] == 'ENTRY_REMAINDER_CANCELLED' and x['quantity'] == 4 for x in r['reasons']))
+        half = nrun(scenario(), [quote(21, '103', vol='9')], volume_participation=D('0.5'))
+        self.assertEqual(half['trades'][0]['quantity'], 4)
+
+    def test_zero_or_subunit_capacity_does_not_fill_and_waits(self):
+        for vol in ('0', '0.9'):
+            r = nrun(scenario(), [quote(21, '103', vol=vol)])
+            self.assertEqual(r['trades'], [])
+        r = nrun(scenario(), [quote(21, '103', vol='0.9'), quote(22, '103')], max_signal_to_fill_minutes=D(5))
+        self.assertEqual([t['event_at'] for t in r['trades']], [at(22)])
+        self.assertEqual(r['execution_evidence']['zero_or_subunit_capacity_quotes'], 1)
+
+    def test_entry_bar_range_counts_against_the_new_position(self):
+        # Entry at the 09:21 open (102.051 -> stop 101.03049). The 09:21 bar then trades down to 95.
+        rows = scenario() + [bar(21, '100', o='102', lo='95', hi='102')]
+        r = nrun(rows, [quote(21, '102'), quote(22, '101'), quote(23, '101')])
+        stop, = [s for s in r['signals'] if s['reason'] == 'STOP']
+        self.assertEqual(stop['at'], at(22))                    # observed when the entry bar completes
+        t, = sells(r)
+        self.assertEqual((t['execution_at'], t['reference_price'], t['price']), (at(23), D(101), D('100.9495')))
+        # the 09:22 open (== signal time) cannot fill the exit
+        self.assertNotIn(at(22), [x['execution_at'] for x in sells(r)])
+
+    def test_entry_bar_dual_hit_is_stop_first(self):
+        rows = scenario() + [bar(21, '105', o='102', lo='95', hi='110')]
+        r = nrun(rows, [quote(21, '102'), quote(23, '103')])
+        self.assertEqual([s['reason'] for s in r['signals'] if s['side'] == 'SELL'][:1], ['AMBIGUOUS_STOP_FIRST'])
+        self.assertNotIn('TARGET', {s['reason'] for s in r['signals']})
+
+    def test_gap_open_triggers_stop_but_cannot_fill_same_open(self):
+        r = nrun(scenario(), [quote(21, '103'), quote(22, '90'), quote(23, '95')])
+        self.assertEqual([t['side'] for t in r['trades']], ['BUY', 'SELL'])
+        stop, = [s for s in r['signals'] if s['reason'] == 'STOP']
+        self.assertEqual(stop['at'], at(22))
+        sell = r['trades'][1]
+        self.assertEqual((sell['execution_at'], sell['reference_price']), (at(23), D(95)))   # actual open, no synthetic cap
+
+    def test_target_via_gap_up_open_fills_at_actual_next_open(self):
+        r = nrun(scenario(), [quote(21, '102'), quote(22, '110'), quote(23, '112')])
+        sell, = sells(r)
+        self.assertEqual((sell['reason'], sell['execution_at'], sell['reference_price']), ('TARGET', at(23), D(112)))
+
+    def test_fresh_open_quote_precedes_same_time_candle_arrival(self):
+        # 09:20 candle (arrives 09:21, same instant as the 09:21 open) is a crash: it must not move the fill.
+        rows = scenario() + [bar(20, '50', o='102', lo='50', hi='102', vol='1000')]
+        t, = nrun(rows, [quote(21, '103')])['trades']
+        self.assertEqual(t['price'], D('103.0515'))
+
+    def test_marks_quote_then_candle_tie_and_older_candle_cannot_overwrite_quote(self):
+        rows = scenario() + [bar(20, '50', o='102', lo='50', hi='102'), bar(21, '99', o='103', lo='99', hi='103')]
+        r = nrun(rows, [quote(21, '103')])
+        at21 = [c for c in r['equity_curve'] if c['at'] == at(21)][-1]
+        self.assertEqual(at21['net_liquidation_equity'], D('999996.97'))     # still marked at open 103, not 50
+        self.assertEqual(r['valuation_marks']['AAA']['price'], D(99))        # completed candle wins the tie
+        self.assertEqual(r['valuation_marks']['AAA']['price_source'], 'COMPLETED_CANDLE')
+        self.assertEqual(r['valuation_marks']['AAA']['event_at'], at(21))
+
+    def test_quote_candle_mismatch_is_flagged_without_changing_fill(self):
+        rows = scenario() + [bar(21, '103', o='104', hi='104', lo='103')]
+        r = nrun(rows, [quote(21, '103')])
+        self.assertEqual(r['trades'][0]['reference_price'], D(103))
+        self.assertTrue(any(x['reason'] == 'OPEN_CANDLE_PRICE_MISMATCH' and x['at'] == at(22) for x in r['reasons']))
+
+    def test_late_quote_risk_is_learned_at_arrival_and_exit_needs_later_open(self):
+        r = nrun(scenario(), [quote(21, '103'), quote(30, '90', avail=at(40)), quote(40, '101'), quote(41, '101')])
+        self.assertTrue(any(x['reason'] == 'LATE_RISK_OBSERVATION' and x['at'] == at(40) for x in r['reasons']))
+        stop, = [s for s in r['signals'] if s['reason'] == 'STOP']
+        self.assertEqual(stop['at'], at(40))
+        sell, = sells(r)
+        self.assertEqual((sell['execution_at'], sell['reference_price']), (at(41), D(101)))   # open 09:40 == signal: no fill
+
+    def test_late_risk_quote_blocks_simultaneous_buy_fill(self):
+        bbb = scenario(sym='BBB')
+        rows = scenario(sym='AAA') + bbb
+        qs = [quote(21, '103', sym='AAA'), quote(30, '90', sym='AAA', avail=at(40))]
+        # BBB's own order becomes fillable at 09:40 exactly when AAA's crash quote arrives late
+        r = nrun(rows, qs + [quote(40, '103', sym='BBB')], universe=('AAA', 'BBB'),
+                 max_signal_to_fill_minutes=D(130))
+        self.assertIn(('LATE_RISK_EXIT_PENDING', 'FILL'), self.codes(r, 'BBB'))
+        self.assertEqual([t['symbol'] for t in r['trades']], ['AAA'])
+
+    def test_same_open_sells_first_and_buys_consume_cash_in_symbol_order(self):
+        rows = scenario(sym='AAA') + scenario(sym='BBB')
+        qs = [quote(21, '103', sym='AAA'), quote(21, '103', sym='BBB')]
+        r = nrun(rows, qs, universe=('BBB', 'AAA'), initial_cash=D(1100), min_cash_ratio=D(0))
+        self.assertEqual([t['symbol'] for t in r['trades']], ['AAA'])
+        self.assertIn(('INSUFFICIENT_CASH', 'FILL'), self.codes(r, 'BBB'))
+
+    def test_1450_quote_cannot_fill_but_next_opens_do_and_remainder_waits(self):
+        qs = [quote(21, '103'), quote(350, '103'), quote(351, '103', vol='4'), quote(352, '103')]
+        r = nrun(scenario(), qs)
+        self.assertEqual([(t['quantity'], t['event_at'].strftime('%H:%M')) for t in sells(r)],
+                         [(4, '14:51'), (6, '14:52')])
+        s = r['summary']
+        self.assertEqual((s['status'], s['entry_orders'], s['total_orders'], s['filled_orders']), ('FLAT', 1, 2, 3))
+
+    def test_1510_exclusive_on_open_time(self):
+        ok = nrun(scenario(), [quote(21, '103'), quote(369, '103')])      # open 15:09 < 15:10
+        self.assertEqual(ok['summary']['status'], 'FLAT')
+        late = nrun(scenario(), [quote(21, '103'), quote(370, '103')])    # open 15:10
+        self.assertEqual(late['summary']['status'], 'UNLIQUIDATED')
+        self.assertEqual(late['failures'][0]['quantity'], 10)
+        self.assertTrue(any(x['reason'] == 'NO_EXECUTABLE_OPEN_QUOTE_BEFORE_DEADLINE' for x in late['reasons']))
+
+    def test_exit_orders_do_not_expire_like_entries(self):
+        r = nrun(scenario(), [quote(21, '103'), quote(30, '90'), quote(120, '95')])
+        sell, = sells(r)
+        self.assertEqual((sell['reason'], sell['execution_at'], sell['reference_price']), ('STOP', at(120), D(95)))
+
+    def test_entry_window_by_open_time_with_explicit_lifetime(self):
+        inside = [bar(i) for i in range(140)] + [bar(i, '102', vol='200') for i in range(140, 145)]   # signal 11:25
+        ok = nrun(inside, [quote(149, '102')], max_signal_to_fill_minutes=D(20))
+        self.assertEqual([t['execution_at'] for t in ok['trades'] if t['side'] == 'BUY'], [at(149)])
+        no = nrun(inside, [quote(150, '102')], max_signal_to_fill_minutes=D(20))
+        self.assertEqual([t for t in no['trades'] if t['side'] == 'BUY'], [])
+
+    def test_frozen_overnight_keeps_nonzero_quote_marks_and_provenance(self):
+        rows = scenario() + scenario(day=13) + [bar(20, '102', day=13)]
+        r = nrun(rows, [quote(21, '103'), quote(21, '103', day=13)])
+        s = r['summary']
+        self.assertEqual((s['status'], s['unresolved_quantities'], s['frozen_valuation_symbols']), ('UNLIQUIDATED', {'AAA': 10}, ['AAA']))
+        self.assertTrue(s['overnight_gap_exposure_unmodeled'])
+        self.assertEqual((s['open_quote_fills'], s['legacy_close_fills'], s['filled_orders']), (1, 0, 1))
+        mark = r['valuation_marks']['AAA']
+        self.assertEqual((mark['price'], mark['price_source'], mark['frozen']), (D(103), 'OPEN_QUOTE', True))
+        self.assertGreater(s['net_liquidation_equity'], D(0))
+        self.assertIn(('UNRESOLVED_EXPOSURE', 'SIGNAL'), self.codes(r, 'AAA'))
+
+    def test_quote_validation(self):
+        good = quote(21, '103')
+        cases = [replace(good, event_at=datetime(2026, 11, 12, 9, 21), available_at=datetime(2026, 11, 12, 9, 21)),
+                 replace(good, available_at=good.event_at - timedelta(seconds=1)),
+                 replace(good, event_at=good.event_at + timedelta(seconds=5), available_at=good.event_at + timedelta(seconds=5)),
+                 replace(good, price=D(0)), replace(good, price=D('NaN')), replace(good, price=103.0),
+                 replace(good, executable_volume=D(-1)), replace(good, executable_volume=5),
+                 quote(-1), replace(good, event_at=at(391), available_at=at(391))]
+        for q in cases:
+            with self.subTest(q=q), self.assertRaises(ValueError):
+                nrun(scenario(), [q])
+        with self.assertRaises(ValueError):
+            nrun(scenario(), [good, replace(good, price=D(104))])        # duplicate key even if different
+        junk = replace(good, symbol='ZZZ', price=D(-5))
+        nrun(scenario(), [good, junk])                                    # out-of-universe is ignored unvalidated
+        with self.assertRaises(ValueError):
+            nrun(scenario(), [good], execution='legacy_close')
+        with self.assertRaises(ValueError):
+            nrun(scenario(), [good], execution='close')
+
+    def test_quote_exactly_at_stop_triggers_and_one_tick_above_does_not(self):
+        hit = nrun(scenario(), [quote(21, '102'), quote(22, '101.03049'), quote(23, '101')])
+        self.assertTrue(any(x['reason'] == 'STOP' and x['at'] == at(22) for x in hit['signals']))
+        miss = nrun(scenario(), [quote(21, '102'), quote(22, '101.0305'), quote(23, '102')])
+        self.assertFalse(any(x['reason'] == 'STOP' for x in miss['signals']))
+
+    def test_late_quote_mismatching_known_candle_is_flagged_at_arrival(self):
+        rows = scenario() + [bar(21, '103', o='103', hi='103', lo='103')]
+        r = nrun(rows, [quote(21, '104', avail=at(30))], max_signal_to_fill_minutes=D(1))
+        self.assertTrue(any(x['reason'] == 'OPEN_CANDLE_PRICE_MISMATCH' and x['at'] == at(30) for x in r['reasons']))
+
+    def test_same_open_sell_frees_position_slot_before_buy(self):
+        # BBB is held and stopped out; AAA's buy becomes fillable at the same 09:23 open. max_positions=1.
+        rows = scenario(sym='BBB') + scenario(sym='AAA')
+        qs = [quote(21, '103', sym='BBB'), quote(22, '90', sym='BBB'),
+              quote(23, '95', sym='BBB'), quote(23, '103', sym='AAA')]
+        r = nrun(rows, qs, universe=('AAA', 'BBB'), max_positions=1, max_signal_to_fill_minutes=D(5))
+        self.assertEqual([(t['symbol'], t['side']) for t in r['trades']],
+                         [('BBB', 'BUY'), ('BBB', 'SELL'), ('AAA', 'BUY')])
+
+    def test_late_candle_risk_arriving_at_same_open_does_not_block_that_open_fill(self):
+        # Contract: quotes physically at T are processed BEFORE candles arriving at T, so the late
+        # AAA crash candle (event 09:22, arrives 09:30) is learned after BBB's 09:30 open fill.
+        # Contrast: a late *quote* crash is consumed before fills and blocks them (see
+        # test_late_risk_quote_blocks_simultaneous_buy_fill) - conservative asymmetry, documented.
+        crash = bar(22, '50', sym='AAA', o='103', lo='50', hi='103', avail=at(30))
+        rows = scenario(sym='AAA') + scenario(sym='BBB') + [bar(21, '103', sym='AAA'), crash]
+        r = nrun(rows, [quote(21, '103', sym='AAA'), quote(30, '103', sym='BBB')], universe=('AAA', 'BBB'),
+                 max_signal_to_fill_minutes=D(130))
+        self.assertEqual([(t['symbol'], t['execution_at']) for t in r['trades']], [('AAA', at(21)), ('BBB', at(30))])
+        self.assertTrue(any(x['reason'] == 'LATE_RISK_OBSERVATION' and x['at'] == at(30) and x['symbol'] == 'AAA'
+                            for x in r['reasons']))
+
+    def test_shuffled_inputs_give_identical_result(self):
+        rows = scenario(sym='AAA') + scenario(sym='BBB') + [bar(350, '103', sym='AAA')]
+        qs = [quote(21, '103', sym='AAA'), quote(21, '104', sym='BBB'), quote(350, '103', sym='AAA'),
+              quote(351, '103', sym='AAA'), quote(351, '104', sym='BBB'), quote(30, '90', sym='BBB', avail=at(35))]
+        base = nrun(rows, qs, universe=('AAA', 'BBB'))
+        for seed in range(5):
+            r1, q1 = list(rows), list(qs)
+            random.Random(seed).shuffle(r1)
+            random.Random(seed + 9).shuffle(q1)
+            self.assertEqual(nrun(r1, q1, universe=('BBB', 'AAA')), base)
+
+
+def synth_quotes(rows, seed):
+    rng = random.Random(f'q{seed}')
+    out = []
+    for r in rows:
+        if rng.random() < .06:
+            continue                                                         # missing open snapshot
+        late = timedelta(minutes=rng.randint(1, 4)) if rng.random() < .05 else timedelta(0)
+        out.append(OpenQuote(r.symbol, r.event_at, r.event_at + late, r.open_price,
+                             D(rng.choice([0, 0, 3, 8, 15, 40, 200]))))
+    return out
+
+
+class NextOpenProperties(unittest.TestCase):
+    def test_invariants_over_random_paths_with_open_quotes(self):
+        cfg = replace(Config(), order_quantity=20, max_order_amount=D(100000), max_signal_to_fill_minutes=D(8))
+        buys = sells_ = 0
+        for seed in range(25):
+            rows = [r for d in (12, 13) for s in ('AAA', 'BBB') for r in synth(seed, s, d)]
+            quotes = synth_quotes(rows, seed)
+            res = replay(rows, cfg, universe=['AAA', 'BBB'], open_quotes=quotes)
+            by = {(q.symbol, q.event_at): q for q in quotes}
+            held = {}
+            for t in res['trades']:
+                q = by[t['symbol'], t['event_at']]
+                self.assertEqual(q.available_at, q.event_at)                    # on-time evidence only
+                self.assertEqual(t['execution_at'], q.event_at)
+                self.assertGreater(t['execution_at'], t['signal_at'])
+                self.assertEqual((t['price_source'], t['evidence_close'], t['reference_price']), ('OPEN_QUOTE', None, q.price))
+                self.assertLessEqual(t['quantity'], int(q.executable_volume))
+                self.assertGreaterEqual(t['quantity'], 1)
+                if t['side'] == 'BUY':
+                    buys += 1
+                    self.assertEqual(t['price'], q.price * (1 + cfg.slippage_rate))
+                    self.assertTrue(at(21) <= t['execution_at'].replace(day=12) < at(150))
+                    self.assertLess(t['execution_at'] - t['signal_at'], timedelta(minutes=8))
+                    held[t['symbol']] = held.get(t['symbol'], 0) + t['quantity']
+                else:
+                    sells_ += 1
+                    self.assertEqual(t['price'], q.price * (1 - cfg.slippage_rate))
+                    held[t['symbol']] -= t['quantity']
+                    self.assertGreaterEqual(held[t['symbol']], 0)
+                    self.assertLess(t['execution_at'].replace(day=12), at(370))
+            self.assertEqual(res['summary']['cash'], cfg.initial_cash + sum(t['cash_delta'] for t in res['trades']))
+            self.assertTrue(all(c['cash'] >= 0 for c in res['equity_curve']))
+            self.assertEqual({s: n for s, n in held.items() if n}, res['summary']['open_positions'])
+            self.assertEqual(res['summary']['open_quote_fills'], len(res['trades']))
+            self.assertEqual(res['summary']['legacy_close_fills'], 0)
+            per = {}
+            for s in res['signals']:
+                if s['side'] == 'BUY':
+                    per[s['symbol'], s['at'].date()] = per.get((s['symbol'], s['at'].date()), 0) + 1
+            self.assertTrue(all(n == 1 for n in per.values()))
+            for held_symbol in res['summary']['frozen_valuation_symbols']:
+                self.assertGreater(res['valuation_marks'][held_symbol]['price'], 0)
+            if seed < 3:
+                shuffled = list(rows), list(quotes)
+                random.Random(seed).shuffle(shuffled[0]); random.Random(seed).shuffle(shuffled[1])
+                self.assertEqual(replay(shuffled[0], cfg, universe=['BBB', 'AAA'], open_quotes=shuffled[1]), res)
+        self.assertGreaterEqual(buys, 5, 'property test must exercise open-quote entries')
+        self.assertGreaterEqual(sells_, 5, 'property test must exercise open-quote exits')
 
 
 class StaticPurity(unittest.TestCase):

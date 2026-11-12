@@ -2,7 +2,7 @@
 
 작업 기록: [20261112-Claude-DAY01-review](../plans/ai-tasks/20261112-Claude-DAY01-review.md)
 
-상태: **최종 — 검토 완료(합성 자동 테스트 기준).** 독립 테스트 `tests/test_day01_review.py` 79개 전체 통과(실패·오류·expected failure·unexpected success 0)와 Codex `tests/test_day01.py` 45개 통과를 확인했다. 최종 결과는 아래 **5절**이며, 실제 시장 데이터·PAPER/LIVE·사용자 동작 검증·운영 적용은 하지 않았고 수익성에 대한 어떤 주장도 하지 않는다.
+상태: **최종 — next-open 개선본(Codex `348f342`)까지 검토 완료(합성 자동 테스트 기준).** 최신 결과는 **7절**이다. 5절은 직전 close-proxy 모델(구현 `bad9d21`)의 결과로 `legacy_close` 모드에 그대로 해당한다. 실제 시장 데이터·PAPER/LIVE·사용자 동작 검증·운영 적용은 하지 않았고 수익성에 대한 어떤 주장도 하지 않는다. **실제 시세 피드에 바로 쓸 수 있는 상태가 아니다**: 기본 모드는 명시적 `OpenQuote`(시가 시점 가격·체결가능수량) 증거가 있어야만 체결한다.
 
 > **1~4절은 구현 전(사전) 요구사항·시나리오 설계 기록이며 역사적 문서다.** 당시의 가설(예: 5분봉 직접 입력, next-open 체결, 기존 `RawCandle` 재사용 등)은 최종 계약이 아니다. 최종 API·시간 모델·체결 모델은 `docs/specs/DAY01_BACKTEST.md`(1분봉 입력, 완결 5분 집계, 이후 on-time 1분봉 종가 기반 체결)가 기준이며, 1~4절과 충돌하면 **사양 문서와 5절이 우선**한다.
 
@@ -180,3 +180,48 @@ python -B tests/day01_safe_regression_runner.py tests.test_ml_backtest tests.tes
 ```
 
 2026-11-12 준비 단계 실행 결과(HEAD `4bf3f8d` 기준): `--selftest` 11개 항목 모두 PASS(차단 10 + asyncio 루프 허용 1). 회귀 55개 실행, 통과 55, 실패·오류 0, 제외 1. 구분: **기존(MA/PAPER/백테스트) 안전 회귀 55개**는 DAY01 테스트 124개(Codex 45 + Claude 79)와 별개이며, 최종 보고에서 [DAY01 legacy 124] / [DAY01 신규 기본모드] / [기존 안전 회귀 55 + 제외 1]을 각각 구분해 기록한다.
+
+## 7. next-open 개선본 최종 검토 (구현 `348f34237a90a79fc432e2af2616c13d84b1084a`, 로컬 cherry-pick `efceb08`)
+
+작업 기록: [20261112-Claude-DAY01-next-open-review](../plans/ai-tasks/20261112-Claude-DAY01-next-open-review.md). Codex 전체 이력을 병합하지 않고 이 commit만 clean 상태에서 cherry-pick했다(변경 4경로: `auto_trader/ml/day01.py`, `tests/test_day01.py`, `docs/specs/DAY01_BACKTEST.md`, Codex 작업 기록).
+
+### 7.1 소스 독립 검토 요지
+
+- **계약**: `Config.execution` 기본 `next_open`, 명시적 `legacy_close`. `OpenQuote(symbol,event_at,available_at,price,executable_volume)`와 `replay(..., open_quotes=())`. 체결은 `signal_at < open event_at`이고 `available_at == event_at`인 시가 스냅샷에서만, 가격은 스냅샷 가격(합성 캡 없음), 수량은 `floor(executable_volume × participation)`이다. 완성 분봉의 volume/OHLC/종가로 체결가·수량·적격성을 결정하지 않는다.
+- **순서(요구사항 A~H 대응)**: 한 시각의 처리는 만료·14:50·15:10 타이머 → 해당 시각 시가 마크 → 늦게 도착한 시가의 위험 → 정상 시가 체결(매도 우선, 종목 순) → 새 갭 트리거(같은 시가에서 체결 불가) → 완성 분봉 도착 → 분봉 위험·신호 순이다. 소스 확인 결과 체결 위험 검사는 이전 마크와 같은 시각의 모든 시가만 사용한다.
+- **진입 분봉 범위(최대 위험, A)**: 진입 시각(시가 시각) 분봉이 `event_at >= entry_at`로 손절·목표 감시에 포함되어, 시가 체결 이후 그 분봉에서 하락해도 손절 신호가 분봉 도착 시점에 생성되고 동시 터치는 STOP 우선이다. 청산은 신호 시각보다 엄격히 이후의 시가에서만 체결된다.
+- **만료(C)**: 만료는 시가 물리 시각 기준이며 배타적이다(`age >= 한도`). 타이머가 먼저 실행되어 정확히 한도 시각의 시가는 체결되지 않는다. 청산 주문은 만료되지 않고 15:10까지 대기하며 이후 시가의 실제 가격으로 체결된다(보고된 한계).
+- **마크 출처(C)**: 시가 마크는 `event_at` high-water 규칙을 따르고, 같은 `event_at`에서는 완성 분봉이 시가 마크를 대체한다. 더 오래된 분봉은 새 마크를 덮어쓰지 않는다. `valuation_marks`에 출처(`price_source`)가 기록된다.
+- **검증(D)**: `OpenQuote.validate`는 symbol 정규화·tz-aware·분 정렬·세션 범위·유한 Decimal·`available_at >= event_at`을 요구하고 중복 `(symbol,event_at)`은 거부한다. 늦은 시가는 `LATE_OPEN_QUOTE_NOT_EXECUTABLE` 사유로 기록되고 체결되지 않는다. 유니버스 밖 시가는 검증하지 않는다.
+- **출처 표기(B)**: 체결에 `price_source`(`OPEN_QUOTE`/`LEGACY_CLOSE_PROXY`), `decision_at`, `observation_at`, `evidence_close=None`이 있고, 결과에 `execution_evidence`(제출·정시·지연·용량미달 시가 수, `missing_open_quotes`)와 summary의 `open_quote_fills`/`legacy_close_fills`가 있다. 시세 없이 완성 분봉만 주면 체결 0건이며 `NO_EXECUTABLE_OPEN_QUOTE_BEFORE_EXPIRY/DEADLINE`로 명시된다(가짜 용량 없음).
+- **결함**: 이 검토에서 새 결함은 발견하지 못했다. 관찰(결함 아님): (1) 늦은 **시가**의 위험은 같은 시각 체결 전에 소비되어 매수 체결을 막지만(보수적), 늦은 **분봉**의 위험은 체결 후에 소비되어 같은 시각 시가 체결을 막지 않는다(분봉은 시가 이후에 알게 되는 정보라는 계약과 일치, 테스트로 고정). (2) 청산 주문은 만료가 없어 매우 늦은 시가에서도 체결된다. (3) `executable_volume`은 호출자가 제공하는 증거이며 이 모듈은 그 진위나 시가 대비 분봉 시가 불일치 때문에 체결을 바꾸지 않는다(`OPEN_CANDLE_PRICE_MISMATCH`로 표시만).
+
+### 7.2 독립 테스트 (`tests/test_day01_review.py`)
+
+기존 79개는 헬퍼가 `execution='legacy_close'`를 기본으로 지정하도록만 바꿨고 단언은 약화·삭제하지 않았다. 신규 29개는 기본 모드(`NextOpen` 26 + `NextOpenProperties` 1 + 보강 포함, 정확한 합계는 아래 실행 결과)이다:
+
+- 기본값·모드 라벨, 시세 없는 분봉만의 무체결, 신호 시각보다 엄격히 이후의 첫 시가와 타임스탬프·출처 필드 정확값, 만료 경계(1분 체결/정확히 2분 만료), 지연 시가 무체결·무소급, 용량의 시가 기원(분봉 거래량 무관)·부분 체결·0/미만 1 용량 대기·participation.
+- 진입 분봉 범위·동시 터치 STOP 우선, 갭 시가가 신호를 만들되 같은 시가에서 체결 불가, 갭 상승 목표, 손절 경계(정확히 stop 가격 / 한 틱 위), 같은 시각 분봉이 체결가를 바꾸지 못함, 마크의 시가·분봉 동률/구 분봉 비덮어쓰기, 시가-분봉 불일치 표시(분봉 선도착·시가 지연 도착 양쪽).
+- 지연 시가 위험의 도착 시점 반영과 매수 체결 차단, 늦은 분봉 위험이 같은 시각 시가 체결을 막지 않는 계약, 같은 시가에서 매도가 먼저 포지션 슬롯을 비움, 같은 시가 매수의 현금 소진(종목 순), 14:50 시가 비체결·부분 청산 잔량 대기·주문 수, 15:10 배타(15:09 체결/15:10 불체결), 청산 주문 비만료, 진입창 11:30 시가 경계, 미청산 동결 시 0이 아닌 시가 마크·출처·요약 플래그, 시가 검증 전반, 입력 셔플 결정성.
+- 속성 테스트: 25개 시드 × 2종목 × 2일의 무작위 경로에서 정시 시가만 체결, 체결 시각 > 신호 시각, 수량 ≤ 시가 용량, 가격 = 시가 ± 슬리피지, 현금 ≥ 0, 종목·일 1회 진입, 진입창·15:10 경계, 출처 카운터 일치, 셔플 동일 결과(비공허: 진입·청산 각 5회 이상 요구).
+
+변이 검증(구현 사본을 임시 폴더에서 변형, 저장소 구현 미수정): next-open 로직 변이 14개 중 11개를 탐지하고 3개를 추가 테스트 후 탐지했다(체결 엄격 부등호, 진입 분봉 제외, 시가 우선 마크 동률, 늦은 시가 위험 제거, 용량 participation 제거, 손절 경계, 매도 우선 정렬, 불일치 표시 등). 미탐지로 남은 3개는 동치 변이이다(15:10 이후 체결 방지는 대기 주문 삭제와 중복, 진입 시가 자체의 손절 감시 생략은 가격 구조상 불가능, 15:10 이후 시가 필터 제거는 미청산 보호와 중복).
+
+### 7.3 실행 결과 (대상 HEAD는 작업 기록·최종 보고 참조)
+
+| 구분 | 명령 | 결과 |
+|---|---|---|
+| DAY01 legacy 124 (Codex 45 + Claude 79) | 아래 두 명령의 legacy_close 부분 | 통과 (아래 합계에 포함) |
+| Codex (legacy 45 + 신규 22) | `python -B -m unittest discover -s tests -p test_day01.py` | **67개 실행, 67 통과** |
+| Claude 독립 (legacy 고정 79 + 신규 기본 모드 29) | `python -B -m unittest tests.test_day01_review` | **108개 실행, 108 통과**, 실패·오류·expected failure 0, 약 18초 |
+| 기존 MA/PAPER/백테스트 안전 회귀 (DAY01과 별개) | `env -u <하네스 토큰 변수> python -B tests/day01_safe_regression_runner.py tests.test_ml_backtest tests.test_strategy_engine tests.test_paper_management tests.test_paper_feed` | **55개 실행, 55 통과**, 제외 1(`tests.test_strategy_engine.StrategyEngineTests.test_journal_survives_reset_and_contains_costs_reason_and_owner`: `.paper-history` 파일 쓰기) |
+| 실행기 자체 점검 | `... day01_safe_regression_runner.py --selftest` | 11/11 PASS |
+
+중복 집계 주의: Codex 67과 Claude 108은 서로 다른 파일의 테스트이며 일부 시나리오가 의미상 겹칠 수 있으나 코드·파일은 중복이 없다. DAY01 합성 테스트 합계 175(= 67 + 108)이며, 55개 기존 회귀와는 겹치지 않는다. 124 = legacy 45 + legacy 79는 위 175 안의 부분집합이다.
+
+### 7.4 미검증·한계
+
+- 실제 시장 데이터, 실제 시가 스냅샷 피드, 호가·체결 우선순위, 휴장일, PAPER/LIVE 연동, 운영 환경, 사용자 동작 검증은 하지 않았다. 시가 증거가 없으면 기본 모드는 체결하지 않는다.
+- DB가 필요한 기존 테스트(`test_paper`, `test_ml_backtest_selection`, `test_ml_data_pipeline` 등)는 실행하지 않았다.
+- 격리 실행기는 Python 수준 차단이며 OS 샌드박스가 아니다.
+- 다음날 갭은 모델링하지 않는다(미청산은 동결·표시). 수익성에 대한 주장 없음.
