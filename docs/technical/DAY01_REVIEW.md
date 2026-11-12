@@ -198,7 +198,7 @@ python -B tests/day01_safe_regression_runner.py tests.test_ml_backtest tests.tes
 
 ### 7.2 독립 테스트 (`tests/test_day01_review.py`)
 
-기존 79개는 헬퍼가 `execution='legacy_close'`를 기본으로 지정하도록만 바꿨고 단언은 약화·삭제하지 않았다. 신규 29개는 기본 모드(`NextOpen` 26 + `NextOpenProperties` 1 + 보강 포함, 정확한 합계는 아래 실행 결과)이다:
+기존 79개는 헬퍼가 `execution='legacy_close'`를 기본으로 지정하도록만 바꿨고 단언은 약화·삭제하지 않았다. 신규 29개는 기본 모드 테스트(`NextOpen` 28 + `NextOpenProperties` 1)이다:
 
 - 기본값·모드 라벨, 시세 없는 분봉만의 무체결, 신호 시각보다 엄격히 이후의 첫 시가와 타임스탬프·출처 필드 정확값, 만료 경계(1분 체결/정확히 2분 만료), 지연 시가 무체결·무소급, 용량의 시가 기원(분봉 거래량 무관)·부분 체결·0/미만 1 용량 대기·participation.
 - 진입 분봉 범위·동시 터치 STOP 우선, 갭 시가가 신호를 만들되 같은 시가에서 체결 불가, 갭 상승 목표, 손절 경계(정확히 stop 가격 / 한 틱 위), 같은 시각 분봉이 체결가를 바꾸지 못함, 마크의 시가·분봉 동률/구 분봉 비덮어쓰기, 시가-분봉 불일치 표시(분봉 선도착·시가 지연 도착 양쪽).
