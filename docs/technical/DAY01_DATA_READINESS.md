@@ -49,6 +49,8 @@ UNKNOWN은 실제 저장 상태를 조사하지 않았다는 뜻이고 MISSING/N
 
 `run_input(data, config, *, universe, expected_session_dates, open_quotes=())`는 위 coverage·provenance·분리 행과 core 결과를 묶는다. 정규 행이 없으면 NO_REPLAY_ROWS/result=None이다. 기대 날짜는 진단용이며 replay를 조용히 필터하지 않는다. 호출자가 데이터 날짜 범위를 사전에 선택해야 한다. 기본 Config는 여전히 strict next_open이므로 별도 시가 증거 없이는 체결하지 않는다.
 
+상위 `run_status`는 연구 결과의 `INVALID_RESOURCE_OVERRUN`을 그대로 전달한다. 부채가 매도로 상환되어도 원래 무효 판정은 유지한다. 향후 기타 무효/미결 연구 상태도 전달하며, 상태가 비어 있으면 INCONCLUSIVE_RESEARCH_STATUS다. 정상 strict/legacy 또는 ESTIMATED_ONLY 연구의 RAN은 계산 경로 완료라는 기존 의미만 유지하고 수익성·실거래 가능성을 뜻하지 않는다. 무입력 NO_REPLAY_ROWS도 유지한다.
+
 ## 연구용 추정 모드: 과거 실제 체결이 아님
 
 명시적 `Config(execution='research_estimated_open')`만 활성화한다. strict OpenQuote를 생성하거나 섞지 않는다. 기본 strict/legacy의 수치 동작은 유지한다. **연구 모드의 장부·PnL는 실제 관측 시점에만 바뀌며, 과거 시가 시각에 실제 체결되었다는 주장이나 그 시점의 실제 손익 곡선이 아니다.**
@@ -77,8 +79,10 @@ research_max_observation_lag_minutes는 유한 Decimal `[0,30]`, 기본2분이�
 
 14:50 청산도 같은 방식이며15:10 이상 관측은 먼저 동결된다. 15:09 추정 open이15:10에야 관측되면 정산하지 않고 잔량/UNRESOLVED_OBSERVED_AFTER_1510를 보고한다. 마지막 알려진 가격의 비용 차감 평가를 보존하고 익일 gap 미모델링/동결 플래그를 유지한다. missing/late/uncertain/unfilled 수량·mode·비용·슬리피지·가정은 결과/거래에 기록한다.
 
+UNRESOLVED_OBSERVED_AFTER_1510는 동결된 주문의 **같은 종목·세션 날짜**에서, 신호보다 엄격히 이후이고 동결 시 남아 있던 후보 시작(cursor) 이상·15:10 미만인 봉에만 연결한다. BUY라면 원래 진입 창·추정 나이 한도도 필요하다. 이미 timeout 처리한 이전 후보, 주문 전의09:40 늦은 봉,15:10 이후 event, 다른 세션 event는 이 실패에 귀속하지 않는다. 원래 후보가 다음날 수신되는 경우는 여전히 해당한다. 실패에 candidate_event_at, pending_candidate_from, order_signal_at을 기록한다. 남은 범위 안의 후보가 먼저 대기하던 후보 때문에 즉시 정산 가능했다는 뜻은 아니다. 관련 후보 관측이 없어도 기존 UNLIQUIDATED_AT_1510·잔량·동결 평가는 유지한다.
+
 ## 검증과 다음 단계
 
-모든 신규 입력은 synthetic이다. 기존DAY01 175개, 신규 준비/연구27개 및 기존 guarded 최소55개를 실행했다. 실제 데이터 백테스트는 하지 않았다. 사용자 재현 명령은 [새 작업 기록](../plans/ai-tasks/20261112-Codex-DAY01-data-prep.md)을 따른다.
+모든 신규 입력은 synthetic이다. 리뷰 수정 후 기존DAY01 175개, 준비/연구31개 및 guarded 최소55개로261개를 실행했다. Claude 신규 독립43개의 수정본 재검증은 별도다. 실제 데이터 백테스트는 하지 않았다. 사용자 재현 명령은 [작업 기록](../plans/ai-tasks/20261112-Codex-DAY01-data-prep.md)을 따른다.
 
 실제 검증에는 별도 승인된 export의 날짜 범위·고정 universe·원본 수신시각·391/390 경계·정확 turnover 유무 확인이 먼저 필요하다. strict 체결에는 별도 시가 가용가격/용량 증거가 필요하다. 이 문서는 계획·코드·합성 검증을 현재 운영 적용과 구분하며 수익성을 주장하지 않는다.

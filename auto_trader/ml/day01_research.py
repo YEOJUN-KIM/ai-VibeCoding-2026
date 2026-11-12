@@ -142,7 +142,14 @@ def run_input(data: ResearchInput, config: Config, *, universe: Iterable[str],
     report = coverage(data,universe=symbols,expected_session_dates=expected_session_dates)
     selected = [c for c in data.candles if c.symbol in symbols]
     result = replay(selected,config,universe=symbols,open_quotes=open_quotes) if selected else None
-    return dict(run_status='RAN' if result is not None else 'NO_REPLAY_ROWS',coverage=report,result=result,
+    run_status = 'NO_REPLAY_ROWS'
+    if result is not None:
+        assumptions = result['research_assumptions']
+        # RAN means the normal simulation path completed, never that invalid
+        # counterfactual research was successful. Forward nonvalid research states.
+        run_status = ('RAN' if not assumptions['active'] or assumptions['run_status']=='ESTIMATED_ONLY'
+                      else assumptions['run_status'] or 'INCONCLUSIVE_RESEARCH_STATUS')
+    return dict(run_status=run_status,coverage=report,result=result,
                 mode=config.execution,uncertain=True,physical_fill_claim=False,
                 costs=dict(fee_rate=config.fee_rate,sell_tax_rate=config.sell_tax_rate,slippage_rate=config.slippage_rate),
                 unfilled_entry_quantity=result['summary']['unfilled_entry_quantity'] if result else 0,
