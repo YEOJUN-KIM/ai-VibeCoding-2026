@@ -2,9 +2,9 @@
 
 작업 기록: [20261112-Claude-DAY01-review](../plans/ai-tasks/20261112-Claude-DAY01-review.md)
 
-상태: **최종 — 검토 완료(합성 자동 테스트 기준).** 독립 테스트 `tests/test_day01_review.py` 79개 전체 통과(실패·오류·expected failure·unexpected success 0)와 Codex `tests/test_day01.py` 45개 통과를 확인했다. 최종 결과는 아래 **5절**이며, 실제 시장 데이터·PAPER/LIVE·사용자 동작 검증·운영 적용은 하지 않았고 수익성에 대한 어떤 주장도 하지 않는다.
+상태: **최종 — next-open 개선본(Codex `348f342`)까지 검토 완료(합성 자동 테스트 기준).** 최신 결과는 **7절**이다. 5절은 직전 close-proxy 모델(구현 `bad9d21`)의 결과로 `legacy_close` 모드에 그대로 해당한다. 실제 시장 데이터·PAPER/LIVE·사용자 동작 검증·운영 적용은 하지 않았고 수익성에 대한 어떤 주장도 하지 않는다. **실제 시세 피드에 바로 쓸 수 있는 상태가 아니다**: 기본 모드는 명시적 `OpenQuote`(시가 시점 가격·체결가능수량) 증거가 있어야만 체결한다.
 
-> **1~4절은 구현 전(사전) 요구사항·시나리오 설계 기록이며 역사적 문서다.** 당시의 가설(예: 5분봉 직접 입력, next-open 체결, 기존 `RawCandle` 재사용 등)은 최종 계약이 아니다. 최종 API·시간 모델·체결 모델은 `docs/specs/DAY01_BACKTEST.md`(1분봉 입력, 완결 5분 집계, 이후 on-time 1분봉 종가 기반 체결)가 기준이며, 1~4절과 충돌하면 **사양 문서와 5절이 우선**한다.
+> **1~4절은 구현 전(사전) 요구사항·시나리오 설계 기록이며 역사적 문서다.** 당시의 가설(예: 5분봉 직접 입력, 기존 `RawCandle` 재사용, 초기 체결 모델 가정)은 최종 계약이 아니다. 현재 사양 `docs/specs/DAY01_BACKTEST.md`는 1분봉 입력과 완결 5분 집계를 쓰고, 기본 실행 모드는 `next_open`(명시적 `OpenQuote` 시가 증거가 있을 때만 체결)이며 `legacy_close`(이후 on-time 1분봉 종가 기반 체결)는 명시적으로 선택하는 이전 모드다. **5절은 `legacy_close` 시기의 이전 결과이고, 현재 기준은 7절이다.** 1~4절·5절과 충돌하면 **현재 사양 문서와 7절이 우선**한다.
 
 ## 1. 기존 코드 조사 결과 (읽기 전용, 구현 전 기록)
 
@@ -134,3 +134,94 @@
 - 정확 VWAP 모드에서 거래량 0 분봉의 turnover 누락은 그날 신호를 차단한다(보수적).
 - 기존 MA/PAPER/백테스트 실행 회귀는 `settings`/DB import 경로 때문에 실행하지 않았다. `git diff origin/main..HEAD`의 변경 경로는 신규 7개 파일뿐이다(기존 파일 수정 없음).
 - 실제 시장 데이터, PAPER/LIVE, 운영 환경, 사용자 동작 검증은 수행하지 않았다.
+
+## 6. next-open 개선 검증 준비 (2회차 이후 신규 작업, 진행 중)
+
+작업 기록: [20261112-Claude-DAY01-next-open-review](../plans/ai-tasks/20261112-Claude-DAY01-next-open-review.md). 이 절은 구현 인계 전의 **요구사항·회귀 설계**이며 구현 검증 결과가 아니다. 5절은 직전 close-proxy 모델의 최종 결과로 유지한다.
+
+### 6.1 인과성 요구사항 (Codex 계약안에 대한 독립 비평 요지)
+
+아래 A~H는 코디네이터로 전달한 원문이며, 구현 인계 후 항목별로 테스트한다.
+
+```text
+Claude critique of next-open contract (accept core; these are requirements/edge cases, I will test each):
+A (top risk) ENTRY-BAR RANGE: legacy skipped the fill bar's own low/high because fill was at its close. With OPEN fill the fill bar's range happens AFTER entry. Stop/target monitoring must include the bar whose event_at == fill open (observed at its available_at), dual-hit STOP-first; exit then queues for the next later open (strictly > signal_at). Ignoring it = optimistic. Test: entry open 102.051, same bar low<stop => STOP signal at bar available_at, exit at following open.
+B ABSENT QUOTES: default mode yields zero fills on completed-candle-only data: acceptable only if documented in spec/result (summary should count fills by price_source, open_quote_fills, rejected/late quotes) and never invent capacity. If an optional modeled mode is added it must be a separately named execution value (e.g. modeled_candle_open), off by default, result echoes execution_model + list of hindsight used. Causal capacity proxy there: participation x volume of already-known completed on-time bars (trailing min/avg at signal time), NOT the fill bar's volume; fill-bar existence/volume>0 is hindsight and must be named. Late candle => no fill, no backdating.
+C TIE ORDER: quotes at T before candles arriving at T (agreed). Also expiry/freeze timers at T run BEFORE quotes at T (deadline exclusive: quote exactly at signal+2min must not fill; 15:10 quote must not fill; 15:09 quote may, even though its candle is observed 15:10). Define and test both. Marks: a quote is a valid same-day mark (event_at-keyed high-water); on equal event_at the completed candle (later info) should win; older candle must not overwrite newer quote.
+D QUOTE VALIDATION: price finite Decimal>0, executable_volume finite Decimal>=0, aware tz, second==0, session [09:00,15:30), duplicate (symbol,event_at) ValueError, available_at<event_at ValueError, available_at>event_at => reason LATE_OPEN_QUOTE_NOT_EXECUTABLE (not exception, never fills, may still be recorded), out-of-universe ignored without validation (same as candles). available_at==event_at exact equality: state it (no tolerance) and that real feeds therefore rarely qualify.
+E CAPACITY: floor(executable_volume*participation); <1 => NO_EXECUTABLE_CAPACITY, order stays queued until expiry (entry) / 15:10 (exit); partial entry remainder cancelled with reason; exit remainder keeps queue; quantity never exceeds ordered. Quote price used as reference; adverse slippage/fee/tax unchanged; no synthetic min/caps (agree). Fill risk checks use marks before T plus all same-time opens, sells before buys then symbol order; BUY at T reduces cash/exposure seen by later BUY at T.
+F PRESERVE ROUND-2 SEMANTICS in new mode: late candle risk still arrives via candles (monitor_exit late), LATE_RISK_EXIT_PENDING blocks fills/signals, stop supersedes pending target/liquidation, unresolved freeze flags, valuation_marks. Trades need price_source plus signal_at/event_at(open time)/observed_at(=available_at)/execution_at; evidence_close should not be silently None-confused (use separate field or explicit None).
+G LEGACY: Config.execution default next_open, legacy_close preserved with identical outputs (I will pin execution='legacy_close' in my existing helper without weakening assertions and add new default tests). Config validation: unknown execution rejected, open_quotes with legacy mode ignored or rejected (pick one, document).
+H Consistency check: when the completed candle for a minute with a quote arrives and quote price lies outside [low,high], record a mismatch reason (no retroactive change to the fill).
+SAFE REGRESSION (my disposable runner, outside repo; proposal): python -B <scratchpad>/safe_runner.py <worktree> tests.test_ml_backtest tests.test_strategy_engine tests.test_paper_management tests.test_paper_feed ; it blocks socket/psycopg connects (only ephemeral loopback allowed for asyncio), refuses if .env exists, strips POSTGRES_/TOSS_ env, blocks .env* reads and .paper-history, excludes 1 journal-writing test, engine logic unmocked. Verified now: 55 tests OK on this branch (12 backtest+31-1 strategy+paper_management+paper_feed). Not runnable safely: test_paper, test_ml_backtest_selection, data_pipeline etc (setUp needs real DB). Dependency: psycopg must import (paper/risk/backtest import it, no connection); settings reads .env at import (absent here, runner refuses otherwise). Your '124' count is not reproduced by this set; tell me the exact module list if you want that count.
+```
+
+### 6.2 안전한 최소 기존 회귀 (격리 실행기)
+
+기존 `backtest`, `strategy`, `paper`는 import 시 `settings`(→ `.env` 존재 시 읽음)와 `psycopg`(import만, 연결 없음)에 닿는다. `ml/backtest.py`의 `ReplayBroker`는 저장을 비활성화하고 엔진의 `decision_recorder`는 기본 None이므로 `test_ml_backtest`와 `test_strategy_engine`은 DB 연결 없이 동작하도록 설계되어 있다. 정적 확인(import AST·`connect`·`.paper-history` 검색)으로 분류했다.
+
+- 실행 가능(격리 실행기 사용): `tests.test_ml_backtest`, `tests.test_strategy_engine`(1개 제외), `tests.test_paper_management`, `tests.test_paper_feed`.
+- 실행 불가(setUp에서 실제 DB 필요): `test_paper`, `test_ml_backtest_selection`, `test_ml_data_pipeline` 등. `test_strategy_engine.test_journal_survives_reset...`은 `.paper-history`에 쓰므로 제외.
+- 실행기는 저장소 밖 임시 경로에 두고 소스를 변경하지 않는다. 엔진 로직은 스텁하지 않으며 네트워크·DB 연결(ephemeral loopback 제외), `.env*` 읽기, `.paper-history` 접근, 자격증명 환경변수를 차단한다. 한계: 차단은 Python 레벨(`socket`, `psycopg.connect`, `open`)이므로 C 확장의 직접 연결은 막지 못한다(해당 경로는 `psycopg.connect` 차단으로 도달 불가).
+
+실행기는 저장소의 `tests/day01_safe_regression_runner.py`(검토·재현 가능한 검증 유틸리티, `test_*`가 아니어서 탐색 대상 아님, 오케스트레이션 시스템 아님)로 제공한다. 엔진 코드는 변경·스텁하지 않는다.
+
+- `.env`: 존재 확인(`exists`)은 허용(settings가 사용)하되 실행기는 `<root>/.env`가 있으면 **실행 거부**하고, `.env*` 파일을 **여는 시도**는 OS 접근 전에 차단한다(내용 읽기 불가). 내용은 읽지 않는다.
+- 민감 환경변수(POSTGRES_/TOSS_/DART_/OPENAI_/ANTHROPIC_/AWS_/…_TOKEN/_SECRET/_PASSWORD 등): **값을 출력하지 않고 이름만 표시하며 실행을 거부**한다. 하네스가 주입한 토큰 변수는 실행 시 `env -u 이름`으로 해당 프로세스에서만 제외한다(값 미열람).
+- 네트워크: 모든 connect/bind/listen/accept/create_connection/getaddrinfo 차단. 예외는 CPython `socket._fallback_socketpair` 프레임 내부(asyncio 자체 파이프, loopback·임시 포트)뿐이며 서버 시작·외부 요청은 없다. psycopg는 `connect`, `Connection/AsyncConnection.connect`, pq 진입점, pool 클래스를 차단한다.
+- 제외 테스트(정확한 ID와 사유): `tests.test_strategy_engine.StrategyEngineTests.test_journal_survives_reset_and_contains_costs_reason_and_owner` — 보호 경로 `.paper-history`에 저널 파일을 쓰기 때문. 실행 시 출력에 EXCLUDED로 표시된다.
+- 한계: 프로세스 내 monkeypatch이며 OS 샌드박스가 아니다. 위 Python 진입점을 거치지 않는 C 확장의 직접 소켓은 가로채지 못한다.
+
+명령(하네스 토큰 변수는 `env -u`로 제외, 무관한 값은 출력하지 않음):
+
+```text
+python -B tests/day01_safe_regression_runner.py --selftest
+python -B tests/day01_safe_regression_runner.py tests.test_ml_backtest tests.test_strategy_engine tests.test_paper_management tests.test_paper_feed
+```
+
+2026-11-12 준비 단계 실행 결과(HEAD `4bf3f8d` 기준): `--selftest` 11개 항목 모두 PASS(차단 10 + asyncio 루프 허용 1). 회귀 55개 실행, 통과 55, 실패·오류 0, 제외 1. 구분: **기존(MA/PAPER/백테스트) 안전 회귀 55개**는 DAY01 테스트 124개(Codex 45 + Claude 79)와 별개이며, 최종 보고에서 [DAY01 legacy 124] / [DAY01 신규 기본모드] / [기존 안전 회귀 55 + 제외 1]을 각각 구분해 기록한다.
+
+## 7. next-open 개선본 최종 검토 (구현 `348f34237a90a79fc432e2af2616c13d84b1084a`, 로컬 cherry-pick `efceb08`)
+
+작업 기록: [20261112-Claude-DAY01-next-open-review](../plans/ai-tasks/20261112-Claude-DAY01-next-open-review.md). Codex 전체 이력을 병합하지 않고 이 commit만 clean 상태에서 cherry-pick했다(변경 4경로: `auto_trader/ml/day01.py`, `tests/test_day01.py`, `docs/specs/DAY01_BACKTEST.md`, Codex 작업 기록).
+
+### 7.1 소스 독립 검토 요지
+
+- **계약**: `Config.execution` 기본 `next_open`, 명시적 `legacy_close`. `OpenQuote(symbol,event_at,available_at,price,executable_volume)`와 `replay(..., open_quotes=())`. 체결은 `signal_at < open event_at`이고 `available_at == event_at`인 시가 스냅샷에서만, 가격은 스냅샷 가격(합성 캡 없음), 수량은 `floor(executable_volume × participation)`이다. 완성 분봉의 volume/OHLC/종가로 체결가·수량·적격성을 결정하지 않는다.
+- **순서(요구사항 A~H 대응)**: 한 시각의 처리는 만료·14:50·15:10 타이머 → 해당 시각 시가 마크 → 늦게 도착한 시가의 위험 → 정상 시가 체결(매도 우선, 종목 순) → 새 갭 트리거(같은 시가에서 체결 불가) → 완성 분봉 도착 → 분봉 위험·신호 순이다. 소스 확인 결과 체결 위험 검사는 이전 마크와 같은 시각의 모든 시가만 사용한다.
+- **진입 분봉 범위(최대 위험, A)**: 진입 시각(시가 시각) 분봉이 `event_at >= entry_at`로 손절·목표 감시에 포함되어, 시가 체결 이후 그 분봉에서 하락해도 손절 신호가 분봉 도착 시점에 생성되고 동시 터치는 STOP 우선이다. 청산은 신호 시각보다 엄격히 이후의 시가에서만 체결된다.
+- **만료(C)**: 만료는 시가 물리 시각 기준이며 배타적이다(`age >= 한도`). 타이머가 먼저 실행되어 정확히 한도 시각의 시가는 체결되지 않는다. 청산 주문은 만료되지 않고 15:10까지 대기하며 이후 시가의 실제 가격으로 체결된다(보고된 한계).
+- **마크 출처(C)**: 시가 마크는 `event_at` high-water 규칙을 따르고, 같은 `event_at`에서는 완성 분봉이 시가 마크를 대체한다. 더 오래된 분봉은 새 마크를 덮어쓰지 않는다. `valuation_marks`에 출처(`price_source`)가 기록된다.
+- **검증(D)**: `OpenQuote.validate`는 symbol 정규화·tz-aware·분 정렬·세션 범위·유한 Decimal·`available_at >= event_at`을 요구하고 중복 `(symbol,event_at)`은 거부한다. 늦은 시가는 `LATE_OPEN_QUOTE_NOT_EXECUTABLE` 사유로 기록되고 체결되지 않는다. 유니버스 밖 시가는 검증하지 않는다.
+- **출처 표기(B)**: 체결에 `price_source`(`OPEN_QUOTE`/`LEGACY_CLOSE_PROXY`), `decision_at`, `observation_at`, `evidence_close=None`이 있고, 결과에 `execution_evidence`(제출·정시·지연·용량미달 시가 수, `missing_open_quotes`)와 summary의 `open_quote_fills`/`legacy_close_fills`가 있다. 시세 없이 완성 분봉만 주면 체결 0건이며 `NO_EXECUTABLE_OPEN_QUOTE_BEFORE_EXPIRY/DEADLINE`로 명시된다(가짜 용량 없음).
+- **결함**: 이 검토에서 새 결함은 발견하지 못했다. 관찰(결함 아님): (1) 늦은 **시가**의 위험은 같은 시각 체결 전에 소비되어 매수 체결을 막지만(보수적), 늦은 **분봉**의 위험은 체결 후에 소비되어 같은 시각 시가 체결을 막지 않는다(분봉은 시가 이후에 알게 되는 정보라는 계약과 일치, 테스트로 고정). (2) 청산 주문은 만료가 없어 매우 늦은 시가에서도 체결된다. (3) `executable_volume`은 호출자가 제공하는 증거이며 이 모듈은 그 진위나 시가 대비 분봉 시가 불일치 때문에 체결을 바꾸지 않는다(`OPEN_CANDLE_PRICE_MISMATCH`로 표시만).
+
+### 7.2 독립 테스트 (`tests/test_day01_review.py`)
+
+기존 79개는 헬퍼가 `execution='legacy_close'`를 기본으로 지정하도록만 바꿨고 단언은 약화·삭제하지 않았다. 신규 29개는 기본 모드 테스트(`NextOpen` 28 + `NextOpenProperties` 1)이다:
+
+- 기본값·모드 라벨, 시세 없는 분봉만의 무체결, 신호 시각보다 엄격히 이후의 첫 시가와 타임스탬프·출처 필드 정확값, 만료 경계(1분 체결/정확히 2분 만료), 지연 시가 무체결·무소급, 용량의 시가 기원(분봉 거래량 무관)·부분 체결·0/미만 1 용량 대기·participation.
+- 진입 분봉 범위·동시 터치 STOP 우선, 갭 시가가 신호를 만들되 같은 시가에서 체결 불가, 갭 상승 목표, 손절 경계(정확히 stop 가격 / 한 틱 위), 같은 시각 분봉이 체결가를 바꾸지 못함, 마크의 시가·분봉 동률/구 분봉 비덮어쓰기, 시가-분봉 불일치 표시(분봉 선도착·시가 지연 도착 양쪽).
+- 지연 시가 위험의 도착 시점 반영과 매수 체결 차단, 늦은 분봉 위험이 같은 시각 시가 체결을 막지 않는 계약, 같은 시가에서 매도가 먼저 포지션 슬롯을 비움, 같은 시가 매수의 현금 소진(종목 순), 14:50 시가 비체결·부분 청산 잔량 대기·주문 수, 15:10 배타(15:09 체결/15:10 불체결), 청산 주문 비만료, 진입창 11:30 시가 경계, 미청산 동결 시 0이 아닌 시가 마크·출처·요약 플래그, 시가 검증 전반, 입력 셔플 결정성.
+- 속성 테스트: 25개 시드 × 2종목 × 2일의 무작위 경로에서 정시 시가만 체결, 체결 시각 > 신호 시각, 수량 ≤ 시가 용량, 가격 = 시가 ± 슬리피지, 현금 ≥ 0, 종목·일 1회 진입, 진입창·15:10 경계, 출처 카운터 일치, 셔플 동일 결과(비공허: 진입·청산 각 5회 이상 요구).
+
+변이 검증(구현 사본을 임시 폴더에서 변형, 저장소 구현 미수정): next-open 로직 변이 11개 중 6개를 처음부터 탐지했고 3개(손절 경계, 시가-분봉 불일치 표시, 매도 우선 정렬)는 테스트를 추가해 탐지했다. 미탐지 2개는 동치 변이이다(15:10 이후 시가 필터 제거는 대기 주문 삭제·미청산 보호와 중복, 진입 시가 자체의 손절 감시 생략은 진입가 기준 손절선 구조상 발동 불가). 이전 단계 변이 검증 결과(5절)는 그대로 유효하다.
+
+### 7.3 실행 결과 (대상 HEAD는 작업 기록·최종 보고 참조)
+
+| 구분 | 명령 | 결과 |
+|---|---|---|
+| DAY01 legacy 124 (Codex 45 + Claude 79) | 아래 두 명령의 legacy_close 부분 | 통과 (아래 합계에 포함) |
+| Codex (legacy 45 + 신규 22) | `python -B -m unittest discover -s tests -p test_day01.py` | **67개 실행, 67 통과** |
+| Claude 독립 (legacy 고정 79 + 신규 기본 모드 29) | `python -B -m unittest tests.test_day01_review` | **108개 실행, 108 통과**, 실패·오류·expected failure 0, 약 18초 |
+| 기존 MA/PAPER/백테스트 안전 회귀 (DAY01과 별개) | `env -u <하네스 토큰 변수> python -B tests/day01_safe_regression_runner.py tests.test_ml_backtest tests.test_strategy_engine tests.test_paper_management tests.test_paper_feed` | **55개 실행, 55 통과**, 제외 1(`tests.test_strategy_engine.StrategyEngineTests.test_journal_survives_reset_and_contains_costs_reason_and_owner`: `.paper-history` 파일 쓰기) |
+| 실행기 자체 점검 | `... day01_safe_regression_runner.py --selftest` | 11/11 PASS |
+
+중복 집계 주의: Codex 67과 Claude 108은 서로 다른 파일의 테스트이며 일부 시나리오가 의미상 겹칠 수 있으나 코드·파일은 중복이 없다. DAY01 합성 테스트 합계 175(= 67 + 108)이며, 55개 기존 회귀와는 겹치지 않는다. 124 = legacy 45 + legacy 79는 위 175 안의 부분집합이다.
+
+### 7.4 미검증·한계
+
+- 실제 시장 데이터, 실제 시가 스냅샷 피드, 호가·체결 우선순위, 휴장일, PAPER/LIVE 연동, 운영 환경, 사용자 동작 검증은 하지 않았다. 시가 증거가 없으면 기본 모드는 체결하지 않는다.
+- DB가 필요한 기존 테스트(`test_paper`, `test_ml_backtest_selection`, `test_ml_data_pipeline` 등)는 실행하지 않았다.
+- 격리 실행기는 Python 수준 차단이며 OS 샌드박스가 아니다.
+- 다음날 갭은 모델링하지 않는다(미청산은 동결·표시). 수익성에 대한 주장 없음.
