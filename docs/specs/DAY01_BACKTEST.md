@@ -1,6 +1,6 @@
 # DAY-01 합성 백테스트 사양
 
-구현 모듈: `auto_trader/ml/day01.py`. 기본 실행 모드는 별도 시가 관측 증거를 사용하는 `next_open`이다. 이전 종가 합성 모드는 명시적 `legacy_close`로 유지한다. 구현 및 합성 자동 테스트 검증 단계이며 사용자 동작 검증·운영 적용은 하지 않았다. 수익성 검증이나 실거래 가능한 전략이라는 뜻이 아니다. DB, API, PAPER 엔진, 주문 전송, 파일 입출력, 환경 설정 로딩은 연결하지 않는다.
+구현 모듈: `auto_trader/ml/day01.py`. 기본 실행 모드는 별도 시가 관측 증거를 사용하는 `next_open`이다. 이전 종가 합성 모드는 명시적 `legacy_close`로 유지한다. 별도 `research_estimated_open`은 과거 실제 체결이 아닌 **관측 시점 정산의 불확실한 연구 결과**다. 구현 및 합성 자동 테스트 검증 단계이며 사용자 동작 검증·운영 적용은 하지 않았다. 수익성 검증이나 실거래 가능한 전략이라는 뜻이 아니다. DB, API, PAPER 엔진, 주문 전송, 파일 입출력, 환경 설정 로딩은 연결하지 않는다.
 
 ## API와 재현
 
@@ -47,7 +47,7 @@ assert result['summary']['status'] == 'FLAT'
 
 | 필드 | 기본값 | 의미 |
 |---|---:|---|
-| execution | next_open | `next_open` 또는 명시적 `legacy_close` |
+| execution | next_open | `next_open`, `legacy_close`, `research_estimated_open` |
 | initial_cash | 1000000 | 초기 KRW 현금 |
 | order_quantity | 10 | 매수 주문 수량; 신호 시 고정 |
 | volume_multiplier | 1.2 | 현재 완성 5분 거래량 / 직전 완성 5분 거래량 하한 |
@@ -62,11 +62,12 @@ assert result['summary']['status'] == 'FLAT'
 | daily_loss_limit | 20000 | 당일 시작 순청산자산 대비 손실 KRW; 손실이 한도와 같아도 진입 차단 |
 | daily_order_limit | 10 | 당일 승인된 신규 ENTRY 주문 수 한도; 아래 청산 정책 참조 |
 | volume_participation | 1 | 후속 실행 분봉 거래량 중 사용할 최대 비율. 정수 내림 수량 |
-| max_signal_to_fill_minutes | 2 | 신호부터 실제 관측 체결 시각까지의 최대 ENTRY 대기 분. 유한 양수 Decimal, 최대 130분; 경계는 만료 |
+| max_signal_to_fill_minutes | 2 | strict/legacy 관측 체결 나이, research 추정 open 나이. 유한 양수 Decimal, 최대130분, 경계 만료. research 관측 grace는 별도 |
+| research_max_observation_lag_minutes | 2 | 연구 모드에서 분 끝 이후 관측 허용 지연. 유한 Decimal 0~30분, 원래 available_at 보존 |
 
 정수 설정은 bool·0·음수를 거절한다. Decimal 설정은 음수·NaN·Infinity·잘못된 타입을 거절한다. stop/slippage <1, participation <=1, cash ratio <=100, fee+tax <=1, RR 하한을 강제한다. 주문 제한 해제 스위치는 없다.
 
-ENTRY 수명은 `execution_at - signal_at < max_signal_to_fill_minutes`다. 09:20 신호의 기본 만료는 09:22이며 09:21 체결은 가능하고 09:22 체결은 불가능하다. 데이터가 없어도 명시적 만료 타이머로 `ENTRY_SIGNAL_TOO_OLD`를 남기고 주문을 제거한다. 11:30 진입창 종료가 더 빠르면 `ENTRY_EXPIRED`다. 승인 주문수는 만료되어도 차감하지 않는다. 설정값은 timedelta의 마이크로초 정밀도로 해석하며 너무 짧아 실행 봉을 기다릴 수 없는 설정은 체결되지 않는다.
+strict/legacy ENTRY 수명은 `execution_at - signal_at < max_signal_to_fill_minutes`다. 09:20 신호의 기본 만료는 09:22이며 09:21 체결은 가능하고 09:22 체결은 불가능하다. 데이터가 없어도 명시적 만료 타이머로 `ENTRY_SIGNAL_TOO_OLD`를 남기고 주문을 제거한다. 11:30 진입창 종료가 더 빠르면 `ENTRY_EXPIRED`다. 승인 주문수는 만료되어도 차감하지 않는다. 설정값은 timedelta의 마이크로초 정밀도로 해석하며 너무 짧아 실행 봉을 기다릴 수 없는 설정은 체결되지 않는다. 연구 모드는 아래의 추정 open 나이와 관측 grace 계약을 따로 적용한다.
 
 ## 시각과 전략 판단
 
@@ -82,9 +83,21 @@ ENTRY 수명은 `execution_at - signal_at < max_signal_to_fill_minutes`다. 09:2
 
 ## 실행·청산 모델
 
+### 연구 모드와 입력 준비
+
+`auto_trader/ml/day01_research.py`의 순수 `adapt_rows`, `coverage`, `run_input`은 caller 매핑·고정 universe·명시적 expected_session_dates만 사용한다. 실제 저장 범위는 UNKNOWN이다. 391봉 계약의15:30은 replay390분과 분리하여 원본·사유·provenance를 반환한다. 수신시각·거래대금을 만들거나 정확 VWAP를 조용히 근사하지 않는다. 현재 데이터 증거·한계·전체 필드와 시간/예약 정책은 [DAY01 데이터 준비](../technical/DAY01_DATA_READINESS.md)에 정의한다.
+
+`execution='research_estimated_open'`은 OpenQuote를 받거나 생성하지 않는다. 신호보다 이후 분봉의 open을 **관측한 가격 결과**로 사용하고 volume은0 거래량의 hindsight veto에만 사용한다. 수량은 signal order_quantity 가정으로 고정하며 participation×대상 volume을 실행 가능 수량으로 주장하지 않는다. mode/uncertain/physical_fill_claim=False, price_source=ESTIMATED_CANDLE_OPEN, hindsight_fields를 명시한다.
+
+이 모드의 `estimated_execution_at`은 반사실적 시가 시각이며 `execution_at/settlement_at`은 실제 관측 정산 시각이다. observation_at은 원래 available_at이다. 이전 후보가 미해결이면 뒤 후보를 먼저 선택하지 않아 settlement가 observation보다 늦을 수도 있다. 과거 곡선을 고치거나 해당 시가 시점에 실제 PnL가 생긴 것으로 기록하지 않는다. 허용 지연 안에서 새로 알려진5분 입력만 실제 시각에 결정하고 historical backfill은 과거 신호를 만들지 않는다.
+
+BUY 신호의 현금·노출·slot을 만료+관측 grace 내내 예약한다. 대상 open 이후에 알려진 급락/종가/손실로 손실 거래를 선택적으로 거절하지 않는다. 엄격히 open 이전의 알려진 위험 block만 증거 시각과 함께 반영한다. 가격 갭으로 신호 시 자원이 부족하면 반사실적 거래와 손실을 기록한 채 run_status=INVALID_RESOURCE_OVERRUN으로 무효 표시하고, 음수 현금 대신 **실제 차입이 아닌** non_funded_liability를 equity에서 차감한다. 위험 한도 준수나 실제 실행 가능성을 주장하지 않으며 추가 진입을 차단한다.
+
+정산 뒤 이미 수신된 진입 분봉/이후 범위를 모두 따라잡고 지금 STOP/target을 결정한다. dual-hit은STOP 우선이고 후속 추정 open 결과를 기다리며 소급 청산하지 않는다. 15:10 관측 마감이 우선이므로15:09 추정 open이15:10에 가용하면 정산하지 않고 UNRESOLVED_OBSERVED_AFTER_1510와 잔량/평가/익일동결을 남긴다. 비용 수식은 다른 모드와 같으며 실제 데이터 백테스트는 아직 수행하지 않았다.
+
 ### 기본 next_open: 시가 관측이 실제로 가용한 순간만 실행
 
-완성 `Candle`만으로는 1분 전 시가에서의 주문 접수 가능성이나 당시 용량을 알 수 없다. 따라서 별도 `OpenQuote`가 없으면 기본 모드는 체결하지 않는다. `execution_evidence.missing_open_quotes=True`, source/capacity source/counters 및 대기 신호 만료의 `NO_EXECUTABLE_OPEN_QUOTE_BEFORE_EXPIRY`로 입력 한계를 보고한다. 실제 시장 이력 어댑터는 없으며 **현재 기본 모드는 합성 시가 관측 스트림이 있어야 재현 가능하고 실제시장 데이터에 바로 연결 가능한 상태가 아니다.**
+완성 `Candle`만으로는 1분 전 시가에서의 주문 접수 가능성이나 당시 용량을 알 수 없다. 따라서 별도 `OpenQuote`가 없으면 기본 모드는 체결하지 않는다. `execution_evidence.missing_open_quotes=True`, source/capacity source/counters 및 대기 신호 만료의 `NO_EXECUTABLE_OPEN_QUOTE_BEFORE_EXPIRY`로 입력 한계를 보고한다. 실제 시장 시가 증거의 수집·연결 어댑터는 없으며 **현재 기본 모드는 합성 시가 관측 스트림이 있어야 재현 가능하고 실제시장 데이터에 바로 연결 가능한 상태가 아니다.**
 
 `OpenQuote`는 정규 세션의 분 시작 `event_at`과 그 가격·가용 실행 용량을 처음 안 `available_at`을 갖는다. 금액은 유한 양수 Decimal, executable_volume은 유한 0 이상 Decimal, 시각은 aware이며 event는 분 정렬/KST `[09:00,15:30)`이어야 한다. `available_at < event_at`은 거절하고, 중복 symbol/event는 동일값/충돌값 모두 거절한다. universe 밖 관측은 검증 전에 제외한다. `available_at > event_at`인 지연 시가는 도착 시 이력·위험에만 반영하고 `LATE_OPEN_QUOTE_NOT_EXECUTABLE`로 기록한다. 과거 시가에 소급 체결하지 않는다. legacy 모드에 선택된 시가 관측을 주면 혼합 모델 오류로 거절한다.
 
@@ -138,11 +151,14 @@ summary의 `overnight_gap_exposure_unmodeled=True`와 `frozen_valuation_symbols`
 | positions | symbol별 quantity, entry_price, cost_basis, day, entry_at, stop, target, unresolved |
 | valuation_marks | 보유 symbol별 price, event_at(최신 평가 사건), observed_at(해당 가격 실제 도착), frozen. next_open은 price_source 추가 |
 | signals | symbol, side, at, reason, quantity, trigger. 제출 시각과 당시 수량의 복사본 |
-| trades | symbol, side, quantity, signal_at, decision_at, event_at, execution_at, observed_at, observation_at, price_source, evidence_close, reference_price, reason, realized_profit, price, amount, fee, tax, slippage, cash_delta |
+| trades | 기존 시각/가격/비용 필드 + mode, uncertain, physical_fill_claim, uncertainty_flags, unfilled_quantity, fee_rate/sell_tax_rate/slippage_rate. 연구 모드는 estimated_execution_at, settlement_at/lag, hindsight_fields, resource_breaches 추가 |
 | reasons | at, symbol, reason 및 해당 항목의 phase·quantity·VWAP 등 상세 |
 | failures | 15:10 at, symbol, `UNLIQUIDATED_AT_1510`, quantity |
 | equity_curve | at, cash, net_liquidation_equity, daily_net_change, loss_limit_exceeded, unresolved |
 | daily_results | day, closing_equity, net_change, entry_orders, total_orders, unresolved_quantities |
+| research_assumptions | active/uncertain/run_status, physical_fill_claim, non_funded_liability, resource_breaches, risk_limit_adherence, capacity, costs. 연구 결과의 한도 준수·유동성 주장이 아님 |
+
+summary에는 estimated_open_fills, unfilled_entry_quantity, unfilled_exit_quantity도 있다. 연구 equity_curve에는 reserved_cash/reserved_position_slots/research_liability/research_run_invalid가 추가된다. 전체 결과의 mode/uncertain과 각 거래의 비용·불확실성을 함께 해석한다. NO_ROWS/MISSING 커버리지는 제공 행에 대한 진단이고 실제 저장 범위 UNKNOWN과 구분한다.
 
 주요 사유는 코드 문자열로 고정한다: `INCOMPLETE_OPENING_RANGE`, `NO_FRESH_FIVE_MINUTE_BAR`, `INCOMPLETE_SESSION_VWAP`, `MISSING_EXACT_TURNOVER`, `NO_RANGE_BREAKOUT`, `INSUFFICIENT_VOLUME_INCREASE`, `NO_RISING_VWAP`, `LATE_OBSERVATION_NOT_EXECUTABLE`, `ENTRY_EXPIRED`, `NO_EXECUTABLE_CAPACITY`, `ENTRY_REMAINDER_CANCELLED`, `UNFILLED_ORDER_AT_1510`, `UNRESOLVED_EXPOSURE`, `DAILY_LOSS_LIMIT`, `POSITION_LIMIT`, `ORDER_AMOUNT_LIMIT`, `SYMBOL_EXPOSURE_LIMIT`, `TOTAL_EXPOSURE_LIMIT`, `INSUFFICIENT_CASH`, `MIN_CASH_RATIO`, `DAILY_ENTRY_ORDER_LIMIT` 등이다.
 
@@ -152,8 +168,8 @@ summary의 `overnight_gap_exposure_unmodeled=True`와 `frozen_valuation_symbols`
 
 기존 `backtest.py`는 `RawCandle`, PAPER broker, MA engine을 사용하며 MA 설정·주문 엔진과 결합되어 있다. `data_pipeline.RawCandle`의 completed minute/availability 계약을 참조했지만 실제 거래대금이 없어 신규 Candle에 optional turnover를 둔다. 기존 API/DB 스키마 변경은 없다.
 
-`backtest`, `data_pipeline`, `paper`, `risk`는 database/settings로 이어져 settings import가 `.env`를 읽을 수 있다. 기본 실행 경로는 이를 import하지 않는다. 기존 백테스트 회귀 12개는 추가 승인된 안전 범위에서 Claude 문서 commit `4bf3f8d` 6.2절의 격리 실행기로만 실행해 통과했다. 실행기는 저장소에 파일을 만들지 않고 stdin에서 실행했으며 설정 파일 존재 시 거부, 자격증명 환경변수 제거, 설정·운영 기록 파일 접근 및 DB/socket 연결 차단을 적용한다. 엔진 계산은 스텁하지 않았다. 정확한 재현 명령과 검증 범위는 새 작업 기록에 남겼다. 데이터 파이프라인 테스트는 setUp에서 DB 스키마를 생성하므로 여전히 실행하지 않는다. 기존 파일은 모두 읽기 전용으로 유지했다. 순수 RiskPolicy만 재사용해 금융 한도 계산의 단위를 유지했다.
+`backtest`, `data_pipeline`, `paper`, `risk`는 database/settings로 이어져 settings import가 `.env`를 읽을 수 있다. 기본 실행 경로는 이를 import하지 않는다. 이전 단계의 guarded backtest12개에 이어 이번에는 검토된 기존 `tests/day01_safe_regression_runner.py`로 허용된55개를 실행했다. guard는 민감 환경·설정 파일 존재 시 거부하고 설정/운영기록 접근·DB/socket 연결을 차단하며 엔진 계산을 스텁하지 않는다. 테스트 전용 자식 환경의 Orca runtime token 키 제거와 최초 guard 거부/재실행 결과는 새 기록에 명시했다. 데이터 파이프라인 테스트는 setUp에서 DB 스키마를 생성하므로 여전히 실행하지 않는다. 기존 파일은 모두 읽기 전용으로 유지했다. 순수 RiskPolicy만 재사용해 금융 한도 계산의 단위를 유지했다.
 
-검증 명령: `python -B -m unittest discover -s tests -p test_day01.py -v`는 명시적 legacy45개와 기본 next_open22개를 실행한다. 원본 독립79개는 assertions를 수정하지 않고 `python -B -c "import sys; sys.path.insert(0,'tests'); from test_day01 import run_legacy_review; run_legacy_review()"`로 실행한다. 커밋된 `run_legacy_review`가 리뷰 모듈의 Config 생성자만 명시적 legacy subclass로 바꾸고 실행 후 복원한다. expectedFailure/발견 범위/생산 기본값은 바꾸지 않는다. 이전124개는 legacy 회귀 결과이며 새 기본 모드의 검증 결과와 구분한다. 합성 fixture는 같은 파일의 `minute`, `scenario`, `quote`이고 Claude 소유 리뷰 파일은 수정하지 않았다.
+검증 명령: `python -B -m unittest discover -s tests -p test_day01.py -v`는 기존67개, 같은 명령의 `-p test_day01_review.py`는 Claude가 모드를 명시한 독립108개로 기준175개다. 새 `-p test_day01_research.py`는 준비/연구27개다. guarded 기존55개까지 총257개 통과했으며 journal 쓰기1개는 명시적으로 제외했다. 기존 legacy124개와 strict51개는 수치 동작을 유지하고 연구 결과를 별도로 검증한다. Claude 소유 리뷰 파일은 편집하지 않았다. 안전 실행 및 남은 검증은 새 작업 기록에 명시한다.
 
 장점은 환경 접근 없는 결정성, 인과적 시각, 비용·위험의 명시성이다. 단점은 엄격한 온타임 조건, 보수적인 청산 proxy, 단순 유동성 모형, 미청산 평가가격 동결이다. 학습 개념은 정보 이용 가능 시각과 사건 시각의 분리, 전략 판단과 실행 증거의 분리다. 사용자는 운영 환경 없이 위 단일 합성 명령과 예제로 재현하고, GPT/Claude는 늦은 데이터·미청산 동결·위험 감소 주문 정책과 보수적 가격 proxy를 검토해야 한다. 실제 시장 데이터, PAPER 연결, 운영 DB, LIVE, 배포는 별도 설계·환경 분리·사용자 승인이 필요하다.

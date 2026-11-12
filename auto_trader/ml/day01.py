@@ -37,13 +37,13 @@ class Candle:
     volume: D
     turnover: D | None = None
 
-    def validate(self):
+    def validate(self, *, require_regular_session=True):
         if not isinstance(self.symbol, str) or not self.symbol or self.symbol != self.symbol.strip().upper():
             raise ValueError('symbol must be nonempty normalized text')
         event, available = _aware(self.event_at), _aware(self.available_at)
         if event.second or event.microsecond or available < event + MINUTE:
             raise ValueError('aligned completed one-minute candle required')
-        if not time(9) <= event.time() < time(15, 30):
+        if require_regular_session and not time(9) <= event.time() < time(15, 30):
             raise ValueError('event outside KST regular session')
         for name in ('open_price', 'high_price', 'low_price', 'close_price'):
             _number(getattr(self, name), name, positive=True)
@@ -99,10 +99,14 @@ class Config:
     daily_order_limit: int = 10  # accepted ENTRY orders; risk exits are always allowed
     volume_participation: D = D('1')  # per executable minute, integer capacity
     max_signal_to_fill_minutes: D = D('2')  # exclusive ENTRY age limit
+    research_max_observation_lag_minutes: D = D('2')
 
     def validate(self):
-        if self.execution not in {'next_open', 'legacy_close'}:
-            raise ValueError('execution must be next_open or legacy_close')
+        if self.execution not in {'next_open', 'legacy_close', 'research_estimated_open'}:
+            raise ValueError('unknown execution mode')
+        _number(self.research_max_observation_lag_minutes, 'research_max_observation_lag_minutes')
+        if self.research_max_observation_lag_minutes > 30:
+            raise ValueError('research observation lag exceeds 30 minutes')
         for name in ('initial_cash', 'volume_multiplier', 'stop_rate', 'target_rate',
                      'min_reward_risk', 'max_order_amount', 'max_symbol_amount',
                      'max_total_investment', 'daily_loss_limit', 'volume_participation',
@@ -205,12 +209,19 @@ def evaluate_entry(history: Iterable[Candle], at: datetime, config: Config) -> D
     if not all(opening + i * MINUTE in known for i in range(15)):
         return no('INCOMPLETE_OPENING_RANGE')
     five = aggregate_five_minutes(rows, at)
-    if not five or five[-1].end_at != at or five[-1].available_at != at:
+    research = config.execution == 'research_estimated_open'
+    fresh = bool(five) and (five[-1].end_at == at and five[-1].available_at == at)
+    if research and five:
+        used = [r for r in rows if r.event_at < five[-1].end_at]
+        fresh = (at >= five[-1].end_at and
+                 at-five[-1].end_at <= timedelta(minutes=float(config.research_max_observation_lag_minutes))
+                 and max(r.available_at for r in used) == at)
+    if not fresh:
         return no('NO_FRESH_FIVE_MINUTE_BAR')
     current = five[-1]
     if len(five) < 2 or five[-2].end_at != current.event_at:
         return no('INCOMPLETE_PREVIOUS_FIVE_MINUTE_BAR')
-    elapsed = int((at - opening) / MINUTE)
+    elapsed = int((current.end_at - opening) / MINUTE)
     if not all(opening + i * MINUTE in known for i in range(elapsed)):
         return no('INCOMPLETE_SESSION_VWAP')
     ordered = [known[opening + i * MINUTE] for i in range(elapsed)]
@@ -264,8 +275,9 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
             raise ValueError('duplicate symbol/open event (including conflicts)')
         quote_keys.add(key)
         quotes.append(quote)
-    if config.execution == 'legacy_close' and quotes:
-        raise ValueError('legacy_close does not accept selected open_quotes')
+    research = config.execution == 'research_estimated_open'
+    if config.execution != 'next_open' and quotes:
+        raise ValueError('only next_open accepts selected open_quotes')
     quotes_at, quote_history = defaultdict(list), {}
     batches = defaultdict(list)
     days = sorted({r.event_at.date() for r in data} | {q.event_at.date() for q in quotes})
@@ -275,14 +287,23 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
         quotes_at[quote.available_at].append(quote)
         batches[quote.available_at]
     max_entry_age = timedelta(minutes=float(config.max_signal_to_fill_minutes))
+    research_lag = timedelta(minutes=float(config.research_max_observation_lag_minutes))
+    observation_grace = MINUTE + research_lag if research else timedelta(0)
+    if research:
+        for row in data:
+            at = row.available_at
+            batches[min(at+max_entry_age,datetime.combine(at.date(),time(11,30),KST))+observation_grace]
     for day in days:
         for hour, minute in ((9, 0), (14, 50), (15, 10)):
             batches[datetime.combine(day, time(hour, minute), KST)]
         # Expiry advances even if no subsequent quote arrives; deadline is exclusive.
         for offset in range(20, 150, 5):
             signal_at = datetime.combine(day, time(9), KST) + offset * MINUTE
-            deadline = min(signal_at + max_entry_age, datetime.combine(day, time(11, 30), KST))
+            deadline = min(signal_at + max_entry_age, datetime.combine(day, time(11, 30), KST)) + observation_grace
             batches[deadline]
+        if research:
+            for offset in range(390):
+                batches[datetime.combine(day, time(9), KST) + (offset+1)*MINUTE + research_lag]
     cash = config.initial_cash
     positions, pending, history, marks = {}, {}, defaultdict(dict), {}
     mark_events, mark_received, late_risk_symbols = {}, {}, set()
@@ -291,10 +312,17 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
     entry_counts, order_counts = defaultdict(int), defaultdict(int)
     entered, finalized = set(), set()
     baselines = {}
+    research_seen, research_unresolved = {}, {}
+    research_liability, research_invalid = D(0), False
+    research_breaches = []
+    research_information = []
 
     def equity():
-        return cash + sum((execution_costs(marks[s], p['quantity'], 'SELL', config)['cash_delta']
-                           for s, p in positions.items()), D(0))
+        return cash - research_liability + sum((execution_costs(marks[s], p['quantity'], 'SELL', config)['cash_delta']
+                                               for s, p in positions.items()), D(0))
+
+    def reservations():
+        return [o['reservation'] for o in pending.values() if o['side']=='BUY' and 'reservation' in o]
 
     def reason(at, symbol, code, **details):
         reasons.append(dict(at=at, symbol=symbol, reason=code, **details))
@@ -316,22 +344,26 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
     def risk(at, symbol, price, quantity):
         cost = execution_costs(price, quantity, 'BUY', config)
         asset = equity()
+        reserved = reservations() if research else []
+        if research and research_invalid:
+            return 'RESEARCH_RUN_INVALID'
         if any(p['unresolved'] for p in positions.values()):
             return 'UNRESOLVED_EXPOSURE'
         if asset - baselines[at.date()] <= -config.daily_loss_limit:
             return 'DAILY_LOSS_LIMIT'
         if late_risk_symbols:
             return 'LATE_RISK_EXIT_PENDING'
-        if symbol in positions or len(positions) >= config.max_positions:
+        if symbol in positions or len(positions) + len(reserved) >= config.max_positions:
             return 'POSITION_LIMIT'
         if not RiskPolicy.order_amount_allowed(config, cost['amount'], cost['fee']):
             return 'ORDER_AMOUNT_LIMIT'
         if not RiskPolicy.symbol_amount_allowed(config, D(0), cost['amount']):
             return 'SYMBOL_EXPOSURE_LIMIT'
         invested = sum((marks[s] * p['quantity'] for s, p in positions.items()), D(0))
+        invested += sum((r['amount'] for r in reserved), D(0))
         if not RiskPolicy.total_investment_allowed(config, invested, cost['amount']):
             return 'TOTAL_EXPOSURE_LIMIT'
-        remaining = cash + cost['cash_delta']
+        remaining = cash - sum((r['cash'] for r in reserved), D(0)) + cost['cash_delta']
         if remaining < 0:
             return 'INSUFFICIENT_CASH'
         # Costs of the proposed immediate net liquidation are included in denominator.
@@ -343,7 +375,7 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
     def monitor_exit(row, at, *, late=False):
         p = positions.get(row.symbol)
         if (p is None or p['unresolved'] or p['day'] != at.date()
-                or row.event_at.date() != at.date() or row.event_at < p['entry_at'] or row.volume <= 0):
+                or row.event_at.date() != at.date() or row.event_at < p.get('estimated_entry_at',p['entry_at']) or row.volume <= 0):
             return
         stop, target = row.low_price <= p['stop'], row.high_price >= p['target']
         if stop or target:
@@ -360,21 +392,21 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
         if at.date() in finalized or positions.get(symbol, {}).get('unresolved') or event_at.date() != at.date():
             return
         if (symbol not in mark_events or event_at > mark_events[symbol]
-                or (event_at == mark_events[symbol] and kind == 'COMPLETED_CANDLE' and mark_types[symbol] == 'OPEN_QUOTE')):
+                or (event_at == mark_events[symbol] and kind == 'COMPLETED_CANDLE' and mark_types[symbol] in {'OPEN_QUOTE','ESTIMATED_CANDLE_OPEN'})):
             marks[symbol], mark_events[symbol], mark_received[symbol] = price, event_at, at
             mark_types[symbol] = kind
         else:
             reason(at, symbol, 'OLDER_OBSERVATION_MARK_PRESERVED', event_at=event_at,
                    mark_event_at=mark_events[symbol])
 
-    def fill(symbol, at, event_at, reference, capacity, evidence_close, price_source, bar_open=None):
-        nonlocal cash
+    def fill(symbol, at, event_at, reference, capacity, evidence_close, price_source, bar_open=None, outcome=None):
+        nonlocal cash, research_liability, research_invalid
         order = pending[symbol]
-        if order['side'] == 'BUY' and not time(9, 20) <= at.time() < time(11, 30):
+        if order['side'] == 'BUY' and not time(9, 20) <= (event_at if research else at).time() < time(11, 30):
             reason(at, symbol, 'ENTRY_EXPIRED')
             pending.pop(symbol)
             return False
-        quantity = min(order['quantity'], int(capacity * config.volume_participation))
+        quantity = order['quantity'] if research else min(order['quantity'], int(capacity * config.volume_participation))
         if quantity <= 0:
             reason(at, symbol, 'NO_EXECUTABLE_CAPACITY')
             return False
@@ -386,20 +418,50 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
                     reference = min(reference, bar_open, order['trigger'])
                 elif order['reason'] == 'TARGET':
                     reference = min(reference, order['trigger'])
-        else:
+        elif not research:
             breach = risk(at, symbol, reference, quantity)
             if breach:
                 reason(at, symbol, breach, phase='FILL')
                 pending.pop(symbol)
                 return False
         cost = execution_costs(reference, quantity, order['side'], config)
+        breaches = []
+        if research and order['side']=='BUY':
+            snapshot = order['reservation']
+            if -cost['cash_delta'] > snapshot['cash_available']:
+                breaches.append('SIGNAL_CASH_OVERRUN')
+            if not RiskPolicy.order_amount_allowed(config,cost['amount'],cost['fee']):
+                breaches.append('ORDER_AMOUNT_OVERRUN')
+            if not RiskPolicy.symbol_amount_allowed(config,D(0),cost['amount']):
+                breaches.append('SYMBOL_EXPOSURE_OVERRUN')
+            if not RiskPolicy.total_investment_allowed(config,snapshot['invested'],cost['amount']):
+                breaches.append('TOTAL_EXPOSURE_OVERRUN')
+            post_asset = snapshot['equity']+cost['cash_delta']+execution_costs(reference,quantity,'SELL',config)['cash_delta']
+            if RiskPolicy.cash_ratio(snapshot['cash_available']+cost['cash_delta'],post_asset)<config.min_cash_ratio:
+                breaches.append('MIN_CASH_RATIO_OVERRUN')
+            if -cost['cash_delta'] > cash - sum((r['cash'] for r in reservations() if r is not snapshot),D(0)):
+                breaches.append('RESERVATION_RESOURCE_OVERRUN')
+            if breaches:
+                research_invalid = True
+                research_breaches.append(dict(at=at,symbol=symbol,reasons=list(breaches)))
+                reason(at,symbol,'RESEARCH_RESOURCE_OVERRUN',breaches=list(breaches))
         cash += cost['cash_delta']
+        if research:
+            if cash < 0:
+                research_liability -= cash
+                cash = D(0)
+            elif order['side']=='SELL' and research_liability:
+                repayment = min(cash,research_liability)
+                cash -= repayment
+                research_liability -= repayment
         realized = None
         buying = order['side'] == 'BUY'
         if buying:
             positions[symbol] = dict(quantity=quantity, entry_price=cost['price'],
                 cost_basis=-cost['cash_delta'], day=at.date(), entry_at=at,
                 stop=cost['price'] * (1-config.stop_rate), target=cost['price'] * (1+config.target_rate), unresolved=False)
+            if research:
+                positions[symbol]['estimated_entry_at'] = event_at
             pending.pop(symbol)
             if quantity < order['quantity']:
                 reason(at, symbol, 'ENTRY_REMAINDER_CANCELLED', quantity=order['quantity']-quantity)
@@ -418,8 +480,23 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
             signal_at=order['at'], decision_at=order['at'], event_at=event_at,
             execution_at=at, observed_at=at, observation_at=at, price_source=price_source,
             evidence_close=evidence_close,
-            reference_price=reference, reason=order['reason'], realized_profit=realized, **cost))
+            reference_price=reference, reason=order['reason'], realized_profit=realized,
+            mode=config.execution,uncertain=True,physical_fill_claim=False,
+            uncertainty_flags=['SIMULATION_NOT_ACTUAL_ORDER'],
+            unfilled_quantity=order['quantity']-quantity if buying else order['quantity'],
+            fee_rate=config.fee_rate,sell_tax_rate=config.sell_tax_rate,slippage_rate=config.slippage_rate,**cost))
+        if research:
+            trades[-1].update(mode=config.execution, estimated_execution_at=event_at,
+                observation_at=outcome.available_at, observed_at=outcome.available_at,settlement_at=at,
+                settlement_lag=at-event_at,physical_fill_claim=False,uncertain=True,
+                uncertainty_flags=['HISTORICAL_OPEN_OUTCOME','NO_EXECUTABLE_DEPTH','CONFIGURED_QUANTITY_ASSUMPTION','OBSERVATION_TIME_LEDGER'],
+                hindsight_fields=['open_price','bar_exists','positive_volume_veto','availability_lag'],
+                resource_breaches=breaches, fee_rate=config.fee_rate,sell_tax_rate=config.sell_tax_rate,
+                slippage_rate=config.slippage_rate)
         return buying
+
+    def next_minute(at):
+        return at.replace(second=0,microsecond=0) + MINUTE
 
     def observe_open_risk(quote, at, late=False):
         p = positions.get(quote.symbol)
@@ -440,12 +517,12 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
         for symbol, order in list(pending.items()):
             if order['side'] != 'BUY':
                 continue
-            if at - order['at'] >= max_entry_age:
+            if at - order['at'] >= max_entry_age + observation_grace:
                 if config.execution == 'next_open':
                     reason(at, symbol, 'NO_EXECUTABLE_OPEN_QUOTE_BEFORE_EXPIRY', signal_at=order['at'])
                 reason(at, symbol, 'ENTRY_SIGNAL_TOO_OLD', signal_at=order['at'], phase='EXPIRY')
                 pending.pop(symbol)
-            elif at.time() >= time(11, 30) or day != order['at'].date():
+            elif at >= datetime.combine(order['at'].date(),time(11,30),KST)+observation_grace or day != order['at'].date():
                 reason(at, symbol, 'ENTRY_EXPIRED', phase='EXPIRY')
                 pending.pop(symbol)
         # Timers are explicit events even when there is no market data.
@@ -462,11 +539,59 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
                     reason(at, symbol, failure['reason'], quantity=position['quantity'])
             for symbol, order in list(pending.items()):
                 if order['at'].date() == day:
+                    if research:
+                        research_unresolved[symbol] = dict(order)
                     if config.execution == 'next_open':
                         reason(at, symbol, 'NO_EXECUTABLE_OPEN_QUOTE_BEFORE_DEADLINE', side=order['side'])
                     reason(at, symbol, 'UNFILLED_ORDER_AT_1510', quantity=order['quantity'], side=order['side'])
                     pending.pop(symbol)
             finalized.add(day)
+
+        # Research outcome processing never backdates account state or consumes target HLC.
+        if research:
+            for row in batch:
+                research_seen[row.symbol,row.event_at] = row
+                if row.available_at-row.event_at-MINUTE > research_lag:
+                    reason(at,row.symbol,'RESEARCH_OBSERVATION_LAG_EXCEEDED',event_at=row.event_at)
+                unresolved_order = research_unresolved.get(row.symbol)
+                if unresolved_order and at >= datetime.combine(unresolved_order['at'].date(),time(15,10),KST):
+                    failure = dict(at=at,symbol=row.symbol,reason='UNRESOLVED_OBSERVED_AFTER_1510',
+                                   quantity=research_unresolved[row.symbol]['quantity'])
+                    if not any(f.get('reason')==failure['reason'] and f['symbol']==row.symbol for f in failures):
+                        failures.append(failure)
+            ordered_orders = sorted(list(pending),key=lambda s:(pending[s]['side']!='SELL',s))
+            for symbol in ordered_orders:
+                order = pending.get(symbol)
+                if order is None or day in finalized or order['at'].date()!=day:
+                    continue
+                event = order.setdefault('research_next_event',next_minute(order['at']))
+                while event < at:
+                    if order['side']=='BUY' and (event-order['at']>=max_entry_age or event.time()>=time(11,30)):
+                        break
+                    row = research_seen.get((symbol,event))
+                    if row is not None:
+                        if row.available_at-event-MINUTE>research_lag:
+                            reason(at,symbol,'RESEARCH_OUTCOME_TOO_LATE',event_at=event)
+                        elif row.volume<=0:
+                            reason(at,symbol,'RESEARCH_ZERO_VOLUME_OUTCOME_VETO',event_at=event)
+                        else:
+                            # Only risk information strictly BEFORE the counterfactual open
+                            # may cancel a reserved buy; later crashes cannot select it away.
+                            prior = next((p for p in reversed(research_information) if p['at']<event),None)
+                            if order['side']=='BUY' and prior and prior['block']:
+                                reason(at,symbol,prior['block'],phase='RESEARCH_PRE_OPEN',
+                                       information_at=prior['at'],estimated_execution_at=event)
+                                pending.pop(symbol)
+                                break
+                            mark(symbol,event,at,row.open_price,'ESTIMATED_CANDLE_OPEN')
+                            fill(symbol,at,event,row.open_price,D(order['quantity']),None,'ESTIMATED_CANDLE_OPEN',outcome=row)
+                            break
+                    elif at < event+MINUTE+research_lag:
+                        break
+                    else:
+                        reason(at,symbol,'RESEARCH_MISSING_OUTCOME',event_at=event)
+                    event += MINUTE
+                    order['research_next_event'] = event
 
         # Phase 1: clocks above; phase 2: only information physically received at open.
         incoming_quotes = sorted(quotes_at[at], key=lambda q: (q.symbol, q.event_at))
@@ -536,12 +661,20 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
             if symbol in bought_now:
                 continue
             monitor_exit(row, at)
+        if research:
+            for symbol,p in list(positions.items()):
+                if p['entry_at']==at and 'estimated_entry_at' in p:
+                    for row in sorted(history[symbol].values(),key=lambda r:r.event_at):
+                        monitor_exit(row,at,late=row.available_at>row.event_at+MINUTE)
 
         if day not in finalized:
             for symbol in symbols:
                 own = [r for r in history[symbol].values() if r.event_at.date() == day]
                 # Exactly one evaluation per aligned, fresh 5m boundary with fresh symbol data.
-                if not any(r.symbol == symbol and r.event_at + MINUTE == at for r in ordered) or at.minute % 5 or at.second or at.microsecond:
+                trigger = (any(r.symbol==symbol for r in ordered) if research else
+                           any(r.symbol==symbol and r.event_at+MINUTE==at for r in ordered)
+                           and not(at.minute%5 or at.second or at.microsecond))
+                if not trigger:
                     continue
                 decision = evaluate_entry(own, at, config)
                 reason(at, symbol, decision.reason, vwap=decision.vwap, previous_vwap=decision.previous_vwap,
@@ -566,6 +699,13 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
                 order_counts[day] += 1
                 entered.add((symbol, day))
                 order = dict(symbol=symbol, side='BUY', at=at, reason='ENTRY', quantity=config.order_quantity, trigger=None)
+                if research:
+                    reserved = reservations()
+                    cost = execution_costs(price,config.order_quantity,'BUY',config)
+                    order['reservation'] = dict(cash=-cost['cash_delta'],amount=cost['amount'],
+                        cash_available=cash-sum((r['cash'] for r in reserved),D(0)),
+                        equity=equity(),
+                        invested=sum((marks[s]*p['quantity'] for s,p in positions.items()),D(0))+sum((r['amount'] for r in reserved),D(0)))
                 pending[symbol] = order
                 signals.append(dict(order))
         value = equity()
@@ -573,20 +713,28 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
                           daily_net_change=value-baselines[day],
                           loss_limit_exceeded=value-baselines[day] <= -config.daily_loss_limit,
                           unresolved=any(p['unresolved'] for p in positions.values())))
+        if research:
+            curve[-1].update(research_liability=research_liability,reserved_cash=sum((r['cash'] for r in reservations()),D(0)),
+                             reserved_position_slots=len(reservations()),research_run_invalid=research_invalid)
+            block = ('UNRESOLVED_EXPOSURE' if any(p['unresolved'] for p in positions.values()) else
+                     'RESEARCH_RUN_INVALID' if research_invalid else
+                     'DAILY_LOSS_LIMIT' if value-baselines[day]<=-config.daily_loss_limit else
+                     'LATE_RISK_EXIT_PENDING' if late_risk_symbols else None)
+            research_information.append(dict(at=at,block=block))
         if at.time() == time(15, 10) and day in days:
             daily.append(dict(day=day, closing_equity=value, net_change=value-baselines[day],
                               entry_orders=entry_counts[day], total_orders=order_counts[day],
                               unresolved_quantities={s:p['quantity'] for s,p in positions.items() if p['unresolved']}))
 
-    return dict(config=config, universe=symbols, vwap_mode=config.vwap_mode,
-        execution_model=('causal_next_1m_open_quote' if config.execution == 'next_open'
+    return dict(config=config, universe=symbols, vwap_mode=config.vwap_mode,mode=config.execution,uncertain=True,
+        execution_model=('research_estimated_open_observation_settlement' if research else 'causal_next_1m_open_quote' if config.execution == 'next_open'
                          else 'later_on_time_1m_close_with_adverse_trigger_proxy'),
-        execution_evidence=dict(source=('explicit_open_quote' if config.execution == 'next_open' else 'completed_candle'),
+        execution_evidence=dict(source=('estimated_candle_open_outcome' if research else 'explicit_open_quote' if config.execution == 'next_open' else 'completed_candle'),
             supplied_open_quotes=len(quotes), on_time_open_quotes=sum(q.available_at == q.event_at for q in quotes),
             late_open_quotes=sum(q.available_at > q.event_at for q in quotes),
             zero_or_subunit_capacity_quotes=sum(int(q.executable_volume * config.volume_participation) < 1 for q in quotes),
             missing_open_quotes=config.execution == 'next_open' and not quotes,
-            capacity_source=('open_quote_executable_volume' if config.execution == 'next_open' else 'completed_minute_volume')),
+            capacity_source=('configured_quantity_assumption' if research else 'open_quote_executable_volume' if config.execution == 'next_open' else 'completed_minute_volume')),
         summary=dict(cash=cash, net_liquidation_equity=equity(),
             net_profit=equity()-config.initial_cash,
             realized_profit=sum((t['realized_profit'] for t in trades if t['realized_profit'] is not None), D(0)),
@@ -594,6 +742,9 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
             slippage=sum((t['slippage'] for t in trades), D(0)), filled_orders=len(trades),
             open_quote_fills=sum(t['price_source'] == 'OPEN_QUOTE' for t in trades),
             legacy_close_fills=sum(t['price_source'] == 'LEGACY_CLOSE_PROXY' for t in trades),
+            estimated_open_fills=sum(t['price_source']=='ESTIMATED_CANDLE_OPEN' for t in trades),
+            unfilled_entry_quantity=sum(s['quantity'] for s in signals if s['side']=='BUY')-sum(t['quantity'] for t in trades if t['side']=='BUY'),
+            unfilled_exit_quantity=sum(p['quantity'] for p in positions.values()),
             open_positions={s:p['quantity'] for s,p in positions.items()},
             unresolved_quantities={s:p['quantity'] for s,p in positions.items() if p['unresolved']},
             overnight_gap_exposure_unmodeled=any(p['unresolved'] for p in positions.values()),
@@ -606,4 +757,10 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
                                **({'price_source':mark_types[s]} if config.execution == 'next_open' else {}))
                          for s,p in positions.items()},
         signals=signals, trades=trades, reasons=reasons,
-        failures=failures, equity_curve=curve, daily_results=daily)
+        failures=failures, equity_curve=curve, daily_results=daily,
+        research_assumptions=dict(active=research,physical_fill_claim=False if research else None,
+            uncertain=research,run_status=('INVALID_RESOURCE_OVERRUN' if research_invalid else 'ESTIMATED_ONLY') if research else 'NOT_APPLICABLE',
+            non_funded_liability=research_liability,resource_breaches=research_breaches,
+            risk_limit_adherence='INVALID' if research_invalid else 'SIGNAL_SNAPSHOT_ONLY' if research else 'MODE_FILL_CHECKS',
+            capacity='configured_order_quantity_not_liquidity' if research else None,
+            costs=dict(fee_rate=config.fee_rate,sell_tax_rate=config.sell_tax_rate,slippage_rate=config.slippage_rate)))
