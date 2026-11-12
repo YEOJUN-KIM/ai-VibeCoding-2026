@@ -164,80 +164,19 @@ SAFE REGRESSION (my disposable runner, outside repo; proposal): python -B <scrat
 - 실행 불가(setUp에서 실제 DB 필요): `test_paper`, `test_ml_backtest_selection`, `test_ml_data_pipeline` 등. `test_strategy_engine.test_journal_survives_reset...`은 `.paper-history`에 쓰므로 제외.
 - 실행기는 저장소 밖 임시 경로에 두고 소스를 변경하지 않는다. 엔진 로직은 스텁하지 않으며 네트워크·DB 연결(ephemeral loopback 제외), `.env*` 읽기, `.paper-history` 접근, 자격증명 환경변수를 차단한다. 한계: 차단은 Python 레벨(`socket`, `psycopg.connect`, `open`)이므로 C 확장의 직접 연결은 막지 못한다(해당 경로는 `psycopg.connect` 차단으로 도달 불가).
 
-명령(실행기 파일은 아래 소스를 임시 경로에 저장해 사용):
+실행기는 저장소의 `tests/day01_safe_regression_runner.py`(검토·재현 가능한 검증 유틸리티, `test_*`가 아니어서 탐색 대상 아님, 오케스트레이션 시스템 아님)로 제공한다. 엔진 코드는 변경·스텁하지 않는다.
+
+- `.env`: 존재 확인(`exists`)은 허용(settings가 사용)하되 실행기는 `<root>/.env`가 있으면 **실행 거부**하고, `.env*` 파일을 **여는 시도**는 OS 접근 전에 차단한다(내용 읽기 불가). 내용은 읽지 않는다.
+- 민감 환경변수(POSTGRES_/TOSS_/DART_/OPENAI_/ANTHROPIC_/AWS_/…_TOKEN/_SECRET/_PASSWORD 등): **값을 출력하지 않고 이름만 표시하며 실행을 거부**한다. 하네스가 주입한 토큰 변수는 실행 시 `env -u 이름`으로 해당 프로세스에서만 제외한다(값 미열람).
+- 네트워크: 모든 connect/bind/listen/accept/create_connection/getaddrinfo 차단. 예외는 CPython `socket._fallback_socketpair` 프레임 내부(asyncio 자체 파이프, loopback·임시 포트)뿐이며 서버 시작·외부 요청은 없다. psycopg는 `connect`, `Connection/AsyncConnection.connect`, pq 진입점, pool 클래스를 차단한다.
+- 제외 테스트(정확한 ID와 사유): `tests.test_strategy_engine.StrategyEngineTests.test_journal_survives_reset_and_contains_costs_reason_and_owner` — 보호 경로 `.paper-history`에 저널 파일을 쓰기 때문. 실행 시 출력에 EXCLUDED로 표시된다.
+- 한계: 프로세스 내 monkeypatch이며 OS 샌드박스가 아니다. 위 Python 진입점을 거치지 않는 C 확장의 직접 소켓은 가로채지 못한다.
+
+명령(하네스 토큰 변수는 `env -u`로 제외, 무관한 값은 출력하지 않음):
 
 ```text
-python -B <임시경로>/safe_runner.py <worktree> tests.test_ml_backtest tests.test_strategy_engine tests.test_paper_management tests.test_paper_feed
+python -B tests/day01_safe_regression_runner.py --selftest
+python -B tests/day01_safe_regression_runner.py tests.test_ml_backtest tests.test_strategy_engine tests.test_paper_management tests.test_paper_feed
 ```
 
-2026-11-12 준비 단계 실행 결과(HEAD `6408858f`): 55개 실행, 통과 55, 실패·오류 0. 이 55개는 코디네이터가 언급한 기존 124개와 같은 집합임이 확인되지 않았다.
-
-```python
-"""Disposable regression harness: unittest modules with network/DB/.env access blocked.
-
-usage: python -I safe_runner.py <repo_root> <module> [<module> ...]
-Blocks (raises AssertionError): socket connects/resolution, psycopg.connect, reading any
-'.env*' file, writing under '.paper-history'. Strips credential-like env vars. The engine code
-under test is NOT stubbed; only egress/secret paths are closed.
-"""
-import builtins, os, pathlib, socket, sys, unittest
-
-root = pathlib.Path(sys.argv[1]).resolve()
-mods = sys.argv[2:]
-sys.path.insert(0, str(root))
-os.chdir(root)
-if any(p.name == '.env' for p in root.iterdir()):
-    sys.exit('refusing: .env present in worktree')
-for k in list(os.environ):
-    if k.startswith(('POSTGRES_', 'TOSS_', 'DART_', 'OPENAI_', 'ANTHROPIC_', 'AWS_')):
-        del os.environ[k]
-os.environ.update(APP_MODE='PAPER', POSTGRES_HOST='127.0.0.1', POSTGRES_PORT='1')
-
-def blocked(*a, **k):
-    raise AssertionError('network/DB access blocked by safe_runner')
-
-_connect = socket.socket.connect
-def loopback_only(self, address, *a, **k):
-    # asyncio's self-pipe uses an ephemeral loopback port (>=49152); DB/other ports stay blocked.
-    if isinstance(address, tuple) and address[0] in ('127.0.0.1', '::1') and address[1] >= 49152:
-        return _connect(self, address, *a, **k)
-    return blocked()
-socket.socket.connect = loopback_only
-socket.socket.connect_ex = blocked
-socket.create_connection = blocked
-socket.getaddrinfo = blocked
-import psycopg  # import only; connections blocked below
-psycopg.connect = blocked
-psycopg.Connection.connect = classmethod(lambda cls, *a, **k: blocked())
-
-_open = builtins.open
-def guarded_open(file, mode='r', *a, **k):
-    name = pathlib.Path(str(file)).name if not isinstance(file, int) else ''
-    if name.startswith('.env') and name != '.env.example':
-        raise AssertionError('.env read blocked')
-    if '.paper-history' in str(file).replace('\\', '/'):
-        raise AssertionError('.paper-history access blocked')
-    return _open(file, mode, *a, **k)
-builtins.open = guarded_open
-import io
-io.open = guarded_open
-
-suite = unittest.TestSuite()
-loader = unittest.defaultTestLoader
-def flatten(s):
-    for t in s:
-        if isinstance(t, unittest.TestSuite):
-            yield from flatten(t)
-        else:
-            yield t
-skipped = []
-for m in mods:
-    for t in flatten(loader.loadTestsFromName(m)):
-        if 'journal_survives_reset' in t.id():
-            skipped.append(t.id()); continue
-        suite.addTest(t)
-print('excluded (writes .paper-history):', skipped)
-r = unittest.TextTestRunner(verbosity=1).run(suite)
-print('RAN', r.testsRun, 'FAIL', len(r.failures), 'ERR', len(r.errors), 'SKIP', len(r.skipped))
-sys.exit(not r.wasSuccessful())
-```
+2026-11-12 준비 단계 실행 결과(HEAD `4bf3f8d` 기준): `--selftest` 11개 항목 모두 PASS(차단 10 + asyncio 루프 허용 1). 회귀 55개 실행, 통과 55, 실패·오류 0, 제외 1. 구분: **기존(MA/PAPER/백테스트) 안전 회귀 55개**는 DAY01 테스트 124개(Codex 45 + Claude 79)와 별개이며, 최종 보고에서 [DAY01 legacy 124] / [DAY01 신규 기본모드] / [기존 안전 회귀 55 + 제외 1]을 각각 구분해 기록한다.

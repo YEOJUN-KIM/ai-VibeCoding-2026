@@ -11,7 +11,7 @@
 | 브랜치 | `YEOJUN-KIM/day01-claude-review-20261112` (기존 브랜치·Worktree 재사용) |
 | Worktree 절대 경로 | `C:\Users\User\orca\workspaces\ai-VibeCoding-2026\day01-claude-review-20261112` |
 | 기준 커밋 전체 SHA | `6408858fa08e2e7e2ffcf4884fa069a246b27391` (origin/main `38b44be617949791eaf3a738a1c014df25322320` 위에 DAY01 구현·리뷰 후보 포함) |
-| 수정 허용 파일 | `tests/test_day01_review.py`, `docs/technical/DAY01_REVIEW.md`, `docs/plans/ai-tasks/20261112-Claude-DAY01-next-open-review.md` (이 기록). Codex 소유(읽기 전용): `auto_trader/ml/day01.py`, `tests/test_day01.py`, `docs/specs/DAY01_BACKTEST.md`, Codex 작업 기록 |
+| 수정 허용 파일 | `tests/test_day01_review.py`, `docs/technical/DAY01_REVIEW.md`, `docs/plans/ai-tasks/20261112-Claude-DAY01-next-open-review.md` (이 기록), 신규 `tests/day01_safe_regression_runner.py`(코디네이터 승인: 격리 회귀 실행기). Codex 소유(읽기 전용): `auto_trader/ml/day01.py`, `tests/test_day01.py`, `docs/specs/DAY01_BACKTEST.md`, Codex 작업 기록 |
 | 선행 작업 / commit / PR | Codex next-open 구현 commit — 코디네이터가 인계하면 clean 확인 후 로컬 cherry-pick. PR 없음 |
 | 공통 파일 담당자 / 작업 순서 | 없음. 구현 → 인계 → 독립 검증 → 결함 보고 → 수정본 재검증 |
 | 완료 조건 | 위 3개 파일 갱신, next-open 신규 테스트와 기존 회귀 실제 실행·개수 보고, 알려진 실패 0, 미검증 항목 명시, 구현+리뷰를 담은 로컬 commit(push·PR 없음) |
