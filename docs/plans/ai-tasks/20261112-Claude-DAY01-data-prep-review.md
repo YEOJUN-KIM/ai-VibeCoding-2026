@@ -10,7 +10,7 @@
 | GitHub 저장소 | origin (이번 작업에서 push 없음) |
 | 브랜치 | `YEOJUN-KIM/day01-claude-review-20261112` (기존 브랜치·Worktree 재사용) |
 | Worktree 절대 경로 | `C:\Users\User\orca\workspaces\ai-VibeCoding-2026\day01-claude-review-20261112` |
-| 기준 커밋 전체 SHA | `4a385b1c0fb6a42d0a0cc0c3126e9c00cfbdb060` (시작 기준; Codex 구현 `e4128405363348b9e87927d1da67d92773df8f4f`는 로컬 cherry-pick `fa5a79c`로 반영, 수정 `ba765e1adbbabc8e65d4d3e300ba68ec449003e7`는 `ee0caea`로 반영) |
+| 기준 커밋 전체 SHA | `4a385b1c0fb6a42d0a0cc0c3126e9c00cfbdb060` (시작 기준; Codex 구현 `e4128405363348b9e87927d1da67d92773df8f4f`는 로컬 cherry-pick `fa5a79c`로 반영, 수정 `ba765e1adbbabc8e65d4d3e300ba68ec449003e7`는 `ee0caea`, 수정 `9908454a5176daa347f53fc39b41b04dbaf5a1ea`는 `adc6e38`로 반영) |
 | 수정 허용 파일 | `tests/test_day01_review.py`, 신규 `tests/test_day01_research_review.py`, `docs/technical/DAY01_REVIEW.md`, 이 기록. 기존 `tests/day01_safe_regression_runner.py`는 실제 검증된 버그가 있을 때만 수정. Codex 소유(읽기 전용): `auto_trader/ml/day01.py`, 신규 `auto_trader/ml/day01_research.py`(선택), `tests/test_day01.py`, 신규 `tests/test_day01_research.py`, `docs/specs/DAY01_BACKTEST.md`, Codex 작업 기록 |
 | 선행 작업 / commit / PR | Codex 구현 commit — 코디네이터가 인계하면 clean 확인 후 정확한 로컬 cherry-pick. PR 없음 |
 | 공통 파일 담당자 / 작업 순서 | 없음. 조사·비평 → 구현 인계 → 독립 테스트·리뷰 → 결함 보고 → 재검증 |
@@ -20,7 +20,7 @@
 | 미실행 / 금지 작업 | DB·RAW 데이터 조회, 외부 API, `.env`/비밀정보, 서버·워커·broker·주문, 설치, 새 오케스트레이터, 실제 시장 데이터 백테스트, push, PR, main 병합, 전체 테스트 탐색 |
 | 승인 상태 | 승인 (합성 테스트, 읽기 전용 소스·문서 조사, 로컬 commit) |
 | 사용자 승인 근거 | 코디네이터 지시(task_988ea414caaf) |
-| 진행 상태 | 검토 대기 (e412840 + 수정 ba765e1 검토 완료, D-R1·D-R2 수정 확인, 신규 D-R3(낮음) Codex 수정 대기) |
+| 진행 상태 | 검토 대기 (통합 후보 준비: e412840 + 수정 ba765e1·9908454, D-R1·D-R2·D-R3 모두 수정 확인, 알려진 실패 0) |
 
 ## 착수 확인
 
@@ -38,5 +38,5 @@
 ## 결과
 
 - PR 번호·URL / 최종 SHA 확인 위치: PR 없음. 최종 SHA는 완료 보고.
-- 구현 / 자동 테스트 / 실제 동작 / 사용자 확인 / 운영 적용 상태: 구현(Codex) 완료, 결함 2건 수정 대기 / 합성 자동 테스트: Codex 67+31, Claude 108+49(48 통과·expected failure 1), 기존 안전 회귀 55(1개 제외), 자체 점검 11(직전 실행, 이번 단계 미재실행) / 미수행 / 미수행 / 해당 없음.
-- 미검증 항목·남은 위험·GPT 검토 사항: `docs/technical/DAY01_REVIEW.md` 9절. D-R1·D-R2는 수정 확인. 알려진 결함 D-R3(허용 지연 초과·거래량 0 봉도 15:10 미해결 사유로 기록, 낮음)은 Codex 수정과 재검증이 남음. 실제 데이터·엄격 시가 증거·DB 필요 기존 테스트·PAPER/LIVE 미검증.
+- 구현 / 자동 테스트 / 실제 동작 / 사용자 확인 / 운영 적용 상태: 구현(Codex) 완료, 결함 2건 수정 대기 / 합성 자동 테스트: Codex 67+33, Claude 108+51(전체 통과, expected failure 0), 기존 안전 회귀 55(1개 제외), 자체 점검 11(앞의 둘은 직전 실행, 이번 단계는 연구용 33+51만 재실행) / 미수행 / 미수행 / 해당 없음.
+- 미검증 항목·남은 위험·GPT 검토 사항: `docs/technical/DAY01_REVIEW.md` 9절. D-R1·D-R2·D-R3 모두 수정·재검증 완료. 알려진 결함 없음. 실제 데이터·엄격 시가 증거·DB 필요 기존 테스트·PAPER/LIVE 미검증.

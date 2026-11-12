@@ -239,12 +239,45 @@ class SecondRoundFixes(unittest.TestCase):
         self.assertEqual(f['pending_candidate_from'].strftime('%H:%M'), '15:09')    # cursor advanced past vetoed bars
         self.assertEqual(r['summary']['status'], 'UNLIQUIDATED')
 
-    def test_candidate_arriving_on_a_later_day_is_still_attributed(self):
-        late = bar(369, '104', avail=at(30, 13))                                    # 15:09 bar observed next day 09:30
-        r = rrun(self.frozen_exit(*[bar(i, '104', vol='0') for i in range(351, 369)], late)
-                 + scenario(day=13)[:15])
+    def test_next_day_arrival_cannot_fit_the_lag_limit_so_only_generic_evidence_remains(self):
+        # A day-12 bar observed on day 13 is ~18h late; the lag limit is bounded to 30 minutes, so it can never
+        # be an eligible outcome: no SPECIAL post-freeze reason, but generic lag evidence and the frozen position stay.
+        late = bar(369, '104', avail=at(30, 13))
+        r = rrun(self.frozen_exit(*[bar(i, '104', vol='0') for i in range(351, 369)], late) + scenario(day=13)[:15],
+                 research_max_observation_lag_minutes=D(30))
+        self.assertEqual(self.unresolved(r), [])
+        self.assertTrue(any(x['reason'] == 'RESEARCH_OBSERVATION_LAG_EXCEEDED' and x['at'].day == 13 for x in r['reasons']))
+        self.assertEqual((r['summary']['status'], r['summary']['unresolved_quantities'],
+                          r['failures'][0]['reason'], r['failures'][0]['quantity']),
+                         ('UNLIQUIDATED', {'AAA': 10}, 'UNLIQUIDATED_AT_1510', 10))
+        self.assertEqual(sells(r), [])                                              # no phantom fill
+        self.assertEqual(r['valuation_marks']['AAA']['price'], D(103))              # frozen mark nonzero
+        self.assertEqual(r['summary']['net_profit'], D('-3.03'))   # hand: cash 998969.485 + liquidation(103) 1027.485
+
+    def test_lag_boundary_is_inclusive_and_one_microsecond_over_is_generic(self):
+        zeros = [bar(i, '104', vol='0') for i in range(351, 369)]
+        edge = bar(369, '104', avail=at(369) + M1 + timedelta(minutes=2))           # lag exactly 2m -> eligible
+        r = rrun(self.frozen_exit(*zeros, edge))
         f, = self.unresolved(r)
-        self.assertEqual((f['at'].day, f['candidate_event_at'].day, f['order_signal_at'].day), (13, 12, 12))
+        self.assertEqual(f['candidate_event_at'], at(369))
+        over = bar(369, '104', avail=at(369) + M1 + timedelta(minutes=2, microseconds=1))
+        r = rrun(self.frozen_exit(*zeros, over))
+        self.assertEqual(self.unresolved(r), [])
+        self.assertTrue(any(x['reason'] == 'RESEARCH_OBSERVATION_LAG_EXCEEDED' for x in r['reasons']))
+        for res in (r,):
+            self.assertEqual((res['summary']['status'], res['summary']['unresolved_quantities']), ('UNLIQUIDATED', {'AAA': 10}))
+            self.assertEqual(sells(res), [])
+
+    def test_zero_volume_candidate_after_freeze_is_generic_veto_and_preserves_evidence(self):
+        zero = bar(369, '104', vol='0', avail=at(369) + M1 + timedelta(minutes=1))
+        r = rrun(self.frozen_exit(*[bar(i, '104', vol='0') for i in range(351, 369)], zero))
+        self.assertEqual(self.unresolved(r), [])
+        self.assertTrue(any(x['reason'] == 'RESEARCH_ZERO_VOLUME_OUTCOME_VETO' and x['event_at'] == at(369) for x in r['reasons']))
+        self.assertEqual((r['summary']['status'], r['summary']['unresolved_quantities'], r['failures'][0]['quantity']),
+                         ('UNLIQUIDATED', {'AAA': 10}, 10))
+        self.assertEqual(r['valuation_marks']['AAA']['price'], D(103))
+        self.assertEqual(r['summary']['net_profit'], D('-3.03'))   # hand: cash 998969.485 + liquidation(103) 1027.485
+        self.assertEqual(sells(r), [])
 
     def test_excluded_bars_are_not_attributed(self):
         cases = {
@@ -259,8 +292,7 @@ class SecondRoundFixes(unittest.TestCase):
                 r = rrun(self.frozen_exit(*base, row) + ([] if row.event_at.day == 12 else scenario(day=13)[:15]))
                 self.assertEqual(self.unresolved(r), [], label)
 
-    @unittest.expectedFailure
-    def test_defect_vetoed_candidate_must_not_be_reported_as_a_valid_late_outcome(self):
+    def test_regression_vetoed_candidate_is_not_reported_as_a_valid_late_outcome(self):
         # A 15:09 bar observed 15:20 (lag 10m > 2m limit) or with zero volume could never have been an outcome.
         for late in (bar(369, '104', avail=at(380)), bar(369, '104', vol='0', avail=at(380))):
             with self.subTest(vol=late.volume):

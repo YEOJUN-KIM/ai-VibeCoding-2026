@@ -2,7 +2,7 @@
 
 작업 기록: [20261112-Claude-DAY01-review](../plans/ai-tasks/20261112-Claude-DAY01-review.md)
 
-상태: **7절 = 엄격 `next_open`(Codex `348f342`) 최종 검토 결과(유효). 9절 = 연구용 `research_estimated_open`·입력 어댑터·커버리지(Codex `e412840`)와 그 수정(`ba765e1`)의 독립 검토 결과이며 현재 기준이다. D-R1(중간)·D-R2(낮음)는 수정·재검증 완료, 새로 발견한 D-R3(낮음, 9.2절)은 Codex 수정 대기 중이며 해당 테스트 1개가 `expectedFailure`로 고정되어 있다.** 5절은 `legacy_close`, 8절은 구현 인계 전 조사·요구사항(8.1 증거 조사는 유효, 8.3 계획은 9절로 대체)이다. 실제 시장 데이터·PAPER/LIVE·사용자 동작 검증·운영 적용은 하지 않았고 수익성에 대한 어떤 주장도 하지 않는다. **실제 시세 피드에 바로 쓸 수 있는 상태가 아니다**: 엄격 기본 모드는 명시적 `OpenQuote` 증거가 있어야만 체결하며 저장소에는 그런 증거가 없고, 연구용 모드는 사후(hindsight) 추정이며 실제 체결이 아니다.
+상태: **7절 = 엄격 `next_open`(Codex `348f342`) 최종 검토 결과(유효). 9절 = 연구용 `research_estimated_open`·입력 어댑터·커버리지(Codex `e412840`)와 수정 2건(`ba765e1`, `9908454`)의 독립 검토 결과이며 현재 기준이다. 발견한 결함 D-R1(중간)·D-R2(낮음)·D-R3(낮음) 3건은 모두 수정·재검증 완료되었고 알려진 실패·expected failure는 0이다.** 5절은 `legacy_close`, 8절은 구현 인계 전 조사·요구사항(8.1 증거 조사는 유효, 8.3 계획은 9절로 대체)이다. 실제 시장 데이터·PAPER/LIVE·사용자 동작 검증·운영 적용은 하지 않았고 수익성에 대한 어떤 주장도 하지 않는다. **실제 시세 피드에 바로 쓸 수 있는 상태가 아니다**: 엄격 기본 모드는 명시적 `OpenQuote` 증거가 있어야만 체결하며 저장소에는 그런 증거가 없고, 연구용 모드는 사후(hindsight) 추정이며 실제 체결이 아니다.
 
 > **1~4절은 구현 전(사전) 요구사항·시나리오 설계 기록이며 역사적 문서다.** 당시의 가설(예: 5분봉 직접 입력, 기존 `RawCandle` 재사용, 초기 체결 모델 가정)은 최종 계약이 아니다. 현재 사양 `docs/specs/DAY01_BACKTEST.md`는 1분봉 입력과 완결 5분 집계를 쓰고, 기본 실행 모드는 `next_open`(명시적 `OpenQuote` 시가 증거가 있을 때만 체결)이며 `legacy_close`(이후 on-time 1분봉 종가 기반 체결)는 명시적으로 선택하는 이전 모드다. **5절은 `legacy_close` 시기의 이전 결과이고, 현재 기준은 7절이다.** 1~4절·5절과 충돌하면 **현재 사양 문서와 7절이 우선**한다.
 
@@ -261,7 +261,7 @@ python -B tests/day01_safe_regression_runner.py tests.test_ml_backtest tests.tes
 - 기준선: `tests.test_day01_review`(108), `test_day01.py`(67) = 175, 안전 회귀 55 + 실행기 자체 점검 11. 신규 연구용 모드·어댑터·커버리지 테스트는 `tests/test_day01_research_review.py`에 둔다(합성 행만, `settings`·`database` 비import).
 - 결과·정확한 개수·SHA는 인계 후 이 절을 갱신한다. 현재 8절은 준비 단계이며 검증 결과가 아니다.
 
-## 9. 연구용 추정 시가 모드·입력 어댑터·커버리지 최종 검토 (구현 `e4128405363348b9e87927d1da67d92773df8f4f`→`fa5a79c`, 수정 `ba765e1adbbabc8e65d4d3e300ba68ec449003e7`→`ee0caea`, 로컬 cherry-pick)
+## 9. 연구용 추정 시가 모드·입력 어댑터·커버리지 최종 검토 (구현 `e4128405363348b9e87927d1da67d92773df8f4f`→`fa5a79c`, 수정 `ba765e1adbbabc8e65d4d3e300ba68ec449003e7`→`ee0caea`, 수정 `9908454a5176daa347f53fc39b41b04dbaf5a1ea`→`adc6e38`, 로컬 cherry-pick)
 
 작업 기록: [20261112-Claude-DAY01-data-prep-review](../plans/ai-tasks/20261112-Claude-DAY01-data-prep-review.md). Codex 동기화 merge 없이 이 commit만 cherry-pick했다(변경 6경로: `auto_trader/ml/day01.py`, 신규 `auto_trader/ml/day01_research.py`, `tests/test_day01_research.py`, `docs/specs/DAY01_BACKTEST.md`, `docs/technical/DAY01_DATA_READINESS.md`, Codex 작업 기록).
 
@@ -273,13 +273,13 @@ python -B tests/day01_safe_regression_runner.py tests.test_ml_backtest tests.tes
 - **리스크**: 정산 후 이미 알려진 봉을 진입 봉 범위부터 STOP 우선으로 소급 적용(catch-up)하고 최신 알려진 마크로 평가한다. 15:10 동결이 정산보다 먼저이며 15:10 이후 관측은 미청산으로 남는다. 스냅샷을 초과하는 갭은 모델 거래·반사실 손익을 유지하되 `INVALID_RESOURCE_OVERRUN`, 비음수 현금과 별도 비자금 연구 부채(자산에서 차감, 매도 대금으로 상환, 신규 진입 차단·청산 허용)로 기록된다.
 - **어댑터·커버리지**: `adapt_rows`는 `source`·`interval`(1m)·`available_at`·`collected_at`·`collection_run_id`를 보존하고 값을 만들지 않으며 15:30은 `CLOSING_1530`, 그 외 세션 밖은 `OUTSIDE_REPLAY_SESSION`으로 분리·보고한다(전체 replay를 중단시키지 않음). `coverage`는 호출자 행·명시 날짜·고정 종목만 사용하고 `NO_ROWS`/`MISSING`/`COMPLETE`, 결측 분 목록, 지연·백필·0거래량·turnover 준비도, `actual_stored_date_range='UNKNOWN'`을 보고한다.
 
-### 9.2 발견 결함 (수정·재검증 상태)
+### 9.2 발견 결함 (3건 모두 수정·재검증 완료)
 
 | ID | 심각도 | 내용 | 상태 |
 |---|---|---|---|
 | D-R1 | 중간 | `run_input` 최상위 `run_status`가 연구 결과가 `INVALID_RESOURCE_OVERRUN`이어도 `'RAN'` | **수정 확인(`ba765e1`)**: 무효 상태는 부채 상환·청산 완료 후에도 최상위에 유지되고, 정상은 `RAN`, 선택 없음은 `NO_REPLAY_ROWS`, 엄격·legacy는 `RAN`으로 보존된다(테스트 `test_regression_run_input_top_level_status_surfaces_invalid_run`, `test_run_input_status_stays_invalid_after_debt_retirement_and_flat`, `test_run_input_ran_and_no_replay_rows_are_preserved`) |
-| D-R2 | 낮음 | `UNRESOLVED_OBSERVED_AFTER_1510`가 무관한 늦은 봉에도 기록 | **수정 확인(`ba765e1`)**: 동일 종목·동일 세션의 후보 봉(신호 이후, 커서 이상, 15:10 이전, BUY는 나이·진입창 한도 내)에만 기록되고 `candidate_event_at`·`pending_candidate_from`·`order_signal_at`이 남는다. 신호 이전 봉·타임아웃 이전 봉·15:10 이후 봉·다른 날 봉은 제외되고 다음 날 관측된 실제 후보는 출처와 함께 기록된다(테스트 `test_regression_unrelated_late_bar_is_not_reported_as_unresolved_outcome`, `test_real_candidate_observed_after_freeze_carries_provenance`, `test_candidate_arriving_on_a_later_day_is_still_attributed`, `test_excluded_bars_are_not_attributed`) |
-| D-R3 | 낮음 (신규) | 후보 범위 안의 봉이라도 **허용 지연을 초과했거나 거래량 0이라 결과가 될 수 없는 봉**(예: 15:09 봉이 15:20 도착, lag 10분 > 2분)이 `UNRESOLVED_OBSERVED_AFTER_1510`로 기록된다. 실제 정산 후보가 아니므로 사유가 사실과 다르다 | **Codex 수정 대기**. 재현: 14:50 청산 주문 대기 중 14:51~15:08 봉이 거래량 0으로 관측되고 15:09 봉이 15:20에 도착. 근거: `day01.py` 연구용 정산 블록의 `is_candidate`가 지연·거래량 적격성을 확인하지 않음. 테스트 `test_defect_vetoed_candidate_must_not_be_reported_as_a_valid_late_outcome`(expectedFailure) |
+| D-R2 | 낮음 | `UNRESOLVED_OBSERVED_AFTER_1510`가 무관한 늦은 봉에도 기록 | **수정 확인(`ba765e1`)**: 동일 종목·동일 세션의 후보 봉(신호 이후, 커서 이상, 15:10 이전, BUY는 나이·진입창 한도 내)에만 기록되고 `candidate_event_at`·`pending_candidate_from`·`order_signal_at`이 남는다. 신호 이전 봉·타임아웃 이전 봉·15:10 이후 봉·다른 날 봉은 제외되고 다음 날 관측된 실제 후보는 출처와 함께 기록된다(테스트 `test_regression_unrelated_late_bar_is_not_reported_as_unresolved_outcome`, `test_real_candidate_observed_after_freeze_carries_provenance`, `test_excluded_bars_are_not_attributed`). 다음 날 도착한 봉은 지연 한계(최대 30분)에 들어갈 수 없으므로 3차 수정 이후 특수 사유가 아니라 일반 지연 초과 사유와 미청산 수량·동결 증거만 남는다(테스트 `test_next_day_arrival_cannot_fit_the_lag_limit_so_only_generic_evidence_remains`; 지연 한계는 완화하지 않음) |
+| D-R3 | 낮음 | 허용 지연을 초과했거나 거래량 0인 봉(결과가 될 수 없는 봉)이 `UNRESOLVED_OBSERVED_AFTER_1510`로 기록 | **수정 확인(`9908454`)**: 특수 사유는 실제 후보·거래량>0·`available_at-event_at-1분 <= research_max_observation_lag`(경계 포함)일 때만 기록된다. 지연 초과는 일반 `RESEARCH_OBSERVATION_LAG_EXCEEDED`, 거래량 0은 일반 `RESEARCH_ZERO_VOLUME_OUTCOME_VETO`로만 남고 실제 `UNLIQUIDATED`·수량 10·동결 마크·손익은 그대로이며 가짜 체결은 없다(테스트 `test_regression_vetoed_candidate_is_not_reported_as_a_valid_late_outcome`, `test_lag_boundary_is_inclusive_and_one_microsecond_over_is_generic`, `test_zero_volume_candidate_after_freeze_is_generic_veto_and_preserves_evidence`) |
 
 ### 9.3 관찰 (결함 아님, 문서화됨)
 
@@ -289,23 +289,22 @@ python -B tests/day01_safe_regression_runner.py tests.test_ml_backtest tests.tes
 
 ### 9.4 독립 테스트와 실행 결과
 
-`tests/test_day01_research_review.py`(49개): 기본값·분리 라벨·보고 필드, 정산 시각·반사실 시각·역소급 없는 원장, 대상 거래량의 수량 비사용·0거래량 veto, 나이 배타·유예 만료, 지연 한계 포함/초과, 앞선 후보 대기와 결측 타임아웃, 신선한 결정(도착 시각 보존·지연 한계), 청산 대칭·14:50, 15:10 동결·늦은 정산, 신호 시점 예약 경합, 모델 시가 이후 손실의 BUY 비거절·이전 정보 취소, 정산 시 catch-up(STOP 우선·최신 마크), 같은 시각 매도 우선, 자원 초과·비자금 부채·상환·무효 후 진입 차단과 청산 허용, 어댑터 보존·거부·분리·결정성, 커버리지, `run_input` 연동·상태 전파, 2회차 수정 경계(후보 출처 필드·다음 날 관측·제외 봉·무효 상태 영속), 25개 시드 속성 테스트, 정적 import 순도.
+`tests/test_day01_research_review.py`(51개): 기본값·분리 라벨·보고 필드, 정산 시각·반사실 시각·역소급 없는 원장, 대상 거래량의 수량 비사용·0거래량 veto, 나이 배타·유예 만료, 지연 한계 포함/초과, 앞선 후보 대기와 결측 타임아웃, 신선한 결정(도착 시각 보존·지연 한계), 청산 대칭·14:50, 15:10 동결·늦은 정산, 신호 시점 예약 경합, 모델 시가 이후 손실의 BUY 비거절·이전 정보 취소, 정산 시 catch-up(STOP 우선·최신 마크), 같은 시각 매도 우선, 자원 초과·비자금 부채·상환·무효 후 진입 차단과 청산 허용, 어댑터 보존·거부·분리·결정성, 커버리지, `run_input` 연동·상태 전파, 수정 경계(후보 출처 필드·다음 날 관측의 일반 증거·제외 봉·지연 경계 포함/초과·거래량 0·무효 상태 영속), 25개 시드 속성 테스트, 정적 import 순도.
 
 | 구분 | 명령 | 결과 (2026-11-12 최종 실행) |
 |---|---|---|
-| Codex (엄격·legacy) | `python -B -m unittest discover -s tests -p test_day01.py` | 67개 통과 |
-| Codex (연구용) | `python -B -m unittest discover -s tests -p test_day01_research.py` | 31개 통과 |
-| Claude (엄격·legacy·next-open) | `python -B -m unittest tests.test_day01_review` | 108개 통과 |
-| Claude (연구용·어댑터·커버리지·수정 경계) | `python -B -m unittest tests.test_day01_research_review` | 49개 실행, 48 통과 + **expected failure 1(D-R3)** |
-| 기존 MA/PAPER/백테스트 안전 회귀 (DAY01과 별개) | `env -u CLAUDE_CODE_MESSAGING_TOKEN -u ORCA_AGENT_SESSION_SPAWN_TOKEN python -B tests/day01_safe_regression_runner.py tests.test_ml_backtest tests.test_strategy_engine tests.test_paper_management tests.test_paper_feed` | 55개 통과, 제외 1(`tests.test_strategy_engine.StrategyEngineTests.test_journal_survives_reset_and_contains_costs_reason_and_owner`: `.paper-history` 쓰기) |
-| 실행기 자체 점검 | `... --selftest` (`env -u ...` 접두) | 이번 단계에서 재실행하지 않음(실행기·보호 로직 불변). 직전 결과: 2026-11-12 11/11 PASS. `env -u` 없이 실행하면 하네스가 주입한 Orca 자식 런타임 변수 이름 2개(`CLAUDE_CODE_MESSAGING_TOKEN`, `ORCA_AGENT_SESSION_SPAWN_TOKEN`) 때문에 **거부**된다(값은 읽거나 출력하지 않음, 거부는 통과로 기록하지 않음; 이번 단계에서도 확인) |
+| Codex (엄격·legacy) | `python -B -m unittest discover -s tests -p test_day01.py` | 67개 통과 (직전 단계 실행, 재실행하지 않음) |
+| Codex (연구용) | `python -B -m unittest discover -s tests -p test_day01_research.py` | 33개 통과 |
+| Claude (엄격·legacy·next-open) | `python -B -m unittest tests.test_day01_review` | 108개 통과 (직전 단계 실행, 이번 3차 수정은 연구용 분기 6줄만 변경하여 재실행하지 않음) |
+| Claude (연구용·어댑터·커버리지·수정 경계) | `python -B -m unittest tests.test_day01_research_review` | **51개 실행, 51 통과, 실패·오류·expected failure 0** (약 40초) |
+| 기존 MA/PAPER/백테스트 안전 회귀 (DAY01과 별개) | `env -u CLAUDE_CODE_MESSAGING_TOKEN -u ORCA_AGENT_SESSION_SPAWN_TOKEN python -B tests/day01_safe_regression_runner.py tests.test_ml_backtest tests.test_strategy_engine tests.test_paper_management tests.test_paper_feed` | 55개 통과(직전 단계 실행, 재실행하지 않음), 제외 1(`tests.test_strategy_engine.StrategyEngineTests.test_journal_survives_reset_and_contains_costs_reason_and_owner`: `.paper-history` 쓰기) |
+| 실행기 자체 점검 | `... --selftest` (`env -u ...` 접두) | 재실행하지 않음(실행기·보호 로직 불변). 직전 결과: 2026-11-12 11/11 PASS. `env -u` 없이 실행하면 하네스가 주입한 Orca 자식 런타임 변수 이름 2개(`CLAUDE_CODE_MESSAGING_TOKEN`, `ORCA_AGENT_SESSION_SPAWN_TOKEN`) 때문에 **거부**된다(값은 읽거나 출력하지 않음, 거부는 통과로 기록하지 않음; 이번 단계에서도 확인) |
 
-합계: DAY01 합성 통과 254(67 + 31 + 108 + 48) + expected failure 1, 기존 안전 회귀 55 별도. 건너뜀·제외: 안전 회귀 1개 제외(위). 변이 검증은 이번 단계에서 수행하지 않았다.
+합계: DAY01 합성 통과 259(67 + 33 + 108 + 51), 알려진 실패·expected failure 0, 기존 안전 회귀 55 별도. 이번(3차 수정) 단계에서 새로 실행한 것은 연구용 Codex 33개와 Claude 51개이며 나머지는 직전 결과이고, 구현 변경(연구용 분기만)이 엄격·legacy 경로에 영향을 주지 않음을 소스 diff로 확인했다. 건너뜀·제외: 안전 회귀 1개 제외(위). 변이 검증은 이번 단계에서 수행하지 않았다.
 
 ### 9.5 미검증·실제 데이터 요건
 
 - 실제 시장 데이터·실제 저장 행(DB/RAW)은 읽거나 실행하지 않았다. 문서상 22종목·날짜 범위는 재확인하지 않았다.
 - 엄격 체결 증거(시가 시점 가격·체결가능수량)는 현재 저장소 데이터에 없다. 실제 근거가 필요하면 별도 설계·승인으로 실시간 체결/호가와 수신 시각을 영속화하는 수집기가 필요하다(이번 범위 밖).
 - 연구용 모드의 체결은 사후 추정이며 실제 주문·유동성·체결이 아니다. 해당 결과를 엄격/legacy 결과와 비교하거나 수익성으로 해석하지 않는다.
-- D-R3 수정본의 재검증은 남아 있다(수정 후 `expectedFailure` 제거 필요).
 - 기존 DB 필요 테스트, PAPER/LIVE, 사용자 동작 검증, 다음날 갭은 미검증·미모델링이다.
