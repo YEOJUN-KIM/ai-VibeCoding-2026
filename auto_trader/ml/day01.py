@@ -565,6 +565,12 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
                     is_candidate = (row.event_at-unresolved_order['at']<max_entry_age
                                     and time(9,20)<=row.event_at.time()<time(11,30))
                 if is_candidate and at >= cutoff:
+                    if row.volume<=0:
+                        reason(at,row.symbol,'RESEARCH_ZERO_VOLUME_OUTCOME_VETO',event_at=row.event_at)
+                    # This special provenance means the freeze, rather than an
+                    # already-ineligible price outcome, prevented settlement.
+                    if row.volume<=0 or row.available_at-row.event_at-MINUTE>research_lag:
+                        continue
                     failure = dict(at=at,symbol=row.symbol,reason='UNRESOLVED_OBSERVED_AFTER_1510',
                                    quantity=unresolved_order['quantity'],candidate_event_at=row.event_at,
                                    pending_candidate_from=candidate_from,order_signal_at=unresolved_order['at'])

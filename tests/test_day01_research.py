@@ -281,7 +281,49 @@ class EstimatedOutcomeTests(unittest.TestCase):
         tomorrow = replace(minute(369,'103'),available_at=minute(0,day=13).event_at)
         late = self.run_rows(scenario()+[minute(21,'102'),tomorrow])
         self.assertEqual(len(late['trades']),1)
-        self.assertIn('UNRESOLVED_OBSERVED_AFTER_1510',[f['reason'] for f in late['failures']])
+        # Previous attribution was wrong: next-day arrival exceeds the configured 2m lag.
+        self.assertNotIn('UNRESOLVED_OBSERVED_AFTER_1510',[f['reason'] for f in late['failures']])
+        self.assertIn('RESEARCH_OBSERVATION_LAG_EXCEEDED',[x['reason'] for x in late['reasons']])
+        self.assertEqual(late['summary']['unresolved_quantities'],{'AAA':10})
+        self.assertTrue(late['valuation_marks']['AAA']['frozen'])
+
+    def test_ineligible_late_or_zero_outcomes_keep_only_true_diagnostics(self):
+        prefix = scenario()+[minute(21,'102')]+[minute(i,'103',volume='0') for i in range(351,369)]
+        for volume,arrival in (('100',380),('0',380),('0',370),('0',371)):
+            with self.subTest(volume=volume,arrival=arrival):
+                outcome = replace(minute(369,'103',volume=volume),available_at=minute(arrival).event_at)
+                r = self.run_rows(prefix+[outcome])
+                self.assertEqual([f['reason'] for f in r['failures']],['UNLIQUIDATED_AT_1510'])
+                self.assertEqual(r['summary']['unresolved_quantities'],{'AAA':10})
+                self.assertEqual(r['valuation_marks']['AAA']['price'],D(102))
+                self.assertTrue(r['valuation_marks']['AAA']['frozen'])
+                self.assertEqual(len(r['trades']),1)
+                self.assertEqual(r['summary']['net_profit'],D('-3.0200'))
+                reasons_at_arrival = [x['reason'] for x in r['reasons'] if x['at']==outcome.available_at]
+                if arrival==380:
+                    self.assertIn('RESEARCH_OBSERVATION_LAG_EXCEEDED',reasons_at_arrival)
+                if volume=='0':
+                    self.assertIn('RESEARCH_ZERO_VOLUME_OUTCOME_VETO',reasons_at_arrival)
+
+    def test_frozen_candidate_lag_boundary_is_inclusive_for_positive_volume(self):
+        prefix = scenario()+[minute(21,'102')]+[minute(i,'103',volume='0') for i in range(351,369)]
+        for lag in (timedelta(0),timedelta(minutes=1),timedelta(minutes=2),
+                    timedelta(minutes=2,microseconds=1)):
+            with self.subTest(lag=lag):
+                arrival = minute(370).event_at+lag
+                outcome = replace(minute(369,'103'),available_at=arrival)
+                r = self.run_rows(prefix+[outcome])
+                special = [f for f in r['failures'] if f['reason']=='UNRESOLVED_OBSERVED_AFTER_1510']
+                if lag<=timedelta(minutes=2):
+                    self.assertEqual(len(special),1)
+                    self.assertEqual(special[0]['at'],arrival)
+                    self.assertEqual(special[0]['candidate_event_at'],outcome.event_at)
+                else:
+                    self.assertEqual(special,[])
+                    self.assertIn('RESEARCH_OBSERVATION_LAG_EXCEEDED',[x['reason'] for x in r['reasons']])
+                self.assertEqual(r['summary']['unresolved_quantities'],{'AAA':10})
+                self.assertEqual(r['valuation_marks']['AAA']['price'],D(102))
+                self.assertTrue(r['valuation_marks']['AAA']['frozen'])
 
     def test_unrelated_late_bars_do_not_claim_pending_outcome_provenance(self):
         # Old event, already-timed-out candidate, post-cutoff event, and another session.

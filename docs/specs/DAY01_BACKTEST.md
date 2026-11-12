@@ -91,7 +91,7 @@ strict/legacy ENTRY 수명은 `execution_at - signal_at < max_signal_to_fill_min
 
 이 모드의 `estimated_execution_at`은 반사실적 시가 시각이며 `execution_at/settlement_at`은 실제 관측 정산 시각이다. observation_at은 원래 available_at이다. 이전 후보가 미해결이면 뒤 후보를 먼저 선택하지 않아 settlement가 observation보다 늦을 수도 있다. 과거 곡선을 고치거나 해당 시가 시점에 실제 PnL가 생긴 것으로 기록하지 않는다. 허용 지연 안에서 새로 알려진5분 입력만 실제 시각에 결정하고 historical backfill은 과거 신호를 만들지 않는다.
 
-run_input의 최상위 run_status도 INVALID_RESOURCE_OVERRUN 또는 기타 미결 연구 상태를 전달한다. 정상 경로 RAN 및 무입력 NO_REPLAY_ROWS는 유지한다. 마감 후 관측 실패는 동결 주문의 남은 후보 범위·원래 세션/신호/진입 조건에 실제로 속한 봉만 연결하며 주문 신호·후보 event·동결 cursor를 근거로 남긴다. 무관한 늦은 봉을 청산 후보로 오인하지 않으며 기존 미청산 잔량은 계속 보고한다.
+run_input의 최상위 run_status도 INVALID_RESOURCE_OVERRUN 또는 기타 미결 연구 상태를 전달한다. 정상 경로 RAN 및 무입력 NO_REPLAY_ROWS는 유지한다. 마감 후 특별 관측 실패는 동결 주문의 남은 후보 범위·원래 세션/신호/진입 조건에 속하면서 **관측 지연이 설정 이내이고 거래량>0**인 봉에만 연결하며 주문 신호·후보 event·동결 cursor를 근거로 남긴다. 지연초과/0거래량은 각각 일반 사유로 보고하고 특별 사유를 붙이지 않는다. 현재 지연 상한30분으로 실제 익일 수신은 부적격이다. 특별 사유가 없어도 기존 미청산 잔량·동결 평가·손익은 계속 보존한다.
 
 BUY 신호의 현금·노출·slot을 만료+관측 grace 내내 예약한다. 대상 open 이후에 알려진 급락/종가/손실로 손실 거래를 선택적으로 거절하지 않는다. 엄격히 open 이전의 알려진 위험 block만 증거 시각과 함께 반영한다. 가격 갭으로 신호 시 자원이 부족하면 반사실적 거래와 손실을 기록한 채 run_status=INVALID_RESOURCE_OVERRUN으로 무효 표시하고, 음수 현금 대신 **실제 차입이 아닌** non_funded_liability를 equity에서 차감한다. 위험 한도 준수나 실제 실행 가능성을 주장하지 않으며 추가 진입을 차단한다.
 
@@ -172,6 +172,6 @@ summary에는 estimated_open_fills, unfilled_entry_quantity, unfilled_exit_quant
 
 `backtest`, `data_pipeline`, `paper`, `risk`는 database/settings로 이어져 settings import가 `.env`를 읽을 수 있다. 기본 실행 경로는 이를 import하지 않는다. 이전 단계의 guarded backtest12개에 이어 이번에는 검토된 기존 `tests/day01_safe_regression_runner.py`로 허용된55개를 실행했다. guard는 민감 환경·설정 파일 존재 시 거부하고 설정/운영기록 접근·DB/socket 연결을 차단하며 엔진 계산을 스텁하지 않는다. 테스트 전용 자식 환경의 Orca runtime token 키 제거와 최초 guard 거부/재실행 결과는 새 기록에 명시했다. 데이터 파이프라인 테스트는 setUp에서 DB 스키마를 생성하므로 여전히 실행하지 않는다. 기존 파일은 모두 읽기 전용으로 유지했다. 순수 RiskPolicy만 재사용해 금융 한도 계산의 단위를 유지했다.
 
-검증 명령: `python -B -m unittest discover -s tests -p test_day01.py -v`는 기존67개, 같은 명령의 `-p test_day01_review.py`는 Claude가 모드를 명시한 독립108개로 기준175개다. `-p test_day01_research.py`는 준비/연구31개이며 이 파일은 discovery 명령을 사용한다. guarded 기존55개까지 총261개 통과했으며 journal 쓰기1개는 명시적으로 제외했다. Claude 신규43개 수정본 재검증은 별도다. 기존 legacy124개와 strict51개는 수치 동작을 유지하고 연구 결과를 별도로 검증한다. Claude 소유 리뷰 파일은 편집하지 않았다. 안전 실행 및 남은 검증은 작업 기록에 명시한다.
+검증 명령: `python -B -m unittest discover -s tests -p test_day01_research.py -v`로 D-R3 관련 준비/연구33개를 이번에 재실행해 통과했다(기존31+신규2). 앞선 D-R1/D-R2 검증은 기존67+108+연구31+guarded55=261개였으며 이번 현재 결과에 재집계하지 않는다. 기본/legacy/기존 금융 엔진·실행기는 변경하지 않아 불필요한 반복 실행을 하지 않았다. Claude 최신 독립49개 수정본 재검증과 지연 상한에 어긋난 익일 기대값 수정은 별도다. Claude 소유 파일은 편집하지 않았다. 정확한 범위와 남은 검증은 작업 기록에 명시한다.
 
 장점은 환경 접근 없는 결정성, 인과적 시각, 비용·위험의 명시성이다. 단점은 엄격한 온타임 조건, 보수적인 청산 proxy, 단순 유동성 모형, 미청산 평가가격 동결이다. 학습 개념은 정보 이용 가능 시각과 사건 시각의 분리, 전략 판단과 실행 증거의 분리다. 사용자는 운영 환경 없이 위 단일 합성 명령과 예제로 재현하고, GPT/Claude는 늦은 데이터·미청산 동결·위험 감소 주문 정책과 보수적 가격 proxy를 검토해야 한다. 실제 시장 데이터, PAPER 연결, 운영 DB, LIVE, 배포는 별도 설계·환경 분리·사용자 승인이 필요하다.
