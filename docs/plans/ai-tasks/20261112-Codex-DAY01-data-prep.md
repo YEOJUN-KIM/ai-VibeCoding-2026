@@ -63,3 +63,14 @@ python -B tests/day01_safe_regression_runner.py tests.test_ml_backtest tests.tes
 - 파일: day01.py, day01_research.py, tests/test_day01_research.py, 사양/데이터준비 문서, 본 작업 기록의6파일. 원래 strategy/PAPER/RAW/API/DB 계약 및 strict/legacy 체결 수치 변경 없음. 새 입력·인프라·실데이터·운영·서버·DB/API/주문·설치·push/PR/main병합 없음. 현재 실제 저장기간/22개 목록 UNKNOWN은 유지한다.
 - 장점은 최상위 무효 전파와 후보 근거의 정확성이다. 알려진 한계는 연구 모드의 반사실적 가격·수량/지연 및 미청산 동결이며 이번 수정이 실제 체결 검증을 추가하지 않는다. 개발 개념은 결과 상태의 계층 간 전파, 사건과 주문의 provenance 연결이다. 사용자 확인은 위 명령에서67/108/31 OK 및 무효 예제의 상위 INVALID_RESOURCE_OVERRUN을 확인하는 것이다. GPT/Claude는 실패 후보 범위와 무효 지속을 검토한다.
 - 구현·로컬 검증 완료, 독립 재검증/사용자 확인/통합·운영 적용 미완료. 후속 로컬 commit SHA는 완료 보고에서 제공한다. GitHub/branch/worktree는 위 표와 동일, main 병합/배포는 별도 승인 대상이다. 토큰/비용은 표시되지 않아 확인 불가다.
+
+## D-R3 후보 자체의 적격성 수정
+
+- 승인/task: task_8681a598749e / ctx_c5a93c7c6bae. 현재 ba765e1adbbabc8e65d4d3e300ba68ec449003e7의 기존 전용 branch/worktree clean 확인. Claude commit894ee5f607581f131b7d0f59719dd810f44e569d의 최신49개 소스와 재현을 git show로 읽기 전용 확인했다. Claude 파일/표식 수정·복사/cherry-pick 없음. 이번에는 실제 발견 D-R3의 특별 사유 적격성과 필요한 소유 테스트·문서만 수정한다.
+- 원인/수정: UNRESOLVED_OBSERVED_AFTER_1510의 주문 범위 검사에 후보 자체의 lag/volume 적격성이 없었다. 기존 order/session/cursor/신호/진입 조건에 추가하여 row.available_at - row.event_at - 1분 <= research_lag(경계 포함), volume>0일 때만 특별 사유를 기록한다. 초과 지연의 RESEARCH_OBSERVATION_LAG_EXCEEDED는 원래처럼 보존하고, 마감 뒤의 해당 후보0거래량도 RESEARCH_ZERO_VOLUME_OUTCOME_VETO로 남긴다. 실제 UNLIQUIDATED_AT_1510·잔량10·동결가격102·미실현 비용차감 손익-3.02는 어떤 부적격 사례에서도 없애거나0으로 바꾸지 않는다.
+- 기존 모순 기대값 정정: 이전 소유 테스트의15:09 event를 다음날 수신해도 특별 사유가 있다는 기대는 기본 lag2분/최대30분과 모순이었다. 특별 사유 없음+일반 지연 사유 있음+잔량/동결 보존으로 적극 검증하도록 정정했다. 수신 날짜를 별도 금지하는 새 조건을 넣지 않았으며 실제 timestamp 지연이 설정에 들어오는 경우만 가능하다. 현재0~30분 제약 아래 진짜 익일 수신은 적격일 수 없다. Claude의 test_candidate_arriving_on_a_later_day_is_still_attributed 역시 이 계약에 맞게 독립 수정이 필요하다.
+- 신규 focused 회귀2개: (1)15:09 후보를15:20 양수/0거래량으로 수신하거나15:10/15:11에0거래량 수신 시 특별 사유 없음, 일반 사유·미청산/동결/PnL 보존; (2)양수 후보 lag0/1/2분은 특별 사유와 provenance를 보존하고2분+1마이크로초는 배제한다. 기존31개 중 나머지 기대는 유지했다. assertions를 삭제/비활성화하거나 과거 오류를 통과로 숨기지 않았다.
+- 실행/결과: `python -B -m unittest discover -s tests -p test_day01_research.py -v` **33개 통과**, failure/error/expectedFailure0. git diff --check 통과. 수정은 research 내부의 보고 조건뿐이므로 strict/legacy 및 읽기 전용 MA/PAPER/DB/network 하네스의175/55/11 검증을 불필요하게 반복하지 않았고 과거 통과 수를 이번33에 합산하지 않는다. Claude 최신48통과+1expectedFailure는 인계받은 과거 결과이며 수정본49개 재검증이 아니다.
+- 실제 변경은5파일: day01.py, tests/test_day01_research.py, 사양, 데이터준비 문서, 본 기록. 입력/정산/가격/위험/수량/DB/API 계약 변경 없음, 새로운 데이터 접근·기능/인프라·운영·주문·설치·push/PR/main병합 없음. 실제 저장 범위와22개 목록 UNKNOWN·연구 추정 한계는 유지한다.
+- 장점은 미청산 사실과 부적격 관측을 구분해 오류 귀속을 막는 것이고, 실제 체결을 새로 검증하지 않는 한계는 동일하다. 사용자 재현은 위 discovery 명령에서33 tests OK를 확인하며 GPT/Claude는 지연 경계와0거래량·익일 기대값 정정을 검토한다. 핵심 개념은 후보의 범위와 본질적 적격성 분리, 과거 테스트 기대값도 명시 계약으로 검토하는 것이다.
+- AI 수정/로컬 focused검증 완료, Claude 독립 재검증/사용자 확인/통합/운영 적용 미완료. 로컬 SHA는 commit 후 보고, GitHub/branch/worktree는 기존 표와 동일. main 병합/운영 적용은 별도 사용자 승인 대상이며 사용량 토큰/비용은 표시되지 않아 확인 불가다.
