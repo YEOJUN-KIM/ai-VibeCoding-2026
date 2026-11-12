@@ -76,11 +76,13 @@ class Config:
     daily_loss_limit: D = D('20000')  # net liquidation equity loss, KRW
     daily_order_limit: int = 10  # accepted ENTRY orders; risk exits are always allowed
     volume_participation: D = D('1')  # per executable minute, integer capacity
+    max_signal_to_fill_minutes: D = D('2')  # exclusive ENTRY age limit
 
     def validate(self):
         for name in ('initial_cash', 'volume_multiplier', 'stop_rate', 'target_rate',
                      'min_reward_risk', 'max_order_amount', 'max_symbol_amount',
-                     'max_total_investment', 'daily_loss_limit', 'volume_participation'):
+                     'max_total_investment', 'daily_loss_limit', 'volume_participation',
+                     'max_signal_to_fill_minutes'):
             _number(getattr(self, name), name, positive=True)
         for name in ('fee_rate', 'sell_tax_rate', 'slippage_rate', 'min_cash_ratio'):
             _number(getattr(self, name), name)
@@ -90,7 +92,8 @@ class Config:
         if self.vwap_mode not in {'exact', 'typical_approximation'}:
             raise ValueError('explicit VWAP mode required')
         if (self.stop_rate >= 1 or self.slippage_rate >= 1 or self.target_rate / self.stop_rate < self.min_reward_risk
-                or self.fee_rate + self.sell_tax_rate > 1 or self.min_cash_ratio > 100 or self.volume_participation > 1):
+                or self.fee_rate + self.sell_tax_rate > 1 or self.min_cash_ratio > 100 or self.volume_participation > 1
+                or self.max_signal_to_fill_minutes > 130):
             raise ValueError('invalid rate, reward/risk or participation')
 
 
@@ -229,11 +232,18 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
     days = sorted({r.event_at.date() for r in data})
     for row in data:
         batches[row.available_at].append(row)
+    max_entry_age = timedelta(minutes=float(config.max_signal_to_fill_minutes))
     for day in days:
         for hour, minute in ((9, 0), (14, 50), (15, 10)):
             batches[datetime.combine(day, time(hour, minute), KST)]
+        # Expiry advances even if no subsequent quote arrives; deadline is exclusive.
+        for offset in range(20, 150, 5):
+            signal_at = datetime.combine(day, time(9), KST) + offset * MINUTE
+            deadline = min(signal_at + max_entry_age, datetime.combine(day, time(11, 30), KST))
+            batches[deadline]
     cash = config.initial_cash
     positions, pending, history, marks = {}, {}, defaultdict(dict), {}
+    mark_events, mark_received, late_risk_symbols = {}, {}, set()
     signals, trades, reasons, failures, curve, daily = [], [], [], [], [], []
     entry_counts, order_counts = defaultdict(int), defaultdict(int)
     entered, finalized = set(), set()
@@ -248,7 +258,12 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
 
     def queue_exit(symbol, at, code, trigger=None):
         if symbol in pending and pending[symbol]['side'] == 'SELL':
-            return
+            existing = pending[symbol]
+            # Newly learned adverse information supersedes a target/liquidation order.
+            if code not in {'STOP', 'AMBIGUOUS_STOP_FIRST'} or (
+                existing['reason'] in {'STOP', 'AMBIGUOUS_STOP_FIRST'} and trigger >= existing['trigger']):
+                return
+            reason(at, symbol, 'EXIT_REPLACED_BY_STOP')
         order_counts[at.date()] += 1
         order = dict(symbol=symbol, side='SELL', at=at, reason=code,
                      quantity=positions[symbol]['quantity'], trigger=trigger)
@@ -262,6 +277,8 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
             return 'UNRESOLVED_EXPOSURE'
         if asset - baselines[at.date()] <= -config.daily_loss_limit:
             return 'DAILY_LOSS_LIMIT'
+        if late_risk_symbols:
+            return 'LATE_RISK_EXIT_PENDING'
         if symbol in positions or len(positions) >= config.max_positions:
             return 'POSITION_LIMIT'
         if not RiskPolicy.order_amount_allowed(config, cost['amount'], cost['fee']):
@@ -280,9 +297,34 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
             return 'MIN_CASH_RATIO'
         return None
 
+    def monitor_exit(row, at, *, late=False):
+        p = positions.get(row.symbol)
+        if (p is None or p['unresolved'] or p['day'] != at.date()
+                or row.event_at.date() != at.date() or row.event_at < p['entry_at'] or row.volume <= 0):
+            return
+        stop, target = row.low_price <= p['stop'], row.high_price >= p['target']
+        if stop or target:
+            if late:
+                # Historical risk is known now, but it is never current fill evidence.
+                late_risk_symbols.add(row.symbol)
+                reason(at, row.symbol, 'LATE_RISK_OBSERVATION', event_at=row.event_at)
+            if stop:
+                queue_exit(row.symbol, at, 'AMBIGUOUS_STOP_FIRST' if target else 'STOP', min(p['stop'], row.open_price))
+            else:
+                queue_exit(row.symbol, at, 'TARGET', p['target'])
+
     for at, batch in sorted(batches.items()):
         day = at.date()
         baselines.setdefault(day, equity())
+        for symbol, order in list(pending.items()):
+            if order['side'] != 'BUY':
+                continue
+            if at - order['at'] >= max_entry_age:
+                reason(at, symbol, 'ENTRY_SIGNAL_TOO_OLD', signal_at=order['at'], phase='EXPIRY')
+                pending.pop(symbol)
+            elif at.time() >= time(11, 30) or day != order['at'].date():
+                reason(at, symbol, 'ENTRY_EXPIRED', phase='EXPIRY')
+                pending.pop(symbol)
         # Timers are explicit events even when there is no market data.
         if day in days and at.time() == time(14, 50):
             for symbol, position in sorted(positions.items()):
@@ -307,8 +349,20 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
             history[row.symbol][row.event_at] = row
             if row.event_at.date() != day or at != row.event_at + MINUTE:
                 reason(at, row.symbol, 'LATE_OBSERVATION_NOT_EXECUTABLE', event_at=row.event_at)
-            elif day not in finalized and row.volume > 0 and not positions.get(row.symbol, {}).get('unresolved'):
-                marks[row.symbol] = row.close_price
+            if (row.event_at.date() == day and day not in finalized and row.volume > 0
+                    and not positions.get(row.symbol, {}).get('unresolved')):
+                if row.symbol not in mark_events or row.event_at > mark_events[row.symbol]:
+                    marks[row.symbol] = row.close_price
+                    mark_events[row.symbol], mark_received[row.symbol] = row.event_at, at
+                else:
+                    reason(at, row.symbol, 'OLDER_OBSERVATION_MARK_PRESERVED', event_at=row.event_at,
+                           mark_event_at=mark_events[row.symbol])
+
+        # Delayed risk observations are consumed at arrival, before any pending buys.
+        if day not in finalized:
+            for row in ordered:
+                if at > row.event_at + MINUTE:
+                    monitor_exit(row, at, late=True)
 
         bought_now = set()
         # Sells precede buys at the same information timestamp; symbols break ties.
@@ -364,6 +418,7 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
                 if not p['quantity']:
                     positions.pop(symbol)
                     pending.pop(symbol)
+                    late_risk_symbols.discard(symbol)
             trades.append(dict(symbol=symbol, side=order['side'], quantity=quantity,
                 signal_at=order['at'], event_at=row.event_at, execution_at=at, observed_at=row.available_at,
                 evidence_close=row.close_price, reference_price=reference, reason=order['reason'],
@@ -372,14 +427,9 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
         # Stops/targets are decisions AFTER observation; never execute on their trigger bar.
         for row in executable:
             symbol = row.symbol
-            p = positions.get(symbol)
-            if p is None or p['unresolved'] or p['day'] != day or symbol in bought_now or row.event_at < p['entry_at']:
+            if symbol in bought_now:
                 continue
-            stop, target = row.low_price <= p['stop'], row.high_price >= p['target']
-            if stop:
-                queue_exit(symbol, at, 'AMBIGUOUS_STOP_FIRST' if target else 'STOP', min(p['stop'], row.open_price))
-            elif target:
-                queue_exit(symbol, at, 'TARGET', p['target'])
+            monitor_exit(row, at)
 
         if day not in finalized:
             for symbol in symbols:
@@ -391,6 +441,9 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
                 reason(at, symbol, decision.reason, vwap=decision.vwap, previous_vwap=decision.previous_vwap,
                        range_high=decision.range_high)
                 if not decision.enter:
+                    continue
+                if any(p['unresolved'] for p in positions.values()):
+                    reason(at, symbol, 'UNRESOLVED_EXPOSURE', phase='SIGNAL')
                     continue
                 if (symbol, day) in entered or symbol in pending or symbol in positions:
                     reason(at, symbol, 'ALREADY_ENTERED_OR_PENDING')
@@ -428,7 +481,12 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
             slippage=sum((t['slippage'] for t in trades), D(0)), filled_orders=len(trades),
             open_positions={s:p['quantity'] for s,p in positions.items()},
             unresolved_quantities={s:p['quantity'] for s,p in positions.items() if p['unresolved']},
+            overnight_gap_exposure_unmodeled=any(p['unresolved'] for p in positions.values()),
+            frozen_valuation_symbols=sorted(s for s,p in positions.items() if p['unresolved']),
             entry_orders=sum(entry_counts.values()), total_orders=sum(order_counts.values()),
             status='UNLIQUIDATED' if positions else 'FLAT'),
-        positions=positions, signals=signals, trades=trades, reasons=reasons,
+        positions=positions,
+        valuation_marks={s:dict(price=marks[s], event_at=mark_events[s], observed_at=mark_received[s],
+                               frozen=p['unresolved']) for s,p in positions.items()},
+        signals=signals, trades=trades, reasons=reasons,
         failures=failures, equity_curve=curve, daily_results=daily)
