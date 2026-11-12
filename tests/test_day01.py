@@ -1,13 +1,38 @@
 """Synthetic-only DAY-01 tests; imports do not load settings, DB or brokers."""
 import unittest
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal as D
 
 from auto_trader.ml.day01 import (
-    Candle, Config, KST, aggregate_five_minutes, evaluate_entry,
+    Candle, Config as DefaultConfig, OpenQuote, KST, aggregate_five_minutes, evaluate_entry,
     execution_costs, replay, select_universe,
 )
+
+
+@dataclass(frozen=True)
+class Config(DefaultConfig):
+    """The original 45 regression cases explicitly exercise legacy close semantics."""
+    execution: str = 'legacy_close'
+
+
+def run_legacy_review():
+    """Run all 79 untouched Claude assertions with ONLY the mode made explicit.
+
+    Reproduce: python -B -c "import sys; sys.path.insert(0,'tests');
+    from test_day01 import run_legacy_review; run_legacy_review()"
+    No production defaults, assertions, expected-failure flags or test discovery change.
+    """
+    import test_day01_review as review
+    original_config = review.Config
+    try:
+        review.Config = Config
+        result = unittest.TextTestRunner(verbosity=1).run(
+            unittest.defaultTestLoader.loadTestsFromModule(review))
+    finally:
+        review.Config = original_config
+    if not result.wasSuccessful():
+        raise SystemExit(1)
 
 
 def minute(index, price='100', *, day=12, symbol='AAA', volume='100', **changes):
@@ -21,6 +46,195 @@ def scenario(*, day=12, symbol='AAA'):
     # Complete opening range, then a higher-volume rising-VWAP breakout at 09:20.
     return [minute(i, day=day, symbol=symbol) for i in range(15)] + [
         minute(i, '102', day=day, symbol=symbol, volume='200') for i in range(15, 20)]
+
+
+def quote(index, price='102', volume='100', *, symbol='AAA', day=12, **changes):
+    at = minute(index,day=day).event_at
+    return replace(OpenQuote(symbol,at,at,D(price),D(volume)),**changes)
+
+
+class NextOpenTests(unittest.TestCase):
+    """Default-mode tests use explicit open-time observations, never future candle volume."""
+
+    def run_open(self, rows=None, quotes=(), **settings):
+        return replay(scenario() if rows is None else rows, replace(DefaultConfig(),**settings),
+                      universe=['AAA'],open_quotes=quotes)
+
+    def test_default_candle_only_is_explicitly_unfilled(self):
+        r = self.run_open(scenario()+[minute(20,'102'),minute(350,'103')])
+        self.assertEqual(DefaultConfig().execution,'next_open')
+        self.assertEqual(r['trades'],[])
+        self.assertEqual(r['summary']['open_quote_fills'],0)
+        self.assertTrue(r['execution_evidence']['missing_open_quotes'])
+        self.assertEqual(r['execution_evidence']['source'],'explicit_open_quote')
+        self.assertIn('NO_EXECUTABLE_OPEN_QUOTE_BEFORE_EXPIRY',[x['reason'] for x in r['reasons']])
+
+    def test_strict_later_open_physical_and_observation_times(self):
+        r = self.run_open(quotes=[quote(20,'999'),quote(21,'103')])
+        t, = r['trades']
+        self.assertEqual(t['signal_at'],minute(20).event_at)
+        self.assertEqual(t['execution_at'],minute(21).event_at)
+        self.assertEqual(t['observation_at'],t['execution_at'])
+        self.assertEqual(t['observed_at'],t['execution_at'])
+        self.assertEqual(t['event_at'],t['execution_at'])
+        self.assertEqual(t['price'],D('103.0515'))
+        self.assertEqual(t['price_source'],'OPEN_QUOTE')
+        self.assertEqual(r['summary']['open_quote_fills'],1)
+        self.assertEqual(r['summary']['legacy_close_fills'],0)
+        self.assertIsNone(t['evidence_close'])
+
+    def test_future_ohlcv_cannot_reprice_or_resize_earlier_fill(self):
+        opens = [quote(21,'102',volume='6')]
+        a = self.run_open(scenario()+[minute(21,'102')],opens)
+        b = self.run_open(scenario()+[minute(21,'50',open_price=D(102),high_price=D(110),volume='0')],opens)
+        cutoff = minute(22).event_at
+        self.assertEqual(a['trades'],b['trades'])
+        self.assertEqual(a['trades'][0]['quantity'],6)
+        self.assertEqual([p for p in a['equity_curve'] if p['at']<cutoff],
+                         [p for p in b['equity_curve'] if p['at']<cutoff])
+
+    def test_entry_minute_completed_dual_hit_is_monitored(self):
+        own_bar = minute(21,'102',low_price=D(99),high_price=D(106))
+        r = self.run_open(scenario()+[own_bar],[quote(21),quote(22),quote(23,'90')])
+        self.assertEqual([t['side'] for t in r['trades']],['BUY','SELL'])
+        sell = r['trades'][1]
+        self.assertEqual(sell['reason'],'AMBIGUOUS_STOP_FIRST')
+        self.assertEqual(sell['signal_at'],minute(22).event_at)
+        self.assertEqual(sell['execution_at'],minute(23).event_at)
+        self.assertEqual(sell['reference_price'],D(90))
+        self.assertEqual(sell['price'],D('89.9550'))
+
+    def test_open_gap_trigger_cannot_fill_same_open(self):
+        r = self.run_open(quotes=[quote(21),quote(22,'90'),quote(23,'89')])
+        sell = r['trades'][1]
+        self.assertEqual(sell['signal_at'],minute(22).event_at)
+        self.assertEqual(sell['execution_at'],minute(23).event_at)
+        self.assertEqual(sell['reference_price'],D(89))
+
+    def test_existing_target_order_uses_actual_later_open(self):
+        r = self.run_open(scenario()+[minute(21,'105',open_price=D(102),low_price=D(102))],
+                          [quote(21),quote(23,'110')])
+        sell = r['trades'][1]
+        self.assertEqual(sell['signal_at'],minute(22).event_at)
+        self.assertEqual(sell['reason'],'TARGET')
+        self.assertEqual(sell['reference_price'],D(110))
+
+    def test_expiry_before_quote_at_exact_deadline(self):
+        r = self.run_open(quotes=[quote(22)])
+        self.assertEqual(r['trades'],[])
+        self.assertTrue(any(x['reason']=='ENTRY_SIGNAL_TOO_OLD' and x['at']==minute(22).event_at for x in r['reasons']))
+
+    def test_delayed_open_never_backdates_a_fill(self):
+        q = quote(21,available_at=minute(21).event_at+timedelta(seconds=1))
+        r = self.run_open(quotes=[q])
+        self.assertEqual(r['trades'],[])
+        self.assertEqual(r['execution_evidence']['late_open_quotes'],1)
+        self.assertTrue(any(x['reason']=='LATE_OPEN_QUOTE_NOT_EXECUTABLE' and x['at']==q.available_at for x in r['reasons']))
+
+    def test_zero_and_subunit_capacity_do_not_fill(self):
+        for capacity in ('0','0.9'):
+            r = self.run_open(quotes=[quote(21,volume=capacity)])
+            self.assertEqual(r['trades'],[])
+            self.assertIn('NO_EXECUTABLE_CAPACITY',[x['reason'] for x in r['reasons']])
+
+    def test_partial_entry_and_exit_capacity_is_causal(self):
+        r = self.run_open(quotes=[quote(21,volume='9'),quote(351,'103',volume='3')],volume_participation=D('0.5'))
+        self.assertEqual([t['quantity'] for t in r['trades']],[4,1])
+        self.assertEqual(r['summary']['unresolved_quantities'],{'AAA':3})
+        self.assertIn('ENTRY_REMAINDER_CANCELLED',[x['reason'] for x in r['reasons']])
+        self.assertEqual(r['summary']['total_orders'],2)
+        self.assertNotEqual(r['summary']['net_profit'],D(0))
+
+    def test_1450_timer_requires_later_open_and_costed_pnl(self):
+        r = self.run_open(quotes=[quote(21),quote(350,'103'),quote(351,'103')])
+        self.assertEqual([t['execution_at'] for t in r['trades']],[minute(21).event_at,minute(351).event_at])
+        self.assertEqual(r['trades'][1]['signal_at'],minute(350).event_at)
+        self.assertEqual(r['summary']['status'],'FLAT')
+        self.assertEqual(r['summary']['net_profit'],D('6.9750'))
+        self.assertEqual(r['summary']['realized_profit'],D('6.9750'))
+
+    def test_1509_allowed_and_1510_freezes_before_quotes(self):
+        allowed = self.run_open(quotes=[quote(21),quote(369,'103')])
+        self.assertEqual(allowed['summary']['status'],'FLAT')
+        frozen = self.run_open(quotes=[quote(21),quote(370,'1')])
+        self.assertEqual(len(frozen['trades']),1)
+        self.assertEqual(frozen['summary']['unresolved_quantities'],{'AAA':10})
+        self.assertTrue(frozen['summary']['overnight_gap_exposure_unmodeled'])
+        self.assertEqual(frozen['valuation_marks']['AAA']['price'],D(102))
+
+    def test_all_simultaneous_opens_mark_before_fill_risk(self):
+        rows = scenario()+scenario(symbol='BBB')
+        opens = [quote(21),quote(22,'50'),quote(22,symbol='BBB')]
+        r = replay(rows,replace(DefaultConfig(),max_signal_to_fill_minutes=D(3),daily_loss_limit=D(300)),
+                   universe=['BBB','AAA'],open_quotes=opens)
+        self.assertEqual([t['symbol'] for t in r['trades']],['AAA'])
+        self.assertTrue(any(x['symbol']=='BBB' and x['reason']=='DAILY_LOSS_LIMIT' and x.get('phase')=='FILL' for x in r['reasons']))
+
+    def test_same_time_completed_crash_does_not_retro_reject_open_fill(self):
+        crash = minute(21,'50',open_price=D(102),high_price=D(102))
+        r = replay(scenario()+scenario(symbol='BBB')+[crash],
+                   replace(DefaultConfig(),max_signal_to_fill_minutes=D(3),daily_loss_limit=D(300)),
+                   universe=['AAA','BBB'],open_quotes=[quote(21),quote(22,symbol='BBB')])
+        self.assertEqual([t['symbol'] for t in r['trades']],['AAA','BBB'])
+        self.assertEqual(r['trades'][1]['execution_at'],crash.available_at)
+        self.assertTrue(any(s['reason']=='STOP' and s['at']==crash.available_at for s in r['signals']))
+
+    def test_equal_event_completed_candle_supersedes_open_mark(self):
+        crash = minute(21,'90',open_price=D(102),high_price=D(102))
+        r = self.run_open(scenario()+[crash],[quote(21)])
+        self.assertEqual(r['valuation_marks']['AAA']['price'],D(90))
+        self.assertEqual(r['valuation_marks']['AAA']['observed_at'],minute(22).event_at)
+
+    def test_older_candle_cannot_overwrite_newer_open(self):
+        crash = minute(21,'90',open_price=D(102),high_price=D(102))
+        r = self.run_open(scenario()+[crash],[quote(21),quote(22,'103')])
+        self.assertEqual(r['valuation_marks']['AAA']['price'],D(103))
+        self.assertEqual(r['valuation_marks']['AAA']['event_at'],minute(22).event_at)
+        self.assertTrue(any(s['reason']=='STOP' for s in r['signals']))
+
+    def test_candle_open_mismatch_logs_without_rewriting_fill(self):
+        rows = scenario()+[minute(21,'104')]
+        r = self.run_open(rows,[quote(21,'102')])
+        self.assertEqual(r['trades'][0]['price'],D('102.0510'))
+        self.assertIn('OPEN_CANDLE_PRICE_MISMATCH',[x['reason'] for x in r['reasons']])
+
+    def test_open_quote_validation_duplicates_and_conflicts(self):
+        good = quote(21)
+        for bad in (replace(good,price=D('NaN')),replace(good,price=D(0)),
+                    replace(good,executable_volume=D(-1)),replace(good,executable_volume=D('Infinity')),
+                    replace(good,price=102.0),replace(good,available_at=good.event_at-timedelta(seconds=1)),
+                    replace(good,event_at=good.event_at.replace(tzinfo=None)),
+                    replace(good,event_at=good.event_at+timedelta(seconds=1)),quote(-1),quote(390)):
+            with self.subTest(bad=bad),self.assertRaises(ValueError):
+                self.run_open(quotes=[bad])
+        for second in (good,replace(good,price=D(99))):
+            with self.assertRaises(ValueError):
+                self.run_open(quotes=[good,second])
+
+    def test_utc_quotes_and_input_order_are_deterministic(self):
+        opens = [quote(21),quote(351,'103')]
+        utc = [replace(q,event_at=q.event_at.astimezone(timezone.utc),available_at=q.available_at.astimezone(timezone.utc)) for q in opens]
+        a = self.run_open(quotes=opens)
+        b = self.run_open(list(reversed(scenario())),list(reversed(utc)))
+        self.assertEqual(a,b)
+
+    def test_outside_universe_ignored_before_quote_validation(self):
+        a = self.run_open(quotes=[quote(21)])
+        b = self.run_open(quotes=[quote(21),quote(21,symbol='ZZZ',price='-1')])
+        self.assertEqual(a,b)
+
+    def test_legacy_rejects_quotes_and_unknown_mode_rejected(self):
+        with self.assertRaises(ValueError):
+            self.run_open(quotes=[quote(21)],execution='legacy_close')
+        with self.assertRaises(ValueError):
+            self.run_open(execution='next_magic')
+
+    def test_next_day_unresolved_stays_frozen_and_blocked(self):
+        r = self.run_open(scenario()+scenario(day=13),[quote(21),quote(21,'1',day=13)])
+        self.assertEqual(len(r['trades']),1)
+        self.assertEqual(r['daily_results'][1]['net_change'],D(0))
+        self.assertTrue(r['summary']['overnight_gap_exposure_unmodeled'])
+        self.assertEqual(r['valuation_marks']['AAA']['price'],D(102))
 
 
 class Day01Tests(unittest.TestCase):

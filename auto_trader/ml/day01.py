@@ -57,7 +57,29 @@ class Candle:
 
 
 @dataclass(frozen=True)
+class OpenQuote:
+    """Synthetic minute-open snapshot; volume is capacity KNOWN at snapshot time."""
+    symbol: str
+    event_at: datetime
+    available_at: datetime
+    price: D
+    executable_volume: D
+
+    def validate(self):
+        if not isinstance(self.symbol, str) or not self.symbol or self.symbol != self.symbol.strip().upper():
+            raise ValueError('symbol must be nonempty normalized text')
+        event, available = _aware(self.event_at), _aware(self.available_at)
+        if event.second or event.microsecond or not time(9) <= event.time() < time(15, 30):
+            raise ValueError('aligned KST session minute-open required')
+        if available < event:
+            raise ValueError('open quote cannot arrive before its event')
+        _number(self.price, 'price', positive=True)
+        _number(self.executable_volume, 'executable_volume')
+
+
+@dataclass(frozen=True)
 class Config:
+    execution: str = 'next_open'
     initial_cash: D = D('1000000')
     order_quantity: int = 10
     volume_multiplier: D = D('1.2')
@@ -79,6 +101,8 @@ class Config:
     max_signal_to_fill_minutes: D = D('2')  # exclusive ENTRY age limit
 
     def validate(self):
+        if self.execution not in {'next_open', 'legacy_close'}:
+            raise ValueError('execution must be next_open or legacy_close')
         for name in ('initial_cash', 'volume_multiplier', 'stop_rate', 'target_rate',
                      'min_reward_risk', 'max_order_amount', 'max_symbol_amount',
                      'max_total_investment', 'daily_loss_limit', 'volume_participation',
@@ -220,7 +244,8 @@ def execution_costs(reference: D, quantity: int, side: str, config: Config) -> d
                 cash_delta=-amount-fee if side == 'BUY' else amount-fee-tax)
 
 
-def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Iterable[str]) -> dict:
+def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Iterable[str],
+           open_quotes: Iterable[OpenQuote] = ()) -> dict:
     """Deterministic availability-clock simulation; returns Decimal/datetime values."""
     config.validate()
     symbols = select_universe(universe)
@@ -228,10 +253,27 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
     data = _validated(r for r in rows if r.symbol in symbols)
     if not data:
         raise ValueError('no selected candles')
+    quotes, quote_keys = [], set()
+    for quote in open_quotes:
+        if quote.symbol not in symbols:
+            continue
+        quote.validate()
+        quote = replace(quote, event_at=_aware(quote.event_at), available_at=_aware(quote.available_at))
+        key = quote.symbol, quote.event_at
+        if key in quote_keys:
+            raise ValueError('duplicate symbol/open event (including conflicts)')
+        quote_keys.add(key)
+        quotes.append(quote)
+    if config.execution == 'legacy_close' and quotes:
+        raise ValueError('legacy_close does not accept selected open_quotes')
+    quotes_at, quote_history = defaultdict(list), {}
     batches = defaultdict(list)
-    days = sorted({r.event_at.date() for r in data})
+    days = sorted({r.event_at.date() for r in data} | {q.event_at.date() for q in quotes})
     for row in data:
         batches[row.available_at].append(row)
+    for quote in quotes:
+        quotes_at[quote.available_at].append(quote)
+        batches[quote.available_at]
     max_entry_age = timedelta(minutes=float(config.max_signal_to_fill_minutes))
     for day in days:
         for hour, minute in ((9, 0), (14, 50), (15, 10)):
@@ -244,6 +286,7 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
     cash = config.initial_cash
     positions, pending, history, marks = {}, {}, defaultdict(dict), {}
     mark_events, mark_received, late_risk_symbols = {}, {}, set()
+    mark_types = {}
     signals, trades, reasons, failures, curve, daily = [], [], [], [], [], []
     entry_counts, order_counts = defaultdict(int), defaultdict(int)
     entered, finalized = set(), set()
@@ -313,6 +356,84 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
             else:
                 queue_exit(row.symbol, at, 'TARGET', p['target'])
 
+    def mark(symbol, event_at, at, price, kind):
+        if at.date() in finalized or positions.get(symbol, {}).get('unresolved') or event_at.date() != at.date():
+            return
+        if (symbol not in mark_events or event_at > mark_events[symbol]
+                or (event_at == mark_events[symbol] and kind == 'COMPLETED_CANDLE' and mark_types[symbol] == 'OPEN_QUOTE')):
+            marks[symbol], mark_events[symbol], mark_received[symbol] = price, event_at, at
+            mark_types[symbol] = kind
+        else:
+            reason(at, symbol, 'OLDER_OBSERVATION_MARK_PRESERVED', event_at=event_at,
+                   mark_event_at=mark_events[symbol])
+
+    def fill(symbol, at, event_at, reference, capacity, evidence_close, price_source, bar_open=None):
+        nonlocal cash
+        order = pending[symbol]
+        if order['side'] == 'BUY' and not time(9, 20) <= at.time() < time(11, 30):
+            reason(at, symbol, 'ENTRY_EXPIRED')
+            pending.pop(symbol)
+            return False
+        quantity = min(order['quantity'], int(capacity * config.volume_participation))
+        if quantity <= 0:
+            reason(at, symbol, 'NO_EXECUTABLE_CAPACITY')
+            return False
+        if order['side'] == 'SELL':
+            if positions[symbol]['unresolved']:
+                return False
+            if config.execution == 'legacy_close':
+                if order['reason'] in {'STOP', 'AMBIGUOUS_STOP_FIRST'}:
+                    reference = min(reference, bar_open, order['trigger'])
+                elif order['reason'] == 'TARGET':
+                    reference = min(reference, order['trigger'])
+        else:
+            breach = risk(at, symbol, reference, quantity)
+            if breach:
+                reason(at, symbol, breach, phase='FILL')
+                pending.pop(symbol)
+                return False
+        cost = execution_costs(reference, quantity, order['side'], config)
+        cash += cost['cash_delta']
+        realized = None
+        buying = order['side'] == 'BUY'
+        if buying:
+            positions[symbol] = dict(quantity=quantity, entry_price=cost['price'],
+                cost_basis=-cost['cash_delta'], day=at.date(), entry_at=at,
+                stop=cost['price'] * (1-config.stop_rate), target=cost['price'] * (1+config.target_rate), unresolved=False)
+            pending.pop(symbol)
+            if quantity < order['quantity']:
+                reason(at, symbol, 'ENTRY_REMAINDER_CANCELLED', quantity=order['quantity']-quantity)
+        else:
+            p = positions[symbol]
+            basis = p['cost_basis'] * quantity / p['quantity']
+            realized = cost['cash_delta'] - basis
+            p['quantity'] -= quantity
+            p['cost_basis'] -= basis
+            order['quantity'] -= quantity
+            if not p['quantity']:
+                positions.pop(symbol)
+                pending.pop(symbol)
+                late_risk_symbols.discard(symbol)
+        trades.append(dict(symbol=symbol, side=order['side'], quantity=quantity,
+            signal_at=order['at'], decision_at=order['at'], event_at=event_at,
+            execution_at=at, observed_at=at, observation_at=at, price_source=price_source,
+            evidence_close=evidence_close,
+            reference_price=reference, reason=order['reason'], realized_profit=realized, **cost))
+        return buying
+
+    def observe_open_risk(quote, at, late=False):
+        p = positions.get(quote.symbol)
+        if (not p or p['unresolved'] or p['day'] != at.date() or quote.event_at.date() != at.date()
+                or quote.event_at <= p['entry_at'] or quote.executable_volume <= 0):
+            return
+        stop, target = quote.price <= p['stop'], quote.price >= p['target']
+        if stop or target:
+            if late:
+                late_risk_symbols.add(quote.symbol)
+                reason(at, quote.symbol, 'LATE_RISK_OBSERVATION', event_at=quote.event_at)
+            queue_exit(quote.symbol, at, 'STOP' if stop else 'TARGET',
+                       min(p['stop'], quote.price) if stop else p['target'])
+
     for at, batch in sorted(batches.items()):
         day = at.date()
         baselines.setdefault(day, equity())
@@ -320,6 +441,8 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
             if order['side'] != 'BUY':
                 continue
             if at - order['at'] >= max_entry_age:
+                if config.execution == 'next_open':
+                    reason(at, symbol, 'NO_EXECUTABLE_OPEN_QUOTE_BEFORE_EXPIRY', signal_at=order['at'])
                 reason(at, symbol, 'ENTRY_SIGNAL_TOO_OLD', signal_at=order['at'], phase='EXPIRY')
                 pending.pop(symbol)
             elif at.time() >= time(11, 30) or day != order['at'].date():
@@ -339,26 +462,53 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
                     reason(at, symbol, failure['reason'], quantity=position['quantity'])
             for symbol, order in list(pending.items()):
                 if order['at'].date() == day:
+                    if config.execution == 'next_open':
+                        reason(at, symbol, 'NO_EXECUTABLE_OPEN_QUOTE_BEFORE_DEADLINE', side=order['side'])
                     reason(at, symbol, 'UNFILLED_ORDER_AT_1510', quantity=order['quantity'], side=order['side'])
                     pending.pop(symbol)
             finalized.add(day)
 
+        # Phase 1: clocks above; phase 2: only information physically received at open.
+        incoming_quotes = sorted(quotes_at[at], key=lambda q: (q.symbol, q.event_at))
+        for quote in incoming_quotes:
+            quote_history[quote.symbol, quote.event_at] = quote
+            known_candle = history[quote.symbol].get(quote.event_at)
+            if known_candle is not None and quote.price != known_candle.open_price:
+                reason(at, quote.symbol, 'OPEN_CANDLE_PRICE_MISMATCH', event_at=quote.event_at,
+                       quote_price=quote.price, candle_open=known_candle.open_price)
+            if quote.available_at != quote.event_at:
+                reason(at, quote.symbol, 'LATE_OPEN_QUOTE_NOT_EXECUTABLE', event_at=quote.event_at)
+            if quote.executable_volume > 0:
+                mark(quote.symbol, quote.event_at, at, quote.price, 'OPEN_QUOTE')
+        for quote in incoming_quotes:
+            if quote.available_at > quote.event_at:
+                observe_open_risk(quote, at, late=True)
+        fresh_quotes = [q for q in incoming_quotes if q.event_at == at and day not in finalized]
+        fresh_quotes.sort(key=lambda q: (pending.get(q.symbol, {}).get('side') != 'SELL', q.symbol))
+        for quote in fresh_quotes:
+            order = pending.get(quote.symbol)
+            if order is not None and order['at'].date() == day and order['at'] < quote.event_at:
+                fill(quote.symbol, at, quote.event_at, quote.price, quote.executable_volume, None, 'OPEN_QUOTE')
+        # An open can reveal a new gap trigger, but that new order cannot fill this open.
+        for quote in fresh_quotes:
+            observe_open_risk(quote, at)
+
+        # Phase 3: completed candles arriving now cannot influence phase-2 fills.
         ordered = sorted(batch, key=lambda r: (r.symbol, r.event_at))
         # First consume all known observations/marks before account-wide risk checks.
         for row in ordered:
             history[row.symbol][row.event_at] = row
+            opening_quote = quote_history.get((row.symbol, row.event_at))
+            if opening_quote is not None and opening_quote.price != row.open_price:
+                reason(at, row.symbol, 'OPEN_CANDLE_PRICE_MISMATCH', event_at=row.event_at,
+                       quote_price=opening_quote.price, candle_open=row.open_price)
             if row.event_at.date() != day or at != row.event_at + MINUTE:
                 reason(at, row.symbol, 'LATE_OBSERVATION_NOT_EXECUTABLE', event_at=row.event_at)
             if (row.event_at.date() == day and day not in finalized and row.volume > 0
                     and not positions.get(row.symbol, {}).get('unresolved')):
-                if row.symbol not in mark_events or row.event_at > mark_events[row.symbol]:
-                    marks[row.symbol] = row.close_price
-                    mark_events[row.symbol], mark_received[row.symbol] = row.event_at, at
-                else:
-                    reason(at, row.symbol, 'OLDER_OBSERVATION_MARK_PRESERVED', event_at=row.event_at,
-                           mark_event_at=mark_events[row.symbol])
+                mark(row.symbol, row.event_at, at, row.close_price, 'COMPLETED_CANDLE')
 
-        # Delayed risk observations are consumed at arrival, before any pending buys.
+        # Delayed candle risk precedes legacy fills; next-open fills already used phase 2.
         if day not in finalized:
             for row in ordered:
                 if at > row.event_at + MINUTE:
@@ -370,59 +520,15 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
                       and r.volume > 0 and day not in finalized]
         executable.sort(key=lambda r: (pending.get(r.symbol, {}).get('side') != 'SELL', r.symbol))
         for row in executable:
+            if config.execution != 'legacy_close':
+                continue
             symbol = row.symbol
             order = pending.get(symbol)
             if order is None or order['at'].date() != day or row.event_at < order['at']:
                 continue
-            if order['side'] == 'BUY' and not time(9, 20) <= at.time() < time(11, 30):
-                reason(at, symbol, 'ENTRY_EXPIRED')
-                pending.pop(symbol)
-                continue
-            quantity = min(order['quantity'], int(row.volume * config.volume_participation))
-            if quantity <= 0:
-                reason(at, symbol, 'NO_EXECUTABLE_CAPACITY')
-                continue
-            reference = row.close_price
-            if order['side'] == 'SELL':
-                if positions[symbol]['unresolved']:
-                    continue
-                # Adverse stop/target proxy: no favorable rebound after an observed trigger.
-                if order['reason'] in {'STOP', 'AMBIGUOUS_STOP_FIRST'}:
-                    reference = min(reference, row.open_price, order['trigger'])
-                elif order['reason'] == 'TARGET':
-                    reference = min(reference, order['trigger'])
-            else:
-                breach = risk(at, symbol, reference, quantity)
-                if breach:
-                    reason(at, symbol, breach, phase='FILL')
-                    pending.pop(symbol)
-                    continue
-            cost = execution_costs(reference, quantity, order['side'], config)
-            cash += cost['cash_delta']
-            realized = None
-            if order['side'] == 'BUY':
-                positions[symbol] = dict(quantity=quantity, entry_price=cost['price'],
-                    cost_basis=-cost['cash_delta'], day=day, entry_at=at,
-                    stop=cost['price'] * (1-config.stop_rate), target=cost['price'] * (1+config.target_rate), unresolved=False)
+            if fill(symbol, at, row.event_at, row.close_price, row.volume,
+                    row.close_price, 'LEGACY_CLOSE_PROXY', row.open_price):
                 bought_now.add(symbol)
-                pending.pop(symbol)
-                if quantity < order['quantity']:
-                    reason(at, symbol, 'ENTRY_REMAINDER_CANCELLED', quantity=order['quantity']-quantity)
-            else:
-                p = positions[symbol]
-                basis = p['cost_basis'] * quantity / p['quantity']
-                realized = cost['cash_delta'] - basis
-                p['quantity'] -= quantity
-                p['cost_basis'] -= basis
-                order['quantity'] -= quantity
-                if not p['quantity']:
-                    positions.pop(symbol)
-                    pending.pop(symbol)
-                    late_risk_symbols.discard(symbol)
-            trades.append(dict(symbol=symbol, side=order['side'], quantity=quantity,
-                signal_at=order['at'], event_at=row.event_at, execution_at=at, observed_at=row.available_at,
-                evidence_close=row.close_price, reference_price=reference, reason=order['reason'],
-                realized_profit=realized, **cost))
 
         # Stops/targets are decisions AFTER observation; never execute on their trigger bar.
         for row in executable:
@@ -473,12 +579,21 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
                               unresolved_quantities={s:p['quantity'] for s,p in positions.items() if p['unresolved']}))
 
     return dict(config=config, universe=symbols, vwap_mode=config.vwap_mode,
-        execution_model='later_on_time_1m_close_with_adverse_trigger_proxy',
+        execution_model=('causal_next_1m_open_quote' if config.execution == 'next_open'
+                         else 'later_on_time_1m_close_with_adverse_trigger_proxy'),
+        execution_evidence=dict(source=('explicit_open_quote' if config.execution == 'next_open' else 'completed_candle'),
+            supplied_open_quotes=len(quotes), on_time_open_quotes=sum(q.available_at == q.event_at for q in quotes),
+            late_open_quotes=sum(q.available_at > q.event_at for q in quotes),
+            zero_or_subunit_capacity_quotes=sum(int(q.executable_volume * config.volume_participation) < 1 for q in quotes),
+            missing_open_quotes=config.execution == 'next_open' and not quotes,
+            capacity_source=('open_quote_executable_volume' if config.execution == 'next_open' else 'completed_minute_volume')),
         summary=dict(cash=cash, net_liquidation_equity=equity(),
             net_profit=equity()-config.initial_cash,
             realized_profit=sum((t['realized_profit'] for t in trades if t['realized_profit'] is not None), D(0)),
             fees=sum((t['fee'] for t in trades), D(0)), taxes=sum((t['tax'] for t in trades), D(0)),
             slippage=sum((t['slippage'] for t in trades), D(0)), filled_orders=len(trades),
+            open_quote_fills=sum(t['price_source'] == 'OPEN_QUOTE' for t in trades),
+            legacy_close_fills=sum(t['price_source'] == 'LEGACY_CLOSE_PROXY' for t in trades),
             open_positions={s:p['quantity'] for s,p in positions.items()},
             unresolved_quantities={s:p['quantity'] for s,p in positions.items() if p['unresolved']},
             overnight_gap_exposure_unmodeled=any(p['unresolved'] for p in positions.values()),
@@ -487,6 +602,8 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
             status='UNLIQUIDATED' if positions else 'FLAT'),
         positions=positions,
         valuation_marks={s:dict(price=marks[s], event_at=mark_events[s], observed_at=mark_received[s],
-                               frozen=p['unresolved']) for s,p in positions.items()},
+                               frozen=p['unresolved'],
+                               **({'price_source':mark_types[s]} if config.execution == 'next_open' else {}))
+                         for s,p in positions.items()},
         signals=signals, trades=trades, reasons=reasons,
         failures=failures, equity_curve=curve, daily_results=daily)
