@@ -134,3 +134,110 @@
 - 정확 VWAP 모드에서 거래량 0 분봉의 turnover 누락은 그날 신호를 차단한다(보수적).
 - 기존 MA/PAPER/백테스트 실행 회귀는 `settings`/DB import 경로 때문에 실행하지 않았다. `git diff origin/main..HEAD`의 변경 경로는 신규 7개 파일뿐이다(기존 파일 수정 없음).
 - 실제 시장 데이터, PAPER/LIVE, 운영 환경, 사용자 동작 검증은 수행하지 않았다.
+
+## 6. next-open 개선 검증 준비 (2회차 이후 신규 작업, 진행 중)
+
+작업 기록: [20261112-Claude-DAY01-next-open-review](../plans/ai-tasks/20261112-Claude-DAY01-next-open-review.md). 이 절은 구현 인계 전의 **요구사항·회귀 설계**이며 구현 검증 결과가 아니다. 5절은 직전 close-proxy 모델의 최종 결과로 유지한다.
+
+### 6.1 인과성 요구사항 (Codex 계약안에 대한 독립 비평 요지)
+
+아래 A~H는 코디네이터로 전달한 원문이며, 구현 인계 후 항목별로 테스트한다.
+
+```text
+Claude critique of next-open contract (accept core; these are requirements/edge cases, I will test each):
+A (top risk) ENTRY-BAR RANGE: legacy skipped the fill bar's own low/high because fill was at its close. With OPEN fill the fill bar's range happens AFTER entry. Stop/target monitoring must include the bar whose event_at == fill open (observed at its available_at), dual-hit STOP-first; exit then queues for the next later open (strictly > signal_at). Ignoring it = optimistic. Test: entry open 102.051, same bar low<stop => STOP signal at bar available_at, exit at following open.
+B ABSENT QUOTES: default mode yields zero fills on completed-candle-only data: acceptable only if documented in spec/result (summary should count fills by price_source, open_quote_fills, rejected/late quotes) and never invent capacity. If an optional modeled mode is added it must be a separately named execution value (e.g. modeled_candle_open), off by default, result echoes execution_model + list of hindsight used. Causal capacity proxy there: participation x volume of already-known completed on-time bars (trailing min/avg at signal time), NOT the fill bar's volume; fill-bar existence/volume>0 is hindsight and must be named. Late candle => no fill, no backdating.
+C TIE ORDER: quotes at T before candles arriving at T (agreed). Also expiry/freeze timers at T run BEFORE quotes at T (deadline exclusive: quote exactly at signal+2min must not fill; 15:10 quote must not fill; 15:09 quote may, even though its candle is observed 15:10). Define and test both. Marks: a quote is a valid same-day mark (event_at-keyed high-water); on equal event_at the completed candle (later info) should win; older candle must not overwrite newer quote.
+D QUOTE VALIDATION: price finite Decimal>0, executable_volume finite Decimal>=0, aware tz, second==0, session [09:00,15:30), duplicate (symbol,event_at) ValueError, available_at<event_at ValueError, available_at>event_at => reason LATE_OPEN_QUOTE_NOT_EXECUTABLE (not exception, never fills, may still be recorded), out-of-universe ignored without validation (same as candles). available_at==event_at exact equality: state it (no tolerance) and that real feeds therefore rarely qualify.
+E CAPACITY: floor(executable_volume*participation); <1 => NO_EXECUTABLE_CAPACITY, order stays queued until expiry (entry) / 15:10 (exit); partial entry remainder cancelled with reason; exit remainder keeps queue; quantity never exceeds ordered. Quote price used as reference; adverse slippage/fee/tax unchanged; no synthetic min/caps (agree). Fill risk checks use marks before T plus all same-time opens, sells before buys then symbol order; BUY at T reduces cash/exposure seen by later BUY at T.
+F PRESERVE ROUND-2 SEMANTICS in new mode: late candle risk still arrives via candles (monitor_exit late), LATE_RISK_EXIT_PENDING blocks fills/signals, stop supersedes pending target/liquidation, unresolved freeze flags, valuation_marks. Trades need price_source plus signal_at/event_at(open time)/observed_at(=available_at)/execution_at; evidence_close should not be silently None-confused (use separate field or explicit None).
+G LEGACY: Config.execution default next_open, legacy_close preserved with identical outputs (I will pin execution='legacy_close' in my existing helper without weakening assertions and add new default tests). Config validation: unknown execution rejected, open_quotes with legacy mode ignored or rejected (pick one, document).
+H Consistency check: when the completed candle for a minute with a quote arrives and quote price lies outside [low,high], record a mismatch reason (no retroactive change to the fill).
+SAFE REGRESSION (my disposable runner, outside repo; proposal): python -B <scratchpad>/safe_runner.py <worktree> tests.test_ml_backtest tests.test_strategy_engine tests.test_paper_management tests.test_paper_feed ; it blocks socket/psycopg connects (only ephemeral loopback allowed for asyncio), refuses if .env exists, strips POSTGRES_/TOSS_ env, blocks .env* reads and .paper-history, excludes 1 journal-writing test, engine logic unmocked. Verified now: 55 tests OK on this branch (12 backtest+31-1 strategy+paper_management+paper_feed). Not runnable safely: test_paper, test_ml_backtest_selection, data_pipeline etc (setUp needs real DB). Dependency: psycopg must import (paper/risk/backtest import it, no connection); settings reads .env at import (absent here, runner refuses otherwise). Your '124' count is not reproduced by this set; tell me the exact module list if you want that count.
+```
+
+### 6.2 안전한 최소 기존 회귀 (격리 실행기)
+
+기존 `backtest`, `strategy`, `paper`는 import 시 `settings`(→ `.env` 존재 시 읽음)와 `psycopg`(import만, 연결 없음)에 닿는다. `ml/backtest.py`의 `ReplayBroker`는 저장을 비활성화하고 엔진의 `decision_recorder`는 기본 None이므로 `test_ml_backtest`와 `test_strategy_engine`은 DB 연결 없이 동작하도록 설계되어 있다. 정적 확인(import AST·`connect`·`.paper-history` 검색)으로 분류했다.
+
+- 실행 가능(격리 실행기 사용): `tests.test_ml_backtest`, `tests.test_strategy_engine`(1개 제외), `tests.test_paper_management`, `tests.test_paper_feed`.
+- 실행 불가(setUp에서 실제 DB 필요): `test_paper`, `test_ml_backtest_selection`, `test_ml_data_pipeline` 등. `test_strategy_engine.test_journal_survives_reset...`은 `.paper-history`에 쓰므로 제외.
+- 실행기는 저장소 밖 임시 경로에 두고 소스를 변경하지 않는다. 엔진 로직은 스텁하지 않으며 네트워크·DB 연결(ephemeral loopback 제외), `.env*` 읽기, `.paper-history` 접근, 자격증명 환경변수를 차단한다. 한계: 차단은 Python 레벨(`socket`, `psycopg.connect`, `open`)이므로 C 확장의 직접 연결은 막지 못한다(해당 경로는 `psycopg.connect` 차단으로 도달 불가).
+
+명령(실행기 파일은 아래 소스를 임시 경로에 저장해 사용):
+
+```text
+python -B <임시경로>/safe_runner.py <worktree> tests.test_ml_backtest tests.test_strategy_engine tests.test_paper_management tests.test_paper_feed
+```
+
+2026-11-12 준비 단계 실행 결과(HEAD `6408858f`): 55개 실행, 통과 55, 실패·오류 0. 이 55개는 코디네이터가 언급한 기존 124개와 같은 집합임이 확인되지 않았다.
+
+```python
+"""Disposable regression harness: unittest modules with network/DB/.env access blocked.
+
+usage: python -I safe_runner.py <repo_root> <module> [<module> ...]
+Blocks (raises AssertionError): socket connects/resolution, psycopg.connect, reading any
+'.env*' file, writing under '.paper-history'. Strips credential-like env vars. The engine code
+under test is NOT stubbed; only egress/secret paths are closed.
+"""
+import builtins, os, pathlib, socket, sys, unittest
+
+root = pathlib.Path(sys.argv[1]).resolve()
+mods = sys.argv[2:]
+sys.path.insert(0, str(root))
+os.chdir(root)
+if any(p.name == '.env' for p in root.iterdir()):
+    sys.exit('refusing: .env present in worktree')
+for k in list(os.environ):
+    if k.startswith(('POSTGRES_', 'TOSS_', 'DART_', 'OPENAI_', 'ANTHROPIC_', 'AWS_')):
+        del os.environ[k]
+os.environ.update(APP_MODE='PAPER', POSTGRES_HOST='127.0.0.1', POSTGRES_PORT='1')
+
+def blocked(*a, **k):
+    raise AssertionError('network/DB access blocked by safe_runner')
+
+_connect = socket.socket.connect
+def loopback_only(self, address, *a, **k):
+    # asyncio's self-pipe uses an ephemeral loopback port (>=49152); DB/other ports stay blocked.
+    if isinstance(address, tuple) and address[0] in ('127.0.0.1', '::1') and address[1] >= 49152:
+        return _connect(self, address, *a, **k)
+    return blocked()
+socket.socket.connect = loopback_only
+socket.socket.connect_ex = blocked
+socket.create_connection = blocked
+socket.getaddrinfo = blocked
+import psycopg  # import only; connections blocked below
+psycopg.connect = blocked
+psycopg.Connection.connect = classmethod(lambda cls, *a, **k: blocked())
+
+_open = builtins.open
+def guarded_open(file, mode='r', *a, **k):
+    name = pathlib.Path(str(file)).name if not isinstance(file, int) else ''
+    if name.startswith('.env') and name != '.env.example':
+        raise AssertionError('.env read blocked')
+    if '.paper-history' in str(file).replace('\\', '/'):
+        raise AssertionError('.paper-history access blocked')
+    return _open(file, mode, *a, **k)
+builtins.open = guarded_open
+import io
+io.open = guarded_open
+
+suite = unittest.TestSuite()
+loader = unittest.defaultTestLoader
+def flatten(s):
+    for t in s:
+        if isinstance(t, unittest.TestSuite):
+            yield from flatten(t)
+        else:
+            yield t
+skipped = []
+for m in mods:
+    for t in flatten(loader.loadTestsFromName(m)):
+        if 'journal_survives_reset' in t.id():
+            skipped.append(t.id()); continue
+        suite.addTest(t)
+print('excluded (writes .paper-history):', skipped)
+r = unittest.TextTestRunner(verbosity=1).run(suite)
+print('RAN', r.testsRun, 'FAIL', len(r.failures), 'ERR', len(r.errors), 'SKIP', len(r.skipped))
+sys.exit(not r.wasSuccessful())
+```
