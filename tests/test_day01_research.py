@@ -131,6 +131,23 @@ class InputTests(unittest.TestCase):
         self.assertEqual(research['provenance'],data.provenance)
         self.assertEqual(research['excluded_rows'][0]['reason'],'CLOSING_1530')
 
+    def test_run_input_propagates_invalid_even_after_liability_repaid(self):
+        for extra in ([],[minute(351,'150')]):
+            with self.subTest(extra=extra):
+                data = adapt_rows([raw(c) for c in scenario()+[minute(21,'150')]+extra],universe=['AAA'])
+                out = run_input(data,cfg(initial_cash=D(1100),min_cash_ratio=D(0)),
+                                universe=['AAA'],expected_session_dates=['2026-11-12'])
+                self.assertEqual(out['run_status'],'INVALID_RESOURCE_OVERRUN')
+                self.assertEqual(out['run_status'],out['result']['research_assumptions']['run_status'])
+                if extra:
+                    self.assertEqual(out['result']['research_assumptions']['non_funded_liability'],D(0))
+
+    def test_run_input_normal_status_is_preserved(self):
+        data = adapt_rows([raw(c) for c in scenario()+[minute(21,'102')]],universe=['AAA'])
+        for config in (Config(),cfg()):
+            out = run_input(data,config,universe=['AAA'],expected_session_dates=['2026-11-12'])
+            self.assertEqual(out['run_status'],'RAN')
+
 
 class EstimatedOutcomeTests(unittest.TestCase):
     def run_rows(self, rows, **changes):
@@ -265,6 +282,21 @@ class EstimatedOutcomeTests(unittest.TestCase):
         late = self.run_rows(scenario()+[minute(21,'102'),tomorrow])
         self.assertEqual(len(late['trades']),1)
         self.assertIn('UNRESOLVED_OBSERVED_AFTER_1510',[f['reason'] for f in late['failures']])
+
+    def test_unrelated_late_bars_do_not_claim_pending_outcome_provenance(self):
+        # Old event, already-timed-out candidate, post-cutoff event, and another session.
+        extra = [replace(minute(i,'102'),available_at=minute(380).event_at) for i in (40,351,371)]
+        extra += [minute(40,'102',day=13)]
+        r = self.run_rows(scenario()+[minute(21,'102')]+extra)
+        self.assertEqual(r['summary']['unresolved_quantities'],{'AAA':10})
+        self.assertEqual([f['reason'] for f in r['failures']],['UNLIQUIDATED_AT_1510'])
+
+    def test_related_pending_candidate_failure_carries_order_evidence(self):
+        r = self.run_rows(scenario()+[minute(21,'102'),minute(369,'103')])
+        failure = next(f for f in r['failures'] if f['reason']=='UNRESOLVED_OBSERVED_AFTER_1510')
+        self.assertEqual(failure['candidate_event_at'],minute(369).event_at)
+        self.assertEqual(failure['order_signal_at'],minute(350).event_at)
+        self.assertLessEqual(failure['pending_candidate_from'],failure['candidate_event_at'])
 
     def test_configured_fixed_quantity_not_participation_liquidity(self):
         r = self.run_rows(scenario()+[minute(21,volume='1')],volume_participation=D('0.01'))

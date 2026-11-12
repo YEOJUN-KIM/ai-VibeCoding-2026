@@ -554,9 +554,20 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
                 if row.available_at-row.event_at-MINUTE > research_lag:
                     reason(at,row.symbol,'RESEARCH_OBSERVATION_LAG_EXCEEDED',event_at=row.event_at)
                 unresolved_order = research_unresolved.get(row.symbol)
-                if unresolved_order and at >= datetime.combine(unresolved_order['at'].date(),time(15,10),KST):
+                cutoff = (datetime.combine(unresolved_order['at'].date(),time(15,10),KST)
+                          if unresolved_order else None)
+                candidate_from = (unresolved_order.get('research_next_event',next_minute(unresolved_order['at']))
+                                  if unresolved_order else None)
+                is_candidate = (unresolved_order is not None and candidate_from <= row.event_at < cutoff
+                                and row.event_at > unresolved_order['at']
+                                and row.event_at.date()==unresolved_order['at'].date())
+                if is_candidate and unresolved_order['side']=='BUY':
+                    is_candidate = (row.event_at-unresolved_order['at']<max_entry_age
+                                    and time(9,20)<=row.event_at.time()<time(11,30))
+                if is_candidate and at >= cutoff:
                     failure = dict(at=at,symbol=row.symbol,reason='UNRESOLVED_OBSERVED_AFTER_1510',
-                                   quantity=research_unresolved[row.symbol]['quantity'])
+                                   quantity=unresolved_order['quantity'],candidate_event_at=row.event_at,
+                                   pending_candidate_from=candidate_from,order_signal_at=unresolved_order['at'])
                     if not any(f.get('reason')==failure['reason'] and f['symbol']==row.symbol for f in failures):
                         failures.append(failure)
             ordered_orders = sorted(list(pending),key=lambda s:(pending[s]['side']!='SELL',s))
