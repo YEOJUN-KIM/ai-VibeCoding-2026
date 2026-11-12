@@ -1,0 +1,66 @@
+{
+  "folio-ux02-pc.html": {
+    "sha256": "aa8d609cd2be88e6f2281656b9cf3b3f4d577720fb330d7e5d1f64f6b3ce82fa",
+    "bytes": 74927
+  },
+  "FOLIO-UX02-PC-preview.zip": {
+    "sha256": "640cbb9e997eb8da66305b2b7ccd53e00906276067eee808c6bbbcab9a6a5217",
+    "bytes": 26694
+  },
+  "VALIDATION.md": {
+    "sha256": "6c300d9ce33b37579e7ad7fd33afc456b4c2b2acf00ff4163912cdeb12e9895f",
+    "bytes": 7743
+  },
+  "evidence/chart-day-1920.png": {
+    "sha256": "8bab39004ea05214e568c746044a100a2ce3becd628f0283a95f8c08b00c8d29",
+    "bytes": 78726
+  },
+  "evidence/chart-month-1920.png": {
+    "sha256": "229fa1f78d515129ab4ea6cde2a4565092b6fedd8e5542c97f097f191ff569aa",
+    "bytes": 79256
+  },
+  "evidence/chart-week-1920.png": {
+    "sha256": "ed390600503de34770a01d64011d708a6d5ac92dbe1579988dd967a9a442973f",
+    "bytes": 79030
+  },
+  "evidence/chart-year-1920.png": {
+    "sha256": "ebadb44af29d303bec1d735d9ff6fa46b73a56825177dadccfcbd547c11a3794",
+    "bytes": 79054
+  },
+  "evidence/history-1366x768.png": {
+    "sha256": "b5e929131a0395030a57514f6d023a3c2371b25a7f8d8316eb0415957a80f780",
+    "bytes": 115137
+  },
+  "evidence/history-1920x1080.png": {
+    "sha256": "7c21218ad042df131558cf7897a66a11f83adcd951fdd5f4a81fa757b41f7df0",
+    "bytes": 120355
+  },
+  "evidence/history-2560x1440.png": {
+    "sha256": "79fd3a48ed68e355a824edfaaddee679426a6f71b175b66916ec57be64f3f041",
+    "bytes": 125325
+  },
+  "evidence/home-1366x768.png": {
+    "sha256": "f735bfdbae02fc0a4aad2dcd9b1a705a1d126e50a2daeb9d6c7c93ae554cffdc",
+    "bytes": 100486
+  },
+  "evidence/home-1920x1080.png": {
+    "sha256": "952932d52892b1fbde96efdc4f3976570c9891ceed7f6b8894df6049258ebcdb",
+    "bytes": 104933
+  },
+  "evidence/home-2560x1440.png": {
+    "sha256": "67174c08d9eaa0d33c73ef6c7b9eca3b0f2a94fbdd44f87c5a1f97a92539efe3",
+    "bytes": 109838
+  },
+  "evidence/settings-1366x768.png": {
+    "sha256": "84d9c928efbf6a47d9cc01d3ec86893300f688cc197caa77e7701b35a51d2880",
+    "bytes": 112250
+  },
+  "evidence/settings-1920x1080.png": {
+    "sha256": "34e1d98085092ebb5252ca57d01df42664c598ae54ad5becbcb253be3f307588",
+    "bytes": 116837
+  },
+  "evidence/settings-2560x1440.png": {
+    "sha256": "b4eaa8f2eebccc75c3a4cb6d6b13ea59b3a7f04d4b7d3304dbb75b607445a985",
+    "bytes": 123188
+  }
+}
