@@ -2,9 +2,10 @@
 
 작업 기록: [20261112-Claude-DAY01-review](../plans/ai-tasks/20261112-Claude-DAY01-review.md)
 
-상태: **최종 — next-open 개선본(Codex `348f342`)까지 검토 완료(합성 자동 테스트 기준).** 최신 결과는 **7절**이다. 5절은 직전 close-proxy 모델(구현 `bad9d21`)의 결과로 `legacy_close` 모드에 그대로 해당한다. 실제 시장 데이터·PAPER/LIVE·사용자 동작 검증·운영 적용은 하지 않았고 수익성에 대한 어떤 주장도 하지 않는다. **실제 시세 피드에 바로 쓸 수 있는 상태가 아니다**: 기본 모드는 명시적 `OpenQuote`(시가 시점 가격·체결가능수량) 증거가 있어야만 체결한다.
+상태: **7절 = 엄격 `next_open` 개선본(Codex `348f342`)의 최종 검토 결과(합성 자동 테스트 기준, 유효). 8절 = 실제 저장 데이터 연결 준비(데이터 증거 조사·연구용 추정 모델) 검토로 현재 진행 중이며, 구현 인계 전이므로 8절은 독립 조사와 요구사항만 담는다.** 5절은 `legacy_close` 시기의 이전 결과다. 실제 시장 데이터·PAPER/LIVE·사용자 동작 검증·운영 적용은 하지 않았고 수익성에 대한 어떤 주장도 하지 않는다. **실제 시세 피드에 바로 쓸 수 있는 상태가 아니다**: 엄격 기본 모드는 명시적 `OpenQuote` 시가 증거가 있어야만 체결하며, 저장소에는 그런 증거가 없다(8.1절).
 
 > **1~4절은 구현 전(사전) 요구사항·시나리오 설계 기록이며 역사적 문서다.** 당시의 가설(예: 5분봉 직접 입력, 기존 `RawCandle` 재사용, 초기 체결 모델 가정)은 최종 계약이 아니다. 현재 사양 `docs/specs/DAY01_BACKTEST.md`는 1분봉 입력과 완결 5분 집계를 쓰고, 기본 실행 모드는 `next_open`(명시적 `OpenQuote` 시가 증거가 있을 때만 체결)이며 `legacy_close`(이후 on-time 1분봉 종가 기반 체결)는 명시적으로 선택하는 이전 모드다. **5절은 `legacy_close` 시기의 이전 결과이고, 현재 기준은 7절이다.** 1~4절·5절과 충돌하면 **현재 사양 문서와 7절이 우선**한다.
+
 
 ## 1. 기존 코드 조사 결과 (읽기 전용, 구현 전 기록)
 
@@ -225,3 +226,37 @@ python -B tests/day01_safe_regression_runner.py tests.test_ml_backtest tests.tes
 - DB가 필요한 기존 테스트(`test_paper`, `test_ml_backtest_selection`, `test_ml_data_pipeline` 등)는 실행하지 않았다.
 - 격리 실행기는 Python 수준 차단이며 OS 샌드박스가 아니다.
 - 다음날 갭은 모델링하지 않는다(미청산은 동결·표시). 수익성에 대한 주장 없음.
+
+## 8. 실제 데이터 연결 준비 검토 (진행 중, 구현 인계 전)
+
+작업 기록: [20261112-Claude-DAY01-data-prep-review](../plans/ai-tasks/20261112-Claude-DAY01-data-prep-review.md). 아래는 소스·스키마·문서만 읽은 독립 조사다(DB·RAW 데이터·외부 API·`.env` 접근 없음). 문서에 적힌 과거 수집 수치(예: 22종목·14 usable 날짜)는 이 조사에서 **재확인하지 않았으며** 현재 보유 데이터의 커버리지를 주장하지 않는다.
+
+### 8.1 엄격한 시가 증거가 실제로 가능한가 (결론: 현재 저장 데이터로는 불가능)
+
+| 항목 | 소스 근거 | 의미 |
+|---|---|---|
+| 저장되는 것은 완성 1분봉 OHLCV뿐 | `schema.sql` `ml_raw_candles`(source,symbol,interval,event_at,available_at,collected_at,OHLC,volume,raw_payload) | 호가·체결 틱·시가 스냅샷·잔량 컬럼 없음 |
+| `available_at`은 수신 시각 | `collect_candles.py`: `RawCandle.from_live_candle(..., collected_at=received_at)` → `available_at = collected_at`, 완료 봉만(`timestamp+1분 <= received_at`) 저장 | 정시(`event_at+1분`)가 아니라 폴링 수신 시각이다. 백필은 백필 수신 시각을 갖는다 |
+| 거래대금(turnover) 없음 | `RawCandle`·스키마에 turnover 컬럼 없음, `raw_payload`는 timestamp/OHLC/volume만(`raw_payload()`) | 정확 VWAP(`exact`)는 저장 데이터에서 항상 `MISSING_EXACT_TURNOVER`. 연구에서는 `typical_approximation`을 명시 표기해야 한다 |
+| 실시간 체결·호가는 저장되지 않음 | `quote_stream.py`는 WebSocket `trade:kr` 프레임을 브라우저 큐로 중계만 하고 영속화·수신 시각 기록 없음. `/api/v1/orderbook`·`/trades`는 요청 분류만 있고 저장 경로 없음 | 시가 시점 가격·체결가능수량의 사실 증거가 없다. 완성 봉의 전체 거래량은 시가 시점 유동성의 증거가 아니다 |
+| 세션 봉 수 불일치 | `gap_repair.py`·`quality_report.py`: `FULL_SESSION_BARS = 391`(09:00~**15:30 포함**) vs 문서의 "09:01~15:30 각 390개" vs `day01.Candle.validate`: `event_at < 15:30`만 허용 | 15:30 봉이 포함된 실제 행을 `replay`에 넣으면 전체가 `ValueError`로 중단된다. 입력 어댑터가 15:30 봉(및 세션 밖 봉)을 명시적으로 분리·보고해야 한다 |
+
+따라서 `execution='next_open'`(기본)은 합성 `OpenQuote` 없이는 체결 0건이 맞고, 완성 봉 기반 실제 데이터에 대한 모든 체결은 **추정**이어야 하며 그렇게 표시해야 한다.
+
+### 8.2 Codex 계약안에 대한 독립 요구사항 (인계 전 비평)
+
+1. **엄격 모드 불변**: `Config.execution` 기본 `next_open`과 기존 `legacy_close`·`OpenQuote` 동작·테스트(175개)를 바꾸지 않는다. 연구용은 별도 값(예: `research_estimated_open`)·별도 모듈에서만 켠다. 결과에 `execution_model`과 `hindsight` 표기를 반드시 포함하고 `open_quote_fills`와 섞지 않는다(`estimated_open_fills` 별도).
+2. **추정 시가 모델 정의**: 체결 가격 = 신호 가용 시각보다 엄격히 늦은 첫 정시 완성 1분봉의 `open_price`. 그 가격과 "그 봉이 존재하고 거래량>0"이라는 적격성은 **사후(hindsight) 정보**임을 필드(`price_source='ESTIMATED_CANDLE_OPEN'`, `hindsight_fields=[...]`)로 투명하게 표시한다.
+3. **용량**: 체결 봉의 전체 거래량, 또는 그 이후 봉의 거래량을 시가 시점 용량으로 쓰지 않는다. 인과적 대안만 허용: 신호 시점에 이미 알려진 직전 완성 봉들의 거래량(최소/평균)에 participation 적용 후 신호 시점에 수량을 고정. 용량 미달·0은 무체결.
+4. **인과성**: 신호·위험·수량은 `available_at <= 판단 시각` 정보만. 체결은 시가 시각이지만 가격 행은 나중에 도착하므로 체결 효과(현금·노출)를 신호 시점에 예약(reserve)해 그 사이 판단이 이미 소진된 자금을 쓰지 못하게 한다. 과거 체결 시점의 위험 검사에 그 시점 이후 도착한 종가·마크를 쓰지 않는다. 체결은 `execution_at`(시가 시각)과 `observed_at`(행 `available_at`) 둘 다 기록한다.
+5. **불확실·누락·지연 정책 명시**: 다음 봉 누락 → 존재하는 다음 봉 시가(만료 한도 내), 만료는 시가 시각 기준 배타적. 봉이 허용 지연(`max_observation_lag` 같은 명시 설정, 기본은 보수적)보다 늦게 도착하면 비적격이며 소급 체결하지 않는다. 늦은 도착 정책은 암묵적으로 `available_at`을 고쳐 쓰지 않는다.
+6. **리스크·이벤트**: 진입 분봉 범위의 손절/목표 감시 포함(동시 터치 STOP 우선), 같은 시각 이벤트 순서, 진입 만료, 14:50 청산·15:10 배타 마감, 미청산 수량·동결 평가·`overnight_gap_exposure_unmodeled` 표시, 일 손실·주문·현금·노출 한도는 기존 엄격 모드와 같은 의미로 유지.
+7. **비용 산식**: 수수료·세금·슬리피지 산식은 기존과 동일(KRW 정수 내림, 매도세 매도만, 불리한 슬리피지). 독립 테스트가 손계산으로 확인한다.
+8. **입력 어댑터(최소)**: 저장 행(dict)을 `Candle`로 변환하되 `source`, `collected_at`, `available_at`을 보존·보고하고(`Candle`에 필드가 없으면 별도 provenance 반환), `available_at` 누락·`interval != '1m'`은 거부하며 값을 만들어 채우지 않는다. 15:30 이후·세션 밖 봉은 조용히 버리지 말고 개수와 함께 명시적으로 보고(또는 거부). turnover는 없으므로 `None`.
+9. **커버리지 함수(순수)**: 호출자가 준 행과 **명시적 기대 날짜**·고정 종목 목록(22종목 등)만 입력받는다. 날짜별·종목별 존재 분 수, 결측 분 구간, 지연 도착 수, `NO_ROWS`(휴장인지 미수집인지 단정하지 않음)를 보고한다. 달력·DB·top50 재구성 금지. 기대 분 격자(390 vs 391)는 호출자가 명시하게 한다.
+10. 신규 결함은 인계된 코드에서 발견되는 대로 코디네이터에 보고한다.
+
+### 8.3 인계 후 검증 계획
+
+- 기준선: `tests.test_day01_review`(108), `test_day01.py`(67) = 175, 안전 회귀 55 + 실행기 자체 점검 11. 신규 연구용 모드·어댑터·커버리지 테스트는 `tests/test_day01_research_review.py`에 둔다(합성 행만, `settings`·`database` 비import).
+- 결과·정확한 개수·SHA는 인계 후 이 절을 갱신한다. 현재 8절은 준비 단계이며 검증 결과가 아니다.
