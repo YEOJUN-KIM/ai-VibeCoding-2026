@@ -3,8 +3,7 @@
 Expected values are hand-computed from the written contract (docs/specs/DAY01_BACKTEST.md
 and the review requirements), never produced by calling implementation helpers.
 Only auto_trader.ml.day01 is imported; no settings, DB, broker or file access.
-Tests named *_DEFECT_* assert CORRECT behaviour that the reviewed commit violates and are
-marked expectedFailure; remove the marker once the defect is fixed.
+Tests named test_regression_* pin defects found in review round 1 (fixed in bad9d21).
 """
 import ast
 import random
@@ -117,7 +116,7 @@ class Temporal(unittest.TestCase):
 
     def test_late_candidate_bar_skipped_fill_waits_for_next_on_time_bar(self):
         late = bar(20, '150', hi='150', lo='100', o='100', avail=at(27))
-        r = run(scenario() + [late, bar(21, '103')])
+        r = run(scenario() + [late, bar(21, '103')], max_signal_to_fill_minutes=D(5))
         t, = r['trades']
         self.assertEqual((t['event_at'], t['execution_at']), (at(21), at(22)))
         self.assertEqual(t['price'], D('103.0515'))      # never 150
@@ -251,7 +250,7 @@ class Strategy(unittest.TestCase):
 
     def test_fill_at_1130_is_expired(self):
         inside = [bar(i) for i in range(140)] + [bar(i, '102', vol='200') for i in range(140, 145)]
-        r = run(inside + [bar(149, '102')])        # first on-time bar after signal is observed at 11:30
+        r = run(inside + [bar(149, '102')], max_signal_to_fill_minutes=D(20))   # explicit long lifetime; bar observed 11:30
         self.assertEqual([t for t in r['trades'] if t['side'] == 'BUY'], [])
         self.assertTrue(any(x['reason'] == 'ENTRY_EXPIRED' for x in r['reasons']))
 
@@ -406,7 +405,7 @@ class Limits(unittest.TestCase):
         a = scenario(sym='AAA')                       # signals 09:20, no on-time bar until 09:30
         b = scenario(sym='BBB') + [bar(20, '102', sym='BBB'), bar(25, '70', sym='BBB', lo='70', o='102', hi='102')]
         r = run(a + b + [bar(30, '102', sym='AAA'), bar(31, '102', sym='AAA')],
-                universe=('AAA', 'BBB'), daily_loss_limit=D(300))
+                universe=('AAA', 'BBB'), daily_loss_limit=D(300), max_signal_to_fill_minutes=D(20))
         self.assertTrue(any(s['symbol'] == 'AAA' and s['side'] == 'BUY' for s in r['signals']))
         self.assertIn(('DAILY_LOSS_LIMIT', 'FILL'), self.codes(r, 'AAA'))
         self.assertEqual([t['symbol'] for t in r['trades']], ['BBB'])
@@ -612,11 +611,10 @@ class Properties(unittest.TestCase):
         self.assertGreaterEqual(sells_, 10, 'property test must exercise exits')
 
 
-class KnownDefects(unittest.TestCase):
-    """Correct behaviour that the reviewed commit does NOT show. expectedFailure until fixed."""
+class FixedDefectRegressions(unittest.TestCase):
+    """D1-D3 from review round 1 of 1595e65; fixed by bad9d21. No expectedFailure remains."""
 
-    @unittest.expectedFailure
-    def test_DEFECT_late_adverse_bar_must_still_reach_stop_and_mark(self):
+    def test_regression_late_adverse_bar_must_still_reach_stop_and_mark(self):
         # A crash bar (low 50) for 09:22 reaches us late at 10:00. From 10:00 the information is
         # known: it must queue a STOP (executed on a later fresh bar) and/or mark equity down.
         crash = bar(22, '50', o='102', lo='50', hi='102', avail=at(60))
@@ -624,26 +622,143 @@ class KnownDefects(unittest.TestCase):
         self.assertTrue(any(s['reason'] in ('STOP', 'AMBIGUOUS_STOP_FIRST') and s['at'] < at(300) for s in r['signals']),
                         'late bar with low below stop never produced a STOP signal')
 
-    @unittest.expectedFailure
-    def test_DEFECT_late_adverse_bar_must_not_leave_equity_overstated(self):
+    def test_regression_late_adverse_bar_must_not_leave_equity_overstated(self):
         crash = bar(22, '50', o='102', lo='50', hi='102', avail=at(60))
         r = run(entered(bar(21, '102'), crash))
         after = [c for c in r['equity_curve'] if c['at'] >= at(60)][0]
         self.assertLess(after['net_liquidation_equity'], D('999900'))   # 10 sh known down to ~50
 
-    @unittest.expectedFailure
-    def test_DEFECT_stale_entry_must_not_fill_hours_after_signal(self):
+    def test_regression_stale_entry_must_not_fill_hours_after_signal(self):
         # Signal 09:20, only next on-time bar at 11:20 (price 90, below the 100 range): the
         # breakout premise is long gone. Spec for the old backtest used a 2-minute window.
         r = run(scenario() + [bar(140, '90', lo='90'), bar(141, '90')])
         self.assertEqual([t for t in r['trades'] if t['side'] == 'BUY'], [])
 
-    @unittest.expectedFailure
-    def test_DEFECT_overnight_block_reason_should_be_unresolved_exposure(self):
+    def test_regression_overnight_block_reason_should_be_unresolved_exposure(self):
         rows = entered(bar(21, '102')) + scenario(day=13) + [bar(20, '102', day=13)]
         r = run(rows)
         day13 = [x['reason'] for x in r['reasons'] if x['at'].day == 13]
         self.assertIn('UNRESOLVED_EXPOSURE', day13)    # currently ALREADY_ENTERED_OR_PENDING
+
+
+class SecondRound(unittest.TestCase):
+    """Risks introduced by the D1/D2/D3 fixes (late risk, high-water marks, signal expiry)."""
+
+    def codes(self, r, symbol):
+        return [(x['reason'], x.get('phase')) for x in r['reasons'] if x['symbol'] == symbol]
+
+    def test_expiry_boundary_is_exclusive_at_two_minutes(self):
+        ok = run(scenario() + [bar(20, '102')])                      # observed 09:21: age 1m
+        self.assertEqual([t['execution_at'] for t in ok['trades']], [at(21)])
+        old = run(scenario() + [bar(21, '102')])                     # observed 09:22: age == 2m
+        self.assertEqual(old['trades'], [])
+        expiry = [x for x in old['reasons'] if x['reason'] == 'ENTRY_SIGNAL_TOO_OLD']
+        self.assertEqual([x['at'] for x in expiry], [at(22)])        # timer fires even with no new quote
+
+    def test_fractional_lifetime_expires_before_first_possible_fill(self):
+        r = run(scenario() + [bar(20, '102')], max_signal_to_fill_minutes=D('0.5'))
+        self.assertEqual(r['trades'], [])
+        self.assertTrue(any(x['reason'] == 'ENTRY_SIGNAL_TOO_OLD' for x in r['reasons']))
+
+    def test_lifetime_config_bounds(self):
+        replace(Config(), max_signal_to_fill_minutes=D(130)).validate()
+        for bad in (D(131), D(0), D(-1), D('NaN'), 2, 2.0):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                replace(Config(), max_signal_to_fill_minutes=bad).validate()
+
+    def test_old_late_crash_triggers_stop_but_does_not_overwrite_newer_mark(self):
+        crash = bar(22, '50', o='102', lo='50', hi='102', avail=at(60))     # event 09:22 arrives 10:00
+        r = run(entered(bar(21, '102'), *[bar(i, '102') for i in range(23, 40)], crash, bar(60, '102'), bar(61, '102')))
+        before = [c for c in r['equity_curve'] if c['at'] == at(60)][0]
+        self.assertEqual(before['net_liquidation_equity'], D('999996.98'))   # newer mark 102 kept
+        self.assertTrue(any(x['reason'] == 'OLDER_OBSERVATION_MARK_PRESERVED' for x in r['reasons']))
+        stop, = [s for s in r['signals'] if s['reason'] == 'STOP']
+        self.assertEqual(stop['at'], at(60))                                 # historical low is still risk
+        t, = sells(r)
+        self.assertEqual((t['reason'], t['signal_at'], t['event_at'], t['execution_at']),
+                         ('STOP', at(60), at(60), at(61)))
+        self.assertEqual(t['reference_price'], STOP)
+        self.assertEqual(t['price'], D('100.979974755'))
+        self.assertIn(('LATE_RISK_OBSERVATION', None), self.codes(r, 'AAA'))
+
+    def test_newer_late_bar_marks_at_arrival_and_records_evidence(self):
+        late = bar(30, '90', lo='90', avail=at(40))                         # newest event, arrives 09:40
+        r = run(entered(*[bar(i, '102') for i in range(21, 26)], late))
+        pt = [c for c in r['equity_curve'] if c['at'] == at(40)][0]
+        before = [c for c in r['equity_curve'] if c['at'] < at(40)][-1]
+        self.assertEqual(before['net_liquidation_equity'], D('999996.98'))
+        # cash 998979.49 + 10*90*0.9995 = 899.55 - fee 0 - tax floor(1.7991)=1
+        self.assertEqual(pt['net_liquidation_equity'], D('999878.04'))
+        self.assertEqual(r['valuation_marks']['AAA'],
+                         dict(price=D(90), event_at=at(30), observed_at=at(40), frozen=True))   # frozen: unresolved at 15:10 end of run
+
+    def test_zero_volume_late_crash_is_ignored(self):
+        late = bar(22, '50', vol='0', avail=at(40))
+        r = run(entered(bar(21, '102'), late, bar(41, '102')))
+        self.assertFalse({s['reason'] for s in r['signals']} & {'STOP', 'AMBIGUOUS_STOP_FIRST'})
+        self.assertEqual(r['summary']['net_profit'], D('-3.02'))
+
+    def test_late_risk_blocks_simultaneous_new_signal(self):
+        # AAA's 09:22 crash bar arrives 09:30, the same instant BBB's breakout 5m bar completes.
+        crash = bar(22, '50', o='102', lo='50', hi='102', avail=at(30))
+        bbb = [bar(i, sym='BBB') for i in range(25)] + [bar(i, '102', sym='BBB', vol='200') for i in range(25, 30)]
+        aaa = entered(bar(21, '102'), crash, bar(30, '102'), bar(31, '102'))
+        r = run(aaa + bbb + [bar(30, '102', sym='BBB')], universe=('AAA', 'BBB'))
+        self.assertIn(('LATE_RISK_EXIT_PENDING', 'SIGNAL'), self.codes(r, 'BBB'))
+        self.assertFalse([s for s in r['signals'] if s['symbol'] == 'BBB' and s['side'] == 'BUY'])
+        self.assertEqual([t['reason'] for t in sells(r)], ['STOP'])
+
+    def test_late_risk_blocks_pending_buy_fill_at_same_instant(self):
+        crash = bar(21, '50', sym='BBB', o='102', lo='50', hi='102', avail=at(23))
+        bbb = scenario(sym='BBB') + [bar(20, '102', sym='BBB'), crash]
+        aaa = scenario(sym='AAA') + [bar(22, '102', sym='AAA')]            # AAA fill bar observed 09:23
+        r = run(aaa + bbb, universe=('AAA', 'BBB'), max_signal_to_fill_minutes=D(20))
+        self.assertIn(('LATE_RISK_EXIT_PENDING', 'FILL'), self.codes(r, 'AAA'))
+        self.assertEqual([t['symbol'] for t in r['trades']], ['BBB'])      # only BBB's earlier buy
+        self.assertTrue(any(s['symbol'] == 'BBB' and s['reason'] == 'STOP' and s['at'] == at(23)
+                            for s in r['signals']))
+
+    def test_late_bar_from_previous_day_cannot_remark_or_stop(self):
+        stale = bar(300, '50', lo='50', avail=at(30, 13))                   # day-12 event, day-13 arrival
+        base = entered(bar(21, '102')) + scenario(day=13) + [bar(20, '102', day=13), bar(21, '102', day=13)]
+        a, b = run(base), run(base + [stale])
+        self.assertEqual(b['valuation_marks'], a['valuation_marks'])
+        self.assertEqual(b['summary']['net_profit'], a['summary']['net_profit'])
+        self.assertFalse({s['reason'] for s in b['signals']} & {'STOP', 'AMBIGUOUS_STOP_FIRST'})
+
+    def test_frozen_overnight_summary_flags_and_marks(self):
+        r = run(entered(bar(21, '102')) + scenario(day=13) + [bar(20, '102', day=13), bar(21, '102', day=13)])
+        s = r['summary']
+        self.assertTrue(s['overnight_gap_exposure_unmodeled'])
+        self.assertEqual(s['frozen_valuation_symbols'], ['AAA'])
+        self.assertEqual(r['valuation_marks']['AAA'],
+                         dict(price=D(102), event_at=at(21), observed_at=at(22), frozen=True))
+        self.assertIn(('UNRESOLVED_EXPOSURE', 'SIGNAL'), self.codes(r, 'AAA'))
+        flat = run(entered(bar(350, '103')))
+        self.assertFalse(flat['summary']['overnight_gap_exposure_unmodeled'])
+        self.assertEqual((flat['summary']['frozen_valuation_symbols'], flat['valuation_marks']), ([], {}))
+
+    def test_expiry_timer_fires_without_any_quote(self):
+        r = run(scenario() + [bar(100, '102')])          # next quote only at 10:40
+        self.assertEqual(r['trades'], [])
+        self.assertEqual([x['at'] for x in r['reasons'] if x['reason'] == 'ENTRY_SIGNAL_TOO_OLD'], [at(22)])
+        long = run(scenario() + [bar(200, '102')], max_signal_to_fill_minutes=D(130))
+        self.assertEqual(long['trades'], [])
+        self.assertEqual([x['at'] for x in long['reasons'] if x['reason'] in ('ENTRY_EXPIRED', 'ENTRY_SIGNAL_TOO_OLD')], [at(150)])
+
+    def test_late_stop_supersedes_pending_target_exit(self):
+        target = bar(21, '104.5', o='102', lo='102', hi='105')              # TARGET queued 09:22
+        crash = bar(23, '50', o='102', lo='50', hi='102', avail=at(40))     # late crash learned 09:40
+        r = run(entered(target, crash, bar(40, '102'), bar(41, '102')))
+        self.assertTrue(any(x['reason'] == 'EXIT_REPLACED_BY_STOP' for x in r['reasons']))
+        t, = sells(r)
+        self.assertEqual((t['reason'], t['reference_price']), ('STOP', STOP))
+
+    def test_late_target_observation_also_queues_exit_capped_at_target(self):
+        late = bar(22, '105', o='102', lo='102', hi='105', avail=at(40))
+        r = run(entered(bar(21, '102'), late, bar(41, '120'), bar(42, '120')))
+        t, = sells(r)
+        self.assertEqual((t['reason'], t['event_at'], t['reference_price']), ('TARGET', at(41), TARGET))
 
 
 class StaticPurity(unittest.TestCase):
