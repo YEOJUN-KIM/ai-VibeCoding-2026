@@ -33,7 +33,8 @@ _SECRET_KEY = re.compile(r"token|secret|authorization|password|passwd|api[-_]?ke
                          re.IGNORECASE)
 
 __all__ = ["RankingFetcher", "ResearchLog", "ClockRegression", "toss_ranking_source",
-           "guard_toss_client", "redact", "open_without_redirect"]
+           "guard_toss_client", "guard_toss_orderbook_client", "OFFICIAL_TOSS_ORIGIN",
+           "ORDERBOOK_PATH", "redact", "open_without_redirect"]
 
 
 def redact(value: Any) -> Any:
@@ -223,8 +224,64 @@ def open_without_redirect(request, timeout=None, *, _handlers=()):
     return opener.open(request, timeout=timeout) if timeout is not None else opener.open(request)
 
 
-def guard_toss_client(client, *, max_requests: int = 6, also_allow=(), rankings: bool = True) -> dict:
-    """Hard read-only fence around an existing Toss client instance.
+OFFICIAL_TOSS_ORIGIN = "https://openapi.tossinvest.com"
+TOKEN_PATH = "/oauth2/token"
+ORDERBOOK_PATH = "/api/v1/orderbook"
+_ORDERBOOK_QUERY = re.compile(r"symbol=[0-9A-Z]{6}")
+_SAFE_ERROR_CODE = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
+
+
+def _normalize_origins(origins) -> frozenset:
+    """`https://host[:port]` only. Plain http is accepted solely for loopback (local fake servers)."""
+    from urllib.parse import urlsplit
+    result = set()
+    for origin in origins:
+        parts = urlsplit(origin)
+        if (parts.path, parts.query, parts.fragment, parts.username, parts.password) != ("", "", "", None, None) \
+                or not parts.hostname:
+            raise ValueError("origin must be scheme://host[:port] only")
+        if parts.scheme != "https" and not (parts.scheme == "http" and parts.hostname in _LOOPBACK_HOSTS):
+            raise ValueError("origin must be https (http only for loopback)")
+        result.add(f"{parts.scheme}://{parts.netloc}")
+    if not result:
+        raise ValueError("at least one origin is required")
+    return frozenset(result)
+
+
+def _origin_of(parts) -> str:
+    return f"{parts.scheme}://{parts.netloc}"
+
+
+def _strict_denial(origins, url, method, has_body, fragment, has_headers=False) -> str | None:
+    """Reason a request is outside the strict read-only orderbook policy, else None (no I/O)."""
+    from urllib.parse import urlsplit
+    if not isinstance(url, str) or any(ord(c) <= 0x20 or ord(c) == 0x7F for c in url):
+        return "control characters or spaces in url"      # urlsplit would silently strip some of them
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return "unparsable url"
+    if _origin_of(parts) not in origins:
+        return "origin not allowed"
+    if parts.fragment or fragment or ";" in parts.path:
+        return "fragment/params not allowed"
+    if (parts.path, method) == (TOKEN_PATH, "POST"):
+        return "token url must not carry a query" if parts.query else None
+    if (parts.path, method) == (ORDERBOOK_PATH, "GET"):
+        if has_body or has_headers:
+            return "orderbook request must not carry a body or extra headers"
+        if not _ORDERBOOK_QUERY.fullmatch(parts.query):
+            return "orderbook query must be exactly one symbol=<6 chars [0-9A-Z]>"
+        return None
+    return "endpoint not allowed"
+
+
+def guard_toss_client(client, *, max_requests: int = 6, also_allow=(), rankings: bool = True,
+                      origins=None, path_caps=None, strict_requests: bool = False,
+                      preflight: bool = False, sanitize_errors: bool = False) -> dict:
+    """Hard read-only fence around ONE existing Toss client instance (it does not cover any other
+    `TossClient`, other transports, or other code that opens its own connections).
 
     Wraps its single-request transport so that only the token endpoint (POST) and the ranking
     GET can ever be sent, and at most `max_requests` requests in total (the client itself may
@@ -237,25 +294,57 @@ def guard_toss_client(client, *, max_requests: int = 6, also_allow=(), rankings:
     request during a guarded one also gets the no-redirect opener (stricter, never looser).
     `also_allow` adds explicit (path, GET) pairs, e.g. the stocks endpoints; the default adds none.
     `rankings=False` removes the ranking GET from the allowlist (token POST and `also_allow` only).
+
+    Optional hardening (all off by default, so existing callers are unchanged):
+    `origins` pins scheme://host[:port] for every request; `path_caps` is a {path: max} per-path cap
+    (retries and re-authorizations count; a request that is reserved counts even if it then fails);
+    `strict_requests` applies `_strict_denial` (exact token POST, exact `GET /api/v1/orderbook?symbol=XXXXXX`);
+    `preflight` also validates BEFORE `_authorized_json_request` asks for a token, so a request that
+    would be refused never costs an authentication; `sanitize_errors` re-raises `TossApiError` with only
+    status and a slug-shaped code (provider text, URLs and headers are dropped, cause not chained).
     """
-    from urllib.parse import urlparse
+    from urllib.parse import urlparse, urlsplit
     original = client._json_request_once
-    allowed = {("/oauth2/token", "POST")}
+    allowed = {(TOKEN_PATH, "POST")}
     if rankings:
         allowed.add(("/api/v1/rankings", "GET"))
     for path, method in also_allow:
         if method != "GET":
             raise ValueError("only GET endpoints can be added to the allowlist")
         allowed.add((path, method))
+    origin_set = _normalize_origins(origins) if origins is not None else None
+    if strict_requests and origin_set is None:
+        raise ValueError("strict_requests needs explicit origins")
+    caps = dict(path_caps or {})
     counts = {"total": 0, "paths": {}}
+
+    def policy_denial(url, method, has_body, fragment, has_headers=False):
+        if strict_requests:
+            return _strict_denial(origin_set, url, method, has_body, fragment, has_headers)
+        if origin_set is not None and _origin_of(urlsplit(url)) not in origin_set:
+            return "origin not allowed"
+        return None
+
+    def room(path) -> str | None:
+        """Cap check; call with `_FENCE_LOCK` held."""
+        if counts["total"] >= max_requests:
+            return "request cap reached"
+        if path in caps and counts["paths"].get(path, 0) >= caps[path]:
+            return "path request cap reached"
+        return None
 
     def fenced(request):
         path, method = urlparse(request.full_url).path, request.get_method()
         if (path, method) not in allowed:
             raise PermissionError("request outside the read-only ranking allowlist")
+        why = policy_denial(request.full_url, method, getattr(request, "data", None) is not None,
+                            getattr(request, "fragment", None))
+        if why:
+            raise PermissionError(why)
         with _FENCE_LOCK:
-            if counts["total"] >= max_requests:
-                raise PermissionError("request cap reached")
+            why = room(path)
+            if why:
+                raise PermissionError(why)
             counts["total"] += 1
             counts["paths"][path] = counts["paths"].get(path, 0) + 1
             namespace = getattr(type(client)._json_request_once, "__globals__", None)
@@ -269,4 +358,55 @@ def guard_toss_client(client, *, max_requests: int = 6, also_allow=(), rankings:
                 namespace["urlopen"] = saved
 
     client._json_request_once = fenced
+
+    if preflight or sanitize_errors:
+        original_authorized = client._authorized_json_request
+
+        def checked(url, *, headers=None, method="GET", body=None):
+            if preflight:
+                why = policy_denial(url, method, body is not None, None, bool(headers))
+                if not why and (urlparse(url).path, method) not in allowed:
+                    why = "request outside the allowlist"
+                if not why:
+                    path = urlparse(url).path
+                    with _FENCE_LOCK:
+                        why = room(path)
+                        if not why and getattr(client, "_access_token", None) is None:
+                            # a token request would be needed first: both it and the data request must fit
+                            why = room(TOKEN_PATH) or (
+                                "request cap would be reached before the data request"
+                                if counts["total"] + 2 > max_requests else None)
+                if why:
+                    raise PermissionError(why)
+            try:
+                return original_authorized(url, headers=headers, method=method, body=body)
+            except Exception as exc:
+                if not sanitize_errors or not (hasattr(exc, "status_code") and hasattr(exc, "error_code")):
+                    raise                       # fence refusals (PermissionError) and unknown errors pass through
+                error_class, status = type(exc), exc.status_code
+                code = exc.error_code if isinstance(exc.error_code, str) and _SAFE_ERROR_CODE.fullmatch(exc.error_code) else None
+            # Raised outside the except block on purpose: no __cause__ and no __context__, so the provider text,
+            # URL and headers of the original exception are not reachable from the one we raise.
+            raise error_class(f"Toss request failed (status={status}, code={code})", status_code=status, error_code=code)
+
+        client._authorized_json_request = checked
+    return counts
+
+
+def guard_toss_orderbook_client(client, *, origins=(OFFICIAL_TOSS_ORIGIN,), max_requests: int = 6,
+                                max_auth: int = 2, max_orderbook: int = 4) -> dict:
+    """Strict read-only fence for the ORDERBOOK research check on one client instance.
+
+    Only `POST /oauth2/token` and `GET /api/v1/orderbook?symbol=<6 chars [0-9A-Z]>` on the pinned
+    HTTPS origin can leave the process; at most `max_requests` total, `max_auth` token requests and
+    `max_orderbook` orderbook requests (retries and re-authorizations included); invalid requests
+    are refused before any token is requested; redirects are never followed; errors are sanitized.
+    Scope: this one client instance only."""
+    if max_auth > max_requests or max_orderbook > max_requests:
+        raise ValueError("per-path caps cannot exceed the total cap")
+    counts = guard_toss_client(client, max_requests=max_requests, rankings=False,
+                               also_allow=((ORDERBOOK_PATH, "GET"),), origins=origins,
+                               path_caps={TOKEN_PATH: max_auth, ORDERBOOK_PATH: max_orderbook},
+                               strict_requests=True, preflight=True, sanitize_errors=True)
+    client._day01_orderbook_fence = counts        # marker: fetch_orderbook_results refuses unfenced clients
     return counts
