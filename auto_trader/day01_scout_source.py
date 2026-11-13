@@ -207,7 +207,7 @@ def toss_ranking_source(client, *, budget_seconds: float = 15.0) -> Callable[[],
     return source
 
 
-def guard_toss_client(client, *, max_requests: int = 6, also_allow=()) -> dict:
+def guard_toss_client(client, *, max_requests: int = 6, also_allow=(), rankings: bool = True) -> dict:
     """Hard read-only fence around an existing Toss client instance.
 
     Wraps its single-request transport so that only the token endpoint (POST) and the ranking
@@ -215,10 +215,13 @@ def guard_toss_client(client, *, max_requests: int = 6, also_allow=()) -> dict:
     retry a 429 or re-authorize a 401, so this cap, not the fetch count, is the real upper
     bound). Anything else raises before any network I/O. Returns the live counter (paths only).
     `also_allow` adds explicit (path, GET) pairs, e.g. the stocks endpoints; the default adds none.
+    `rankings=False` removes the ranking GET from the allowlist (token POST and `also_allow` only).
     """
     from urllib.parse import urlparse
     original = client._json_request_once
-    allowed = {("/oauth2/token", "POST"), ("/api/v1/rankings", "GET")}
+    allowed = {("/oauth2/token", "POST")}
+    if rankings:
+        allowed.add(("/api/v1/rankings", "GET"))
     for path, method in also_allow:
         if method != "GET":
             raise ValueError("only GET endpoints can be added to the allowlist")

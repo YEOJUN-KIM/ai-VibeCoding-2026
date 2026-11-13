@@ -1,6 +1,6 @@
 # DAY01 Scout 종목 사실(InstrumentFacts) 어댑터
 
-상태: 구현·합성 테스트 통과(AI 구현 완료). 사용자 동작 검증·운영 적용 없음. **이번 작업에서 외부 API는 호출하지 않았다.** 실제 `/api/v1/stocks` 응답은 확인하지 못했고, 아래 필드 목록은 모두 기존 코드가 읽는 키에서 추론한 것이다(실응답 미검증).
+상태: 구현·합성 테스트 통과(AI 구현 완료) + **실제 응답 1회 검증(2026-11-13 10:48 KST, §6)**. 사용자 동작 검증·운영 적용 없음. §1~§3의 필드 목록은 최초에 기존 코드에서 추론한 것이며 §6의 실제 응답으로 정정했다(정정 사항은 §6에 명시).
 코드: `auto_trader/day01_scout_facts.py`, 테스트 `tests/test_day01_scout_facts.py`. 운영 DB·워커·주문·PAPER 연동 없음.
 
 ## 1. 구현 전 위험 체크리스트
@@ -21,7 +21,7 @@
 
 | 항목 | 기존 코드에서 확인한 사실 |
 |---|---|
-| 종목 상세 | `GET /api/v1/stocks?symbols=A,B,...` → `result` 배열. 코드가 읽는 키: `symbol, name, englishName, isinCode, listDate, status, sharesOutstanding, securityType, isCommonShare, koreanMarketDetail.{nxtSupported, krxTradingSuspended, nxtTradingSuspended, liquidationTrading}`. 기존 프리셋 경로가 50개 단위로 요청하며(API 상한은 미확인), 기존 기본정보 캐시는 종목별 12시간 |
+| 종목 상세 | `GET /api/v1/stocks?symbols=A,B,...` → `result` 배열. 코드가 읽는 키(실제 응답에는 `market`, `currency`, `leverageFactor`, `delistDate`도 있었음, §6): `symbol, name, englishName, isinCode, listDate, status, sharesOutstanding, securityType, isCommonShare, koreanMarketDetail.{nxtSupported, krxTradingSuspended, nxtTradingSuspended, liquidationTrading}`. 기존 프리셋 경로가 50개 단위로 요청하며(API 상한은 미확인), 기존 기본정보 캐시는 종목별 12시간 |
 | 종목 목록 | `GET /api/v1/stocks/all?market=KOSPI\|KOSDAQ&status=ACTIVE` → 배열. 클라이언트가 `market`을 요청 인자로 붙여 저장하며 12시간 캐시(두 호출 사이 1.05초 대기). 항목은 `securityType`, `isCommonShare`, `name`을 가짐 |
 | 유형 값 | `securityType`에 `STOCK`, `ETF`, `ETN`이 쓰인다(API 쿼리 패턴 `ALL\|COMMON\|STOCK\|ETF\|ETN`, ETF 화면의 `security_type === 'ETF'`). 우선주 등은 `isCommonShare=false`로 구분되는 것으로 보인다(코드 추론) |
 | 통화 | 종목 응답이 아니라 순위 행의 `currency`(실제 조회에서 100/100 `KRW` 확인) 또는 현재가 응답 |
@@ -43,17 +43,40 @@
 
 ## 4. 실제 정보와 합성 정보의 경계
 
-| 정보 | 이번 작업의 상태 |
+| 정보 | 상태 |
 |---|---|
-| 거래대금 순위(순위·가격·거래대금·`currency`) | 이전 작업에서 **실제** 조회(2026-11-13 10:11 KST, 1회) |
-| `/stocks` 종목 상세·`/stocks/all` 목록 | **실제 호출 없음.** 테스트는 코드가 읽는 키로 만든 **합성** 행 |
-| 유동성·DAY-01 준비도·포트폴리오 | 합성(테스트 전용) |
-| ETF/ETN 구분 | 코드 근거상 `securityType`/`isCommonShare`로 가능, **실응답으로는 미검증** |
+| 거래대금 순위(순위·가격·거래대금·`currency`) | 이전 작업에서 **실제** 조회(10:11 KST, 1회). 진단 분석은 이 저장본을 사용 |
+| `/stocks` 종목 상세(상위 50종목) | **실제**(10:48 KST, 1회 배치). 대표 종목 두 번째 배치(10개)는 요청 상한에 걸려 조회하지 못함 |
+| `/stocks/all` 목록(KOSPI·KOSDAQ 4,327행) | **실제**(10:48 KST) |
+| 유동성·DAY-01 준비도·포트폴리오 | 합성 |
+| Scout 진단 | 저장된 실제 순위를 현재 시각으로 재도장한 **진단용**(실제 수신 시각 아님). 종목 사실만 실제 |
 
 ## 5. 미검증·다음 조건
 
-1. 실제 `/stocks`·`/stocks/all` 응답의 키, 값, 누락 패턴(특히 `liquidationTrading`, `koreanMarketDetail`, ETF의 `isCommonShare`)은 별도 승인된 소량 읽기 전용 호출로 확인해야 한다. 그 전에 울타리를 `also_allow`로 열어 실제 환경에서 재검증해야 한다(이전 울타리도 실환경 재검증 전).
-2. 목록 원본 행은 용량 때문에 기록하지 않고 해시만 남긴다. 연구 목적상 원본 보존이 필요하면 별도 설계가 필요하다.
-3. 호가 기반 유동성, DAY-01 준비도, 실제 포트폴리오는 여전히 합성이다.
-4. 장 시작 전·마감 후·휴장일 응답과 거래정지 전환 시점의 지연은 미검증이다.
-5. 이 모듈은 어디에도 배선되지 않았다(워커·PAPER·DB 연결 없음).
+1. 비정상 종목(거래정지·정리매매·상장폐지 예정·`ACTIVE` 아님)의 실제 응답 형태는 보지 못했다. 표본 50종목은 모두 정상 활성 종목이었고 키가 모두 존재했다. 비정상 상태에서 키가 생략되는지는 UNKNOWN이며, 어댑터는 생략을 정상으로 보지 않는다.
+2. ETN·REIT·해외주식 등은 `/stocks` 응답으로는 보지 못했다(두 번째 배치 미조회). 목록(`/stocks/all`)에서는 유형 값이 확인됐다.
+3. 목록 원본 행은 용량 때문에 기록하지 않고 해시만 남긴다(연구 표본은 저장소 밖에 별도 저장).
+4. 호가 기반 유동성, DAY-01 준비도, 실제 포트폴리오는 여전히 합성이다.
+5. 장 시작 전·마감 후·휴장일 응답과 거래정지 전환 시점의 지연은 미검증이다.
+6. 실호출에서 요청이 정확히 상한 6회에 도달했다(토큰 2, `/stocks/all` 3, `/stocks` 1). 토큰 2회와 목록 3회는 기존 클라이언트의 재인증·재시도로 보이나 원인은 기록하지 못했다(성공한 재시도는 오류 정보를 남기지 않음). 이 모듈은 어디에도 배선되지 않았다.
+
+## 6. 실제 응답 검증 (2026-11-13 10:48 KST, 읽기 전용)
+
+**호출**: 울타리를 통과한 요청은 6회로 상한에 정확히 도달했다: 토큰 POST 2, `GET /api/v1/stocks/all` 3(KOSPI·KOSDAQ 각 1 + 추가 1회, 원인 미기록), `GET /api/v1/stocks` 1(성공). 7번째 요청(`/stocks` 두 번째 배치)은 울타리가 네트워크 전에 차단했다. 순위·계좌·주문 호출 없음(울타리가 순위도 차단). 비밀정보는 출력·기록하지 않았다(기록 파일 3개에서 토큰·Bearer·secret·client_id 문자열 0건).
+
+**`/stocks` 행 키(실제)**: `symbol, name, englishName, isinCode, market, currency, securityType, isCommonShare, status, listDate, delistDate, sharesOutstanding, leverageFactor, koreanMarketDetail.{nxtSupported, krxTradingSuspended, nxtTradingSuspended, liquidationTrading}`. 표본 50종목(상위 순위): `market` KOSPI 40/KOSDAQ 10, `currency` KRW 50, `status` ACTIVE 50, `krxTradingSuspended` False 50, **`liquidationTrading` False 50(전부 존재)**, `delistDate` null 50, `leverageFactor` ETF에만 값.
+
+**`/stocks/all` 행 키(실제)**: `symbol, name, isinCode, market, securityType, isCommonShare`. `status` 없음(요청 쿼리의 `status=ACTIVE`로 거른 목록). 4,327행, 중복 없음.
+
+**유형 값(목록 4,327행)**: `STOCK` 2,722(그중 `isCommonShare=true` 2,613 / `false` 109), `ETF` 1,188, `ETN` 368, `REIT` 23, `FOREIGN_STOCK` 12, `DEPOSITARY_RECEIPT` 10, `INFRASTRUCTURE_FUND` 2, `STOCK_WARRANTS` 2. **ETF·ETN·REIT 등은 모두 `isCommonShare=true`**이므로 ETF 구분은 `isCommonShare`가 아니라 `securityType != "STOCK"`로만 가능하다. 우선주는 `STOCK` + `isCommonShare=false`. 두 조건을 모두 요구하는 Scout 정책이 실제 데이터에 맞다.
+
+**정정한 가정**
+- 이전 가정: `/stocks`에는 `market`·`currency`가 없어 목록과 순위 행에서 가져와야 한다. 실제: `/stocks`에 있다. 어댑터가 이를 무시하던 것을 수정했다(`/stocks` 우선, 목록·순위는 교차 검증, 불일치·malformed는 차단).
+- 이전 우려: 정상 종목에서 `liquidationTrading`이 생략될 수 있다. 실제 표본 50종목에서는 전부 존재했다(생략 패턴은 관찰되지 않음). 단, 비정상 종목의 형태는 모르므로 키 누락을 정상으로 해석하지 않는 정책은 그대로 둔다.
+- 목록과 상세의 정적 필드(`securityType`, `isCommonShare`, `name`)는 조회한 50종목에서 불일치 0건.
+- 목록 수신 시각 역산(`toss_directory_source`)은 실제 클라이언트에서 수신 시각을 정상 복원했다(`receipt_time_known=True`).
+
+**Scout 진단(종목 사실은 실제, 순위는 저장본 재도장, 나머지 합성)**: 상위 50 구성은 보통주 29, 우선주 2, ETF 19. 제외: `NOT_STOCK` 19(ETF), `NOT_COMMON_SHARE` 2(우선주).
+- DAY-01 기본(수량 10, 주문 한도 100,000원): **후보 0개**(부족 0/10). 보통주 29종목의 가격이 11,210원~1,287,000원으로 모두 주문 한도(약 9,990원 이하만 통과)에서 탈락했다.
+- 참고(수량 1, 한도 정책은 그대로): 후보 10개, 모두 `STOCK`·보통주. 한도 정책을 바꾸자는 제안이 아니라 한도와 수량·종목 가격의 상호작용을 보기 위한 수치다.
+- 이전 보고의 "후보 4개/10개"에 섞여 있던 코드들은 ETF였음이 확인됐다(합성 사실이 보통주로 표시돼 걸러지지 않았던 것).

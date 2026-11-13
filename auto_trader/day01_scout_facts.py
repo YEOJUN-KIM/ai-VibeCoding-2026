@@ -15,8 +15,10 @@ Honesty rules
   It is the later of the stocks-batch receipt and the ranking receipt, and the two must be within
   `max_skew`; otherwise the symbol gets no fact.
 * Time-sensitive fields (status, suspension, liquidation) come only from a fresh `/stocks` call.
-  Static attributes (market, and gap-filling of type/common-share) come from the cached directory,
-  only when its ORIGINAL receipt time is known, is not after the fact, and is on the same KST day.
+  `/stocks` rows also carry `market` and `currency` (seen in the real response), which are used
+  first. The cached directory (and the ranking row's `currency`) only gap-fill or cross-check them:
+  a disagreement blocks the field. The directory is used only when its ORIGINAL receipt time is
+  known, is not after the fact, and is on the same KST day.
 * Facts are valid from `observed_at` on (Scout ignores later-observed facts), so today's facts
   can never be applied to an earlier `as_of`.
 """
@@ -37,7 +39,7 @@ __all__ = ["ReceiptLedger", "build_instrument_facts", "InstrumentFactsSource",
            "toss_stocks_source", "toss_directory_source", "STOCK_FIELDS_USED"]
 
 BATCH_SIZE = 50          # the existing preset path requests 50 symbols per /stocks call (API limit unverified)
-STOCK_FIELDS_USED = ("symbol", "name", "securityType", "isCommonShare", "status",
+STOCK_FIELDS_USED = ("symbol", "name", "market", "currency", "securityType", "isCommonShare", "status",
                      "koreanMarketDetail.krxTradingSuspended", "koreanMarketDetail.liquidationTrading")
 _CONFLICT = object()
 _BAD = object()          # present but malformed
@@ -103,7 +105,8 @@ def _detail(row: Mapping):
 
 def _project_stock(row: Mapping) -> dict:
     detail, bad = _detail(row)
-    return dict(name=_text(row, "name"), security_type=_text(row, "securityType"),
+    return dict(name=_text(row, "name"), market=_text(row, "market"), currency=_text(row, "currency"),
+                security_type=_text(row, "securityType"),
                 is_common_share=_bool(row, "isCommonShare"), status=_text(row, "status"),
                 krx_trading_suspended=_BAD if bad else _bool(detail, "krxTradingSuspended"),
                 liquidation_trading=_BAD if bad else _bool(detail, "liquidationTrading"))
@@ -166,8 +169,15 @@ def build_instrument_facts(*, stocks_batches, directory=None, ranking_rows=(), r
                 notes.append((symbol, "DUPLICATE_CONFLICT"))
             else:
                 values.update(stock)
-                if key in ranking:
-                    values["currency"] = ranking[key]["currency"]
+                if key in ranking:                                   # cross-check the stocks row's own currency
+                    have, other = values["currency"], ranking[key]["currency"]
+                    if have is _BAD or other is _BAD:
+                        values["currency"] = _BAD
+                    elif have is None:
+                        values["currency"] = other
+                    elif other is not None and other != have:
+                        values["currency"] = None
+                        notes.append((symbol, "CONFLICT:currency"))
                 static = directory_by_symbol.get(key)
                 if static is None:
                     notes.append((symbol, "NOT_IN_DIRECTORY"))

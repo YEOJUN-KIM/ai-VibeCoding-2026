@@ -153,6 +153,72 @@ class ClassificationTests(unittest.TestCase):
         self.assertEqual(reasons(result, "AAA"), ("CAPITAL_ORDER_LIMIT_FAILED",))
 
 
+def real_shaped(symbol, *, kind="STOCK", common=True, market="KOSPI", currency="KRW", leverage=None, **extra):
+    """Row shape observed in the real /api/v1/stocks response (values synthetic)."""
+    row = {"symbol": symbol, "name": f"N{symbol}", "englishName": f"E{symbol}", "isinCode": "KR0000000000",
+           "market": market, "currency": currency, "securityType": kind, "isCommonShare": common,
+           "status": "ACTIVE", "listDate": "2000-01-01", "delistDate": None, "sharesOutstanding": 1000,
+           "leverageFactor": leverage,
+           "koreanMarketDetail": {"nxtSupported": True, "krxTradingSuspended": False,
+                                  "nxtTradingSuspended": False, "liquidationTrading": False}}
+    row.update(extra)
+    return row
+
+
+class RealShapeTests(unittest.TestCase):
+    """Behavior pinned to what the real response showed on 2026-11-13: /stocks carries market and
+    currency; ETF/ETN/REIT rows have isCommonShare=True, so securityType is the discriminator."""
+
+    def run_rows(self, rows, *, directory=False, ranking_currency=None):
+        symbols = [r["symbol"] for r in rows]
+        ranking = [ranked(s, i, currency=ranking_currency) for i, s in enumerate(symbols, 1)]
+        facts, notes = build(rows, symbols=symbols, dir_rows=[listed(s) for s in symbols] if directory else [],
+                             ranking=ranking)
+        return facts, notes, scout(ranking, facts)
+
+    def test_market_and_currency_come_from_stocks_without_directory_or_ranking_currency(self):
+        facts, notes, result = self.run_rows([real_shaped("AAA")])
+        self.assertEqual((facts[0].market, facts[0].currency), ("KOSPI", "KRW"))
+        self.assertEqual([c.symbol for c in result.candidates], ["AAA"])
+        self.assertTrue(result.candidates[0].fully_eligible)
+
+    def test_etf_with_isCommonShare_true_and_other_security_types_are_excluded_by_type(self):
+        rows = [real_shaped("ETF1", kind="ETF", leverage="2"), real_shaped("ETN1", kind="ETN"),
+                real_shaped("REIT1", kind="REIT"), real_shaped("FRN1", kind="FOREIGN_STOCK"),
+                real_shaped("DR1", kind="DEPOSITARY_RECEIPT"), real_shaped("WAR1", kind="STOCK_WARRANTS"),
+                real_shaped("INF1", kind="INFRASTRUCTURE_FUND"), real_shaped("PREF", common=False),
+                real_shaped("OK1", market="KOSDAQ")]
+        _, _, result = self.run_rows(rows)
+        self.assertEqual([c.symbol for c in result.candidates], ["OK1"])
+        for symbol in ("ETF1", "ETN1", "REIT1", "FRN1", "DR1", "WAR1", "INF1"):
+            self.assertEqual(reasons(result, symbol), ("NOT_STOCK",), symbol)
+        self.assertEqual(reasons(result, "PREF"), ("NOT_COMMON_SHARE",))
+
+    def test_stocks_market_or_currency_that_disagrees_with_other_sources_is_blocked(self):
+        facts, notes, result = self.run_rows([real_shaped("AAA", market="KOSPI")], directory=False)
+        facts, notes = build([real_shaped("AAA", market="KOSPI")], dir_rows=[listed("AAA", market="KOSDAQ")])
+        self.assertIn(("AAA", "CONFLICT:market"), notes)
+        self.assertIsNone(facts[0].market)
+        facts, notes = build([real_shaped("AAA", currency="KRW")], ranking=[ranked("AAA", 1, currency="USD")])
+        self.assertIn(("AAA", "CONFLICT:currency"), notes)
+        self.assertIn("NOT_KRW", reasons(scout([ranked("AAA", 1, currency="USD")], facts), "AAA"))
+
+    def test_malformed_market_or_currency_is_not_gap_filled(self):
+        facts, notes = build([real_shaped("AAA", market=5)], dir_rows=[listed("AAA")])
+        self.assertIn(("AAA", "MALFORMED:market"), notes)
+        self.assertIsNone(facts[0].market)
+        facts, notes = build([real_shaped("AAA", currency="")], ranking=[ranked("AAA", 1)])
+        self.assertIn(("AAA", "MALFORMED:currency"), notes)
+        self.assertIsNone(facts[0].currency)
+
+    def test_missing_liquidation_key_is_still_unknown_even_though_the_real_sample_always_had_it(self):
+        row = real_shaped("AAA")
+        row["koreanMarketDetail"] = {"nxtSupported": True, "krxTradingSuspended": False}
+        _, _, result = self.run_rows([row])
+        self.assertEqual(result.candidates, ())
+        self.assertIn("LIQUIDATION_OR_UNKNOWN", reasons(result, "AAA"))
+
+
 class MalformedAndAliasTests(unittest.TestCase):
     def test_malformed_present_fields_are_never_filled_in_from_the_directory(self):
         good_dir = [listed("AAA")]                                       # directory says STOCK / common / KOSPI
