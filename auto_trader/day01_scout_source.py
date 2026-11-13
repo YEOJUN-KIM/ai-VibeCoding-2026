@@ -207,21 +207,27 @@ def toss_ranking_source(client, *, budget_seconds: float = 15.0) -> Callable[[],
     return source
 
 
-def guard_toss_client(client, *, max_requests: int = 6) -> dict:
+def guard_toss_client(client, *, max_requests: int = 6, also_allow=()) -> dict:
     """Hard read-only fence around an existing Toss client instance.
 
     Wraps its single-request transport so that only the token endpoint (POST) and the ranking
     GET can ever be sent, and at most `max_requests` requests in total (the client itself may
     retry a 429 or re-authorize a 401, so this cap, not the fetch count, is the real upper
     bound). Anything else raises before any network I/O. Returns the live counter (paths only).
+    `also_allow` adds explicit (path, GET) pairs, e.g. the stocks endpoints; the default adds none.
     """
     from urllib.parse import urlparse
     original = client._json_request_once
+    allowed = {("/oauth2/token", "POST"), ("/api/v1/rankings", "GET")}
+    for path, method in also_allow:
+        if method != "GET":
+            raise ValueError("only GET endpoints can be added to the allowlist")
+        allowed.add((path, method))
     counts = {"total": 0, "paths": {}}
 
     def fenced(request):
         path, method = urlparse(request.full_url).path, request.get_method()
-        if (path, method) not in {("/oauth2/token", "POST"), ("/api/v1/rankings", "GET")}:
+        if (path, method) not in allowed:
             raise PermissionError("request outside the read-only ranking allowlist")
         if counts["total"] >= max_requests:
             raise PermissionError("request cap reached")
