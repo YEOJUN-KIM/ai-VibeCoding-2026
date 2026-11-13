@@ -1,6 +1,6 @@
 # DAY01 SCOUT — 집중 WATCH 후보 탐색 사양 (제안 v1)
 
-상태: **설계 제안 / 구현 중**. 모듈 `auto_trader/day01_scout.py`, 스키마 `day01-scout-1`.
+상태: **구현됨(AI 구현 완료) · 합성 단위 테스트 통과(로컬) · Codex 독립 검토 대기 · 실제 API/운영 미연결**. 모듈 `auto_trader/day01_scout.py`, 스키마 `day01-scout-1`.
 이 기능은 **WATCH 후보 선정**이다. 매수 신호, 신규 전략, 주문 실행, 수익 예측이 아니며 어떤 주문 경로에도 연결되지 않는다.
 실제 API·DB·UI·worker 연결은 포함하지 않는다(향후 production adapter는 아래 §9).
 
@@ -61,7 +61,7 @@ to_dict(obj)   # JSON 직렬화(Decimal=str, datetime=ISO UTC), 파일/DB 저장
 - 남은 스냅샷 중 `(received_at, provider_ranked_at(None 최소), digest, id)` 최대가 latest다. latest가 무효이면 **차단**하며 더 오래된 스냅샷으로 대체하지 않는다. 다른 provider의 스냅샷은 사전에 명시적 거부(`PROVIDER_MISMATCH`)한다.
 - latest 판정 순서: 같은 id·다른 내용 → `INVALID_SNAPSHOT`; `provider_ranked_at` 없음/형식 오류 → `UNKNOWN_PROVIDER_TIME`; `provider_ranked_at > received_at` → `INVALID_PROVIDER_TIME`; ranked의 KST 날짜 != as_of KST 날짜 → `DAY_ROLLOVER`; `received_at - ranked_at >= max_receive_lag` → `STALE`(새 수신이 오래된 제공자 기준을 되살리지 못함); `as_of - received_at >= max_snapshot_age` → `STALE`. 모든 경계는 **배타적**(나이 == 한도이면 stale). 실패 시 신규 후보 0개.
 - 사실(상태·유동성·준비도)은 `observed_at <= as_of` 중 최신만 사용하며 미래 사실은 무시. 같은 최신 시각에 서로 다른 사실이 둘 이상이면 `*_CONFLICT`(입력 순서 무관, fail-closed). 나이 >= `max_fact_age`이면 `*_STALE`.
-- 포트폴리오: 최신 `observed_at <= as_of`만 사용, 나이 >= `max_portfolio_age`이면 `STALE`, 없으면 `MISSING`, 같은 시각에 다른 값이면 `CONFLICT`, 모두 미래이면 `FUTURE`. FRESH가 아니면 `require_capital_check`에서 신규 후보 0개. (예외: 모든 포트폴리오가 미래일 때 보유 모니터만을 위해 가장 이른 것을 `PORTFOLIO_FUTURE` 플래그와 함께 사용)
+- 포트폴리오: 최신 `observed_at <= as_of`만 사용, 나이 >= `max_portfolio_age`이면 `STALE`, 없으면 `MISSING`, 같은 시각에 다른 값이면 `CONFLICT`, `observed_at > as_of`인 포트폴리오는 **모든 출력에서 완전히 무시**한다(보유 모니터·합집합 포함, 예외 없음). 인과적으로 사용 가능한 포트폴리오가 없으면 입력이 없는 경우(`MISSING`)와 출력이 동일하다. FRESH가 아니면 `require_capital_check`에서 신규 후보 0개.
 - `entry_expires_at` = 스냅샷 수신+max_snapshot_age, 제공자 기준 시각+lag+age, 사용한 모든 사실과 포트폴리오의 observed_at+한도, 다음 KST 자정 중 **최솟값**. `as_of < entry_expires_at`일 때만 유효(배타적). 보유 모니터에는 만료가 없다.
 
 ## 6. 선정 파이프라인 (각 단계 사유 기록)

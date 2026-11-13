@@ -635,9 +635,9 @@ def _usable_rows(snap: RankingSnapshot, depth: int):
 def _resolve_portfolio(as_of: datetime, portfolio, config: ScoutConfig):
     """Pick the effective portfolio. Returns (portfolio | None, state).
 
-    state: FRESH / STALE / MISSING / FUTURE / CONFLICT. Only FRESH may clear capital gates.
-    Portfolios available after as_of are ignored, unless nothing earlier exists: then the
-    earliest one is returned as FUTURE for position MONITORING only (never for entries).
+    state: FRESH / STALE / MISSING / CONFLICT. Only FRESH may clear capital gates.
+    Portfolios available after as_of are ignored ENTIRELY for every output (prefix
+    invariance): if nothing causally available exists the result equals "no portfolio".
     Different portfolios at the same latest timestamp are CONFLICT; monitored positions are
     then merged conservatively (largest quantity per symbol).
     """
@@ -648,7 +648,7 @@ def _resolve_portfolio(as_of: datetime, portfolio, config: ScoutConfig):
         raise ValueError("portfolio must be a Portfolio or an iterable of Portfolio")
     known = [p for p in items if p.observed_at <= as_of]
     if not known:
-        return min(items, key=lambda p: p.observed_at), "FUTURE"
+        return None, "MISSING"
     latest = max(p.observed_at for p in known)
     top = []
     for p in known:
@@ -927,7 +927,7 @@ def select_watchlist(as_of: Any, snapshots, *, instruments=(), liquidity=(), day
             else:
                 gaps.append("CAPITAL_UNVERIFIED")
             evidence.append(Evidence("PORTFOLIO", "FRESH" if port_state == "FRESH" else port_state,
-                                     portfolio.observed_at if portfolio and port_state != "FUTURE" else None,
+                                     portfolio.observed_at if portfolio else None,
                                      int((as_of - portfolio.observed_at).total_seconds())
                                      if port_state in ("FRESH", "STALE") else None))
 
