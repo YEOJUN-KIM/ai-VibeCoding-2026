@@ -231,6 +231,33 @@ class ReservationAndFillTests(unittest.TestCase):
         self.assertEqual(out['summary']['open_positions'], {} if out['summary']['status'] == 'FLAT' else {'AAA': 3})
 
 
+class ReservationReleaseTests(unittest.TestCase):
+    def test_zero_capacity_wait_keeps_the_reservation_until_expiry_then_releases_it(self):
+        rows = series('AAA', '19800', '20000', tail=3)
+        quotes = [OpenQuote('AAA', at(9, 21), at(9, 21), D('20000'), D('0.5'))]        # int(0.5) == 0 executable shares
+        out = replay(rows, DYN_OPEN, universe=['AAA'], open_quotes=quotes)
+        self.assertEqual((signal_quantity(out), buys(out)), ([4], []))
+        self.assertIn('NO_EXECUTABLE_CAPACITY', reason_codes(out))
+        waiting = [p for p in out['equity_curve'] if at(9, 21) <= p['at'] < at(9, 22)]
+        self.assertTrue(waiting and all(p['reserved_cash'] > 0 for p in waiting))        # still reserved while it waits
+        after = [p for p in out['equity_curve'] if p['at'] >= at(9, 22)]
+        self.assertTrue(after and all(p['reserved_cash'] == 0 and p['reserved_position_slots'] == 0 for p in after))
+        self.assertIn('ENTRY_SIGNAL_TOO_OLD', reason_codes(out))
+        self.assertEqual(out['summary']['cash'], DYN_OPEN.initial_cash)
+
+    def test_volume_limited_partial_fill_releases_the_whole_reservation(self):
+        rows = series('AAA', '19800', '20000', tail=3)
+        quotes = [OpenQuote('AAA', at(9, 21), at(9, 21), D('20000'), D('2'))]          # only 2 of 4 shares executable
+        out = replay(rows, DYN_OPEN, universe=['AAA'], open_quotes=quotes)
+        trade, = buys(out)
+        self.assertEqual((signal_quantity(out), trade['quantity']), ([4], 2))
+        self.assertEqual([r['quantity'] for r in out['reasons'] if r['reason'] == 'ENTRY_REMAINDER_CANCELLED'], [2])
+        later = [p for p in out['equity_curve'] if p['at'] > trade['execution_at']]
+        self.assertTrue(all(p['reserved_cash'] == 0 for p in later))
+        self.assertEqual(out['summary']['cash'] + (trade['amount'] + trade['fee']) - sum(
+            t['cash_delta'] for t in out['trades'] if t['side'] == 'SELL'), DYN_OPEN.initial_cash)
+
+
 class ResearchModeTests(unittest.TestCase):
     """research_estimated_open keeps its overrun invalidation; only a reduction that FITS is normal sizing."""
 
@@ -261,6 +288,47 @@ class ResearchModeTests(unittest.TestCase):
         self.assertEqual(out['research_assumptions']['run_status'], 'INVALID_RESOURCE_OVERRUN')
         self.assertTrue(out['research_assumptions']['resource_breaches'])
         self.assertNotIn('QUANTITY_REDUCED_AT_OPEN_PRICE', [f for t in buys(out) for f in t['uncertainty_flags']])
+
+    def test_a_later_fill_of_another_order_cannot_reshape_an_earlier_quantity_and_is_flagged_instead(self):
+        """Delayed multi-symbol settlement: AAA's open (09:21 @24,000) is only observed at 09:40, after BBB
+        (signal 09:25) already used the cash. AAA must keep its signal quantity and the run is INVALID."""
+        late_cfg = replace(DYN_RESEARCH, initial_cash=D('170000'), min_cash_ratio=D('0'),
+                           research_max_observation_lag_minutes=D('30'))
+        aaa = series('AAA', '19800', '20000', tail=25)
+        aaa = [replace(r, open_price=D('24000'), high_price=D('24000'), close_price=D('24000'),
+                       turnover=D('24000') * r.volume, available_at=at(9, 40)) if r.event_at == at(9, 21) else r
+               for r in aaa]
+        bbb = series('BBB', '19800', '20000', start=20, tail=20)
+        out = replay(aaa + bbb, late_cfg, universe=['AAA', 'BBB'])
+        self.assertEqual((signal_quantity(out, 'AAA'), signal_quantity(out, 'BBB')), ([4], [4]))
+        by_symbol = {t['symbol']: t['quantity'] for t in buys(out)}
+        self.assertEqual(by_symbol.get('AAA'), 4)                                    # not shrunk by BBB's use of cash
+        self.assertNotIn('QUANTITY_REDUCED_AT_OPEN_PRICE', [f for t in buys(out) for f in t['uncertainty_flags']])
+        self.assertEqual(out['research_assumptions']['run_status'], 'INVALID_RESOURCE_OVERRUN')
+        self.assertIn('RESERVATION_RESOURCE_OVERRUN',
+                      [b for br in out['research_assumptions']['resource_breaches'] for b in br['reasons']])
+
+    def test_dynamic_research_audits_the_actual_concurrent_exposure_without_changing_quantities(self):
+        cfg = replace(DYN_RESEARCH, max_total_investment=D('150000'))
+        def gapped(symbol):
+            rows = series(symbol, '19800', '20000', tail=6)
+            return [replace(r, open_price=D('22000'), high_price=D('22000'), close_price=D('22000'),
+                            turnover=D('22000') * r.volume) if r.event_at == at(9, 21) else r for r in rows]
+        out = replay(gapped('AAA') + gapped('BBB'), cfg, universe=['AAA', 'BBB'])
+        self.assertEqual((signal_quantity(out, 'AAA'), signal_quantity(out, 'BBB')), ([4], [3]))
+        self.assertEqual({t['symbol']: t['quantity'] for t in buys(out)}, {'AAA': 4, 'BBB': 3})
+        breaches = [b for br in out['research_assumptions']['resource_breaches'] for b in br['reasons']]
+        self.assertIn('ACTUAL_TOTAL_EXPOSURE_OVERRUN', breaches)
+        self.assertEqual(out['research_assumptions']['run_status'], 'INVALID_RESOURCE_OVERRUN')
+        # without the gap the same pair fits and stays valid
+        calm = replay(series('AAA', '19800', '20000', tail=6) + series('BBB', '19800', '20000', tail=6), cfg,
+                      universe=['AAA', 'BBB'])
+        self.assertEqual(calm['research_assumptions']['run_status'], 'ESTIMATED_ONLY')
+        # FIXED research keeps its original (snapshot-only) audit scope: no new breach kind
+        fixed = replay(gapped('AAA') + gapped('BBB'), replace(FIXED_RESEARCH, order_quantity=3,
+                       max_total_investment=D('150000')), universe=['AAA', 'BBB'])
+        self.assertNotIn('ACTUAL_TOTAL_EXPOSURE_OVERRUN',
+                         [b for br in fixed['research_assumptions']['resource_breaches'] for b in br['reasons']])
 
     def test_no_gap_keeps_the_signal_quantity_and_reservation_accounting(self):
         out = replay(self.rows('20000'), DYN_RESEARCH, universe=['AAA'])

@@ -437,8 +437,14 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
         else:
             reason(at, symbol, breach, phase=phase)
 
-    def overruns(order, quantity, reference):
-        """Research-mode resource breaches of a BUY settlement against its signal-time reservation."""
+    def overruns(order, quantity, reference, *, audit=True):
+        """Research-mode resource breaches of a BUY settlement against its signal-time reservation.
+
+        `audit=False` keeps only the checks that depend on the IMMUTABLE signal snapshot and the fill
+        price (used to choose a reduced quantity). `audit=True` adds the checks that read the CURRENT
+        account (real cash left after other reservations and, for dynamic sizing, the real concurrent
+        exposure); those can only flag the run, never pick the quantity, so later fills cannot reshape
+        an earlier order."""
         snapshot = order['reservation']
         cost = execution_costs(reference, quantity, 'BUY', config)
         out = []
@@ -453,8 +459,13 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
         post_asset = snapshot['equity']+cost['cash_delta']+execution_costs(reference,quantity,'SELL',config)['cash_delta']
         if RiskPolicy.cash_ratio(snapshot['cash_available']+cost['cash_delta'],post_asset)<config.min_cash_ratio:
             out.append('MIN_CASH_RATIO_OVERRUN')
-        if -cost['cash_delta'] > cash - sum((r['cash'] for r in reservations() if r is not snapshot),D(0)):
+        if audit and -cost['cash_delta'] > cash - sum((r['cash'] for r in reservations() if r is not snapshot),D(0)):
             out.append('RESERVATION_RESOURCE_OVERRUN')
+        if audit and dynamic:
+            actual = sum((marks[s_] * p_['quantity'] for s_, p_ in positions.items()), D(0))
+            actual += sum((r['amount'] for r in reservations() if r is not snapshot), D(0))
+            if not RiskPolicy.total_investment_allowed(config, actual, cost['amount']):
+                out.append('ACTUAL_TOTAL_EXPOSURE_OVERRUN')
         return out
 
     def fill(symbol, at, event_at, reference, capacity, evidence_close, price_source, bar_open=None, outcome=None):
@@ -499,7 +510,7 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
             # A reduction that makes the settlement fit its reservation is normal sizing, not an accounting
             # mismatch. If even 1 share does not fit, nothing is cancelled or hidden: the existing overrun
             # detection below still flags the run INVALID_RESOURCE_OVERRUN.
-            fitted = next((q for q in range(quantity, 0, -1) if not overruns(order, q, reference)), None)
+            fitted = next((q for q in range(quantity, 0, -1) if not overruns(order, q, reference, audit=False)), None)
             if fitted is not None and fitted < quantity:
                 reason(at, symbol, 'ENTRY_QUANTITY_REDUCED', phase='SETTLEMENT', from_quantity=quantity,
                        quantity=fitted, signal_quantity=order['quantity'], reference_price=reference)
