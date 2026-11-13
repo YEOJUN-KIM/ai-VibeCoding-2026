@@ -20,7 +20,7 @@
 | 미실행 / 금지 작업 | 앱/서버/DB/워커/예약/실제 API/PAPER/LIVE/주문/운영 데이터/비밀정보/설치/push/PR/main 병합/기존 worktree 수정/추가 worker 생성 금지. |
 | 승인 상태 | 승인 (조정자 작업 지시 범위). 두 exact cherry-pick 및 read-only 기존 DAY01 검증 승인. |
 | 사용자 승인 근거 | 2026-11-13 DAY01-SCOUT dispatched task task_b3cafaeadea6: Claude 주 구현, Codex 독립 검증 및 로컬 검증 커밋. |
-| 진행 상태 | 검토 대기 / 수정 필요 (D-S1~D-S9 수정 확인, D-S10 rollover 두 경로 실패 인계) |
+| 진행 상태 | 검토 대기 (독립 합성 검증 완료 / 로컬 통합 검토 가능 / main 미병합) |
 
 ## 착수 확인
 
@@ -40,11 +40,12 @@
 - 후속 dispatch task_92925d209268 / ctx_1f185a2dbd7d: 정확한 Claude 수정 a82dfb257559c436bcb74380831869bcdae10a08을 clean 1b28bf77 위에 561692e로 적용 승인. 실제 diff 검토 및 기존 독립 40개 재실행 통과. 기존 DAY01 259개는 재실행하지 않음.
 - 요청된 미래 버퍼 활성화·충돌 절단·ID alias 일반화 테스트 5개 추가: 3개 통과, D-S8/D-S9 2개 실패. 실제 재현을 조정자에게 보고하고 구현 수정은 하지 않음.
 - 후속 dispatch task_9e582e563e2d / ctx_d897791f99d4: exact d6a2a661d13a2f49c4a1f466ab981e36d1529d06을 clean 45742992 위에 63ce8db로 적용 승인. 원본45+Claude78+chart3=126개 통과. 변경된 증거 상한 로직의 최소 4개 경계 검증 중 D-S10 두 경로(refresh/ingest_fetch 다음날 재격리)가 실패하여 실제 재현을 조정자에게 보고함.
+- 같은 dispatch 중 조정자가 exact D-S10 수정 8d72fa59bf687a2284ee8e91bb913ac97eea74f8 추가 적용 승인. 본인 테스트·보고를 78f4e1a에 보존한 뒤 clean 상태에서 32dd476284e6c73ddd5e3583d5f6b1b75564b9d8로 적용. 최소 공통 병합 순서 변경을 검토했고 최종 Claude79+독립49+chart3=131개 모두 통과(0 failures/errors/skips/expected failures, exit0). 독립49는 ingest_fetch 별도 회귀 1개를 포함하므로 예상48보다 1개 많음.
 
 ## 결과
 
 - PR 없음 / push 금지 / 최종 SHA는 완료 보고에서 기록 예정.
-- 구현 / 자동 테스트: D-S1~D-S9 수정 확인 후 독립 49개 중 47통과/2실패, Claude 기본 78개·기존 chart 3개 통과. 합동 130개 중 2실패이므로 통합 불가. 분모는 78+49+3이며 별도 기존 DAY01 259개와 중복 합산하지 않음.
+- 구현 / 자동 테스트: D-S1~D-S10 수정 확인 후 독립 49개·Claude 기본 79개·기존 chart 3개 모두 통과. 합동 131개(79+49+3), 별도 기존 DAY01 259개와 중복 합산하지 않음. 승인 범위의 남은 알려진 실패 없음.
 - 실제 동작 / 사용자 확인 / 운영 적용: 모두 미실행·승인 범위 밖. 실제 API/수집기/주문 연결 없음.
-- 남은 일: Claude D-S10 수정 후 exact 승인 커밋을 적용하여 실패 2개 재검증. 기존 DAY01 259개는 Scout 변경만으로 재실행하지 않음.
+- 남은 일: GPT의 최종 코드·한계 검토 및 사용자 main 통합 승인. 실제 수집기의 original receipt/상태·유동성·availability/영속 저장 연결과 사용자 운영 검증은 별도 작업·승인 대상. 기존 DAY01 259개는 Scout 변경만으로 재실행하지 않음.
 - API·DB 계약 변경 없음. 충돌 가능 파일: Claude 소유 구현 4파일은 Codex가 직접 수정하지 않음. GPT 검토 요청: 시간 인과성·충돌 시 차단·수신시각 보존·불변성·opt-out 의미 및 실제 수집기 미연결 제약.
