@@ -81,4 +81,4 @@ Git에는 올라가지 않습니다. `.env.example` 기준 변수 **이름**만 
 
 - **공용 PC 시간 동기화 문제**가 미해결입니다. 시각을 기준으로 하는 수집·시세 수신 시각 검증은 동기화가 확인되기 전까지 신뢰하지 않습니다.
 - 위 합성 테스트 결과는 DAY-01 합성 검증입니다. 사용자 동작 검증, 실제 PAPER 검증, 운영 적용은 아직 아닙니다.
-- 다른 Worktree의 브랜치(`day01-claude-review`, `day01-codex`, `day01-scout-claude`, `day01-scout-codex-review` 등)는 원격에 올라가 있지 않으며 이번 Push 대상이 아닙니다. 필요하면 별도로 승인받아 Push합니다.
+- 다른 로컬 브랜치는 이번 Push 대상이 아니며 원격에 없습니다. 특히 `YEOJUN-KIM/day01-claude-review-20261112`(통합 브랜치에 없는 커밋 10개)와 `YEOJUN-KIM/day01-scout-claude-20261113`(5개)은 **통합 브랜치에 포함되지 않은 커밋**을 가지고 있습니다. 원 PC의 Worktree를 삭제하기 전에 별도 승인을 받아 Push하거나 통합 여부를 결정합니다.
