@@ -131,6 +131,32 @@ class CausalEntryGateTests(unittest.TestCase):
         self.assertEqual(with_future['signals'], without_future['signals'])
         self.assertEqual(with_future['equity_curve'], without_future['equity_curve'])
 
+    def test_universe_superset_with_late_candle_changes_reports_not_trades(self):
+        early = scout_result(at(9, 19, 50), ['AAA'])
+        late = scout_result(at(10, 0), ['BBB'])
+        delayed = candle('BBB', 10, '5000', available_at=at(9, 19, 30))  # arrives late
+        rows = breakout('AAA', tail=3) + [delayed] + [c for c in breakout('BBB', tail=3) if c.event_at != delayed.event_at]
+        narrow = run(rows, WatchTimeline([early]), universe=['AAA'])
+        wide = run(rows, WatchTimeline([early, late]))
+        self.assertEqual(narrow['trades'], wide['trades'])      # trading stays causal
+        self.assertEqual(narrow['signals'], wide['signals'])
+        # Reports cover every universe symbol's data, so only a FIXED universe is comparable.
+        self.assertNotEqual(narrow['equity_curve'], wide['equity_curve'])
+        fixed = run(rows, WatchTimeline([early]), universe=['AAA', 'BBB'])
+        self.assertEqual(fixed['equity_curve'], wide['equity_curve'])
+        self.assertEqual(fixed['reasons'], wide['reasons'])
+
+    def test_offsetless_tzinfo_datetime_is_rejected(self):
+        from datetime import tzinfo
+
+        class Bad(tzinfo):
+            def utcoffset(self, dt): return None
+            def dst(self, dt): return None
+            def tzname(self, dt): return 'bad'
+        timeline = WatchTimeline([scout_result(at(9, 19, 50), ['AAA'])])
+        with self.assertRaises(ValueError):
+            timeline.entry_allowed('AAA', datetime(2026, 11, DAY, 9, 20, tzinfo=Bad()))
+
     def test_snapshot_received_after_decision_time_is_not_usable(self):
         # Ranking provider time 09:19:40 but we only received it at 09:20:30: not available at 09:20.
         ranked, received = at(9, 19, 40), at(9, 20, 30)

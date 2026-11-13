@@ -56,7 +56,7 @@ def limit_mismatches(day01_config, scout_config: ScoutConfig, portfolio: Portfol
 
 
 def _aware(value: datetime) -> datetime:
-    if not isinstance(value, datetime) or value.tzinfo is None:
+    if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("timezone-aware datetime required")
     return value.astimezone(timezone.utc)
 
@@ -69,7 +69,10 @@ class WatchTimeline:
       is not OK, or has expired revokes it; an older result is never used as a fallback.
     * `universe()`: every symbol ever candidate or held in the timeline. It is a data filter, not
       a selection signal; entries stay gated by `entry_allowed`, and held symbols are always
-      included so their stops, marks and liquidation keep running after rotation.
+      included so their stops, marks and liquidation keep running after rotation. Trades and
+      signals are causal for any superset universe, but the replay's reports (equity-curve
+      timestamps, reasons) cover every universe symbol's data, including late-arriving candles.
+      Comparing runs for prefix invariance therefore requires the SAME pre-declared universe.
     """
 
     def __init__(self, results):

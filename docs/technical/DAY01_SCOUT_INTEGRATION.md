@@ -9,7 +9,7 @@ Scout는 WATCH 후보와 보유 모니터만 만들고, 매매 규칙은 DAY-01�
 
 1. `scout_config_for(day01_config)` / `portfolio_limits_for(day01_config)`: 수량, 수수료율, 슬리피지, 최대 포지션, 최소 현금비율, 일일 손실 한도를 DAY-01 `Config`에서 그대로 가져온다. `Config` 자체를 Scout `risk_config`로 넘기면 주문·종목·총 투자 한도도 같은 숫자다. `limit_mismatches()`가 불일치를 이름으로 보고한다.
 2. `WatchTimeline(results).entry_allowed(symbol, at)`: `replay(..., entry_allowed=...)`에 연결하는 신규 **진입 거부권**. `at` 시점까지 알려진 가장 최근 Scout 결과가 OK이고 해당 종목이 후보이며 `at < entry_expires_at`일 때만 참이다. 더 새로운 결과가 종목을 빼거나 STALE이거나 만료되면 오래된 결과로 되돌아가지 않는다(fail-closed).
-3. `WatchTimeline.universe()`: 타임라인 전체의 후보 ∪ 보유 종목. 데이터 필터일 뿐 선정 신호가 아니다. 진입은 항상 2번 게이트를 거치므로 상위집합이어도 미래 누출이 없다.
+3. `WatchTimeline.universe()`: 타임라인 전체의 후보 ∪ 보유 종목. 데이터 필터일 뿐 선정 신호가 아니다. 진입은 항상 2번 게이트를 거치므로 거래·신호에는 미래 누출이 없다. 단 replay 보고서(자산곡선 시각, reasons)는 universe 전체 종목의 데이터를 반영하므로(예: 지연 도착 캔들), 실행 간 prefix 불변성을 비교하려면 **동일하게 사전 선언한 universe**를 써야 한다.
 
 DAY-01 변경은 `replay`의 선택 인자 `entry_allowed=None` 하나다. None이면 동작이 이전과 동일하고(기존 테스트로 확인), 값이 있으면 신규 진입 신호만 `SCOUT_NOT_WATCHED`로 거부한다. 청산·평가·손절·세션 청산은 이 함수를 참조하지 않으므로 후보에서 빠진 보유 종목도 계속 감시된다.
 
