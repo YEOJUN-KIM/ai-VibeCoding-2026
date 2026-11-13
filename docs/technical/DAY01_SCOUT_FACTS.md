@@ -10,7 +10,7 @@
 | 인증정보 노출 | 소스/로그/예외 메시지에 토큰·키 | 어댑터는 클라이언트를 직접 받지 않고 호출 가능 객체만 받는다. 로그는 기존 `ResearchLog`(키 마스킹, 오류는 유형·상태·코드만). `.env`·환경변수 접근 코드 없음 |
 | 요청 메서드·엔드포인트 | 종목 조회가 주문·계좌 호출로 번질 위험 | 소스 래퍼는 `GET /api/v1/stocks`, `GET /api/v1/stocks/all`만 호출. 기존 울타리 `guard_toss_client`는 기본값이 순위만 허용이며, 종목 조회는 호출자가 명시적으로 허용해야 한다(기본 동작 불변) |
 | 응답 시각 vs 수신 시각 | `/stocks`는 공급자 기준시각이 없음(코드상) | 공급자 시각을 만들지 않는다. 사실의 `observed_at`은 **우리 최초 수신 시각**(가용 시각)이다 |
-| 캐시 재사용 | 클라이언트 `_stock_info_cache`·종목 목록은 12시간 캐시 | 시간 민감 정보(상태·거래정지)는 12시간 캐시를 거치지 않는 새 조회만 사용. 목록(시장 구분)은 정적 속성으로만 쓰고 같은 KST 날짜일 때만 인정. 객체 단위 최초 수신 시각 보존 |
+| 캐시 재사용 | 클라이언트 `_stock_info_cache`·종목 목록은 12시간 캐시 | 시간 민감 정보(상태·거래정지)는 12시간 캐시를 거치지 않는 새 조회만 사용. 목록(시장 구분)은 정적 속성으로만 쓰고 원래 수신 시각이 알려져 같은 KST 날짜일 때만 인정. 객체 단위 최초 수신 시각 보존 |
 | 날짜 변경·시계 역행 | 어제 사실을 오늘 적용, 역행한 시계로 과거 시각 도장 | `ReceiptLedger`(순위 어댑터와 같은 규칙: naive·역행·단조 시계 불일치 시 fail-closed). 목록은 날짜가 다르면 무시. Scout의 `observed_at <= as_of`·최대 나이 규칙을 그대로 사용 |
 | 누락·중복·충돌 | 같은 종목이 두 번, 값이 다름 / 응답에 없음 | 충돌은 모든 필드를 UNKNOWN(None)으로 만들고 사유 보고. 누락은 사실을 만들지 않음(Scout가 MISSING으로 제외). 요청하지 않은 종목은 무시 |
 | 저장 경로·원본 보호 | 기록이 보호 디렉터리·링크로 | 기존 `ResearchLog`(대소문자·링크 해석·조상 링크 검사, 쓰기 직전 재검사) 재사용 |
@@ -32,11 +32,13 @@
 ## 3. 어댑터 동작
 
 - `build_instrument_facts`(순수) / `InstrumentFactsSource.collect`: 순위 종목을 50개씩 나눠 새 `/stocks` 조회 → `InstrumentFacts`. 소스는 호출 가능 객체이며 실제 래퍼는 `toss_stocks_source`, `toss_directory_source`.
-- 필드 매핑: `securityType`→`security_type`, `isCommonShare`→`is_common_share`(bool만), `status`, `koreanMarketDetail.krxTradingSuspended/liquidationTrading`(bool만), `market`(목록, 같은 KST 날짜일 때만), `currency`(순위 행). 없거나 타입이 다르면 `None`.
+- 필드 매핑: `securityType`→`security_type`, `isCommonShare`→`is_common_share`(bool만), `status`, `koreanMarketDetail.krxTradingSuspended/liquidationTrading`(bool만), `market`(목록, 같은 KST 날짜일 때만), `currency`(순위 행). 키가 **없으면** `None`(미상). 키가 **있는데** 타입이 다르거나 null·빈 문자열이면 MALFORMED로 보고 `None`으로 만들며(`MALFORMED:<field>`) 목록 값으로 **채우지 않는다**.
+- 심볼은 요청·`/stocks`·목록·순위 모두 `strip().upper()`(기존 클라이언트 규약)로 비교한다. 대소문자·공백 별칭이 다른 값을 가지면 충돌로 차단한다.
 - **Scout 정책은 그대로**: `None`은 `NOT_STOCK / NOT_COMMON_SHARE / NOT_ACTIVE / SUSPENDED_OR_UNKNOWN / LIQUIDATION_OR_UNKNOWN / NOT_KOSPI_KOSDAQ / NOT_KRW`로 제외된다. 따라서 기존 코드와 달리 `liquidationTrading` 키가 없으면 제외한다(보수적). 실제 응답이 정상 종목에서 이 키를 생략하면 후보가 모두 사라질 수 있으며, 이는 실호출로만 확인할 수 있다.
-- 충돌: 같은 소스가 같은 종목을 다르게 반복하면 그 종목의 모든 필드가 `None`(`DUPLICATE_CONFLICT`). `/stocks`와 목록이 정적 속성에서 다르면 해당 필드만 `None`(`CONFLICT:<field>`). 목록은 비어 있는 정적 속성(유형·보통주·시장·이름)만 채우며 상태·거래정지·정리매매는 절대 채우지 않는다.
+- 충돌: 같은 소스가 같은 종목(별칭 포함)을 다르게 반복하면 그 종목의 모든 필드가 `None`(`DUPLICATE_CONFLICT`). `/stocks`와 목록이 정적 속성에서 다르면 해당 필드만 `None`(`CONFLICT:<field>`). 목록은 **키가 없는** 정적 속성(유형·보통주·시장·이름)만 채우며 상태·거래정지·정리매매는 절대 채우지 않는다.
 - 누락: `/stocks` 응답에 없는 종목은 사실을 만들지 않는다(`NO_STOCKS_ROW` → Scout `INSTRUMENT_MISSING`). 요청하지 않은 종목은 무시. 조회 실패·잘못된 응답 형태·시계 이상은 모두 사실 없음으로 수렴하고 오류 유형·상태·코드만 기록한다.
-- 시각: `observed_at`=`/stocks` 최초 수신과 순위 수신 중 늦은 쪽. 둘의 차이가 60초 초과면 사실 없음(`SOURCE_SKEW`). 객체 단위 최초 수신 시각(목록 캐시 포함)을 보존하며 시계 역행은 거부한다. Scout가 `observed_at <= as_of`·나이 300초를 적용하므로 새 사실은 과거 `as_of`에 쓰이지 않고, 더 새로운 거래정지 사실은 이전의 정상 사실을 대체한다.
+- 시각: `observed_at`=`/stocks` 최초 수신과 순위 수신 중 늦은 쪽. 둘의 차이가 60초 초과면 사실 없음(`SOURCE_SKEW`). 객체 단위 최초 수신 시각을 보존하며 시계 역행은 거부한다. 원본 행 기록(`stocks_fetch_ok`)이 성공한 뒤에만 객체를 기억하므로, 기록 실패는 그 배치를 사실 없음으로 만들고 재시도 때 원본 행이 기록된다.
+- 목록 수집 순서와 날짜: 목록을 **먼저** 수집한다(첫 수집에서 목록이 사실보다 늦게 도착해 시장 정보가 사라지는 문제 방지). 목록 소스는 `(rows, 원래 수신 시각)`을 돌려줘야 하고, 수신 시각을 모르면 목록을 쓰지 않는다. 래퍼 `toss_directory_source`는 기존 클라이언트의 캐시 만료 시각(`_stock_universe_expires_at`, 사설 속성)에서 원래 수신 시각을 역산한다(실제 수신보다 이르지 않음). 속성이 없거나 값이 비정상이면 수신 시각 미상으로 처리한다. Scout가 `observed_at <= as_of`·나이 300초를 적용하므로 새 사실은 과거 `as_of`에 쓰이지 않고, 더 새로운 거래정지 사실은 이전의 정상 사실을 대체한다.
 - 울타리: `guard_toss_client(client, also_allow=[("/api/v1/stocks","GET"),("/api/v1/stocks/all","GET")])`처럼 명시한 GET만 추가된다. 기본값은 이전과 같이 토큰 POST와 순위 GET만 허용하며 POST 추가는 거부한다.
 
 ## 4. 실제 정보와 합성 정보의 경계

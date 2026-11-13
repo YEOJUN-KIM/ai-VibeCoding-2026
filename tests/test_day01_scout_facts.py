@@ -153,6 +153,47 @@ class ClassificationTests(unittest.TestCase):
         self.assertEqual(reasons(result, "AAA"), ("CAPITAL_ORDER_LIMIT_FAILED",))
 
 
+class MalformedAndAliasTests(unittest.TestCase):
+    def test_malformed_present_fields_are_never_filled_in_from_the_directory(self):
+        good_dir = [listed("AAA")]                                       # directory says STOCK / common / KOSPI
+        base = stock("AAA")
+        cases = {
+            "type_int": (dict(base, securityType=42), "NOT_STOCK", "MALFORMED:security_type"),
+            "common_str": (dict(base, isCommonShare="false"), "NOT_COMMON_SHARE", "MALFORMED:is_common_share"),
+            "common_null": (dict(base, isCommonShare=None), "NOT_COMMON_SHARE", "MALFORMED:is_common_share"),
+            "type_empty": (dict(base, securityType="  "), "NOT_STOCK", "MALFORMED:security_type"),
+            "status_int": (dict(base, status=5), "NOT_ACTIVE", "MALFORMED:status"),
+            "detail_list": (dict(base, koreanMarketDetail=[]), "SUSPENDED_OR_UNKNOWN", "MALFORMED:krx_trading_suspended"),
+            "suspended_null": (dict(base, koreanMarketDetail={"krxTradingSuspended": None, "liquidationTrading": False}),
+                               "SUSPENDED_OR_UNKNOWN", "MALFORMED:krx_trading_suspended"),
+        }
+        for name, (row, reason, note) in cases.items():
+            facts, notes = build([row], dir_rows=good_dir)
+            self.assertIn(("AAA", note), notes, name)
+            result = scout([ranked("AAA", 1)], facts)
+            self.assertEqual(result.candidates, (), name)
+            self.assertIn(reason, reasons(result, "AAA"), name)
+        # malformed on the directory side blocks too (it must not silently defer to the stocks row)
+        facts, notes = build([base], dir_rows=[dict(listed("AAA"), securityType=7)])
+        self.assertIn(("AAA", "MALFORMED:security_type"), notes)
+        self.assertIsNone(facts[0].security_type)
+
+    def test_case_and_whitespace_aliases_cannot_hide_an_adverse_row(self):
+        facts, notes = build([stock("AAA"), stock("aaa", suspended=True)], symbols=["AAA"], dir_rows=[listed("AAA")])
+        self.assertIn(("AAA", "DUPLICATE_CONFLICT"), notes)
+        self.assertEqual(scout([ranked("AAA", 1)], facts).candidates, ())
+        facts, notes = build([stock("AAA")], symbols=["AAA"], dir_rows=[listed("AAA", market="KOSPI"),
+                                                                    listed(" aaa ", market="KOSDAQ")])
+        self.assertIn(("AAA", "DUPLICATE_CONFLICT_DIRECTORY"), notes)
+        facts, notes = build([stock("AAA")], symbols=["AAA"], ranking=[ranked("AAA", 1), ranked("aaa", 2, currency="USD")])
+        self.assertIn(("AAA", "DUPLICATE_CONFLICT"), notes)
+        # identical aliases are fine, and a request spelled differently still matches its row
+        facts, notes = build([stock("AAA"), dict(stock("AAA"), symbol=" aaa ")], symbols=["AAA"], dir_rows=[listed("AAA")])
+        self.assertEqual((notes, len(facts)), ((), 1))
+        facts, _ = build([dict(stock("AAA"), symbol="aaa")], symbols=[" AAA "], dir_rows=[listed("AAA")], ranking=[ranked("AAA", 1)])
+        self.assertEqual([f.symbol for f in facts], ["AAA"])
+
+
 class ConflictAndMissingTests(unittest.TestCase):
     def test_missing_row_gets_no_fact_and_unrequested_rows_are_ignored(self):
         facts, notes = build([stock("AAA"), stock("EXTRA")], symbols=["AAA", "BBB"])
@@ -262,7 +303,8 @@ class SourceTests(unittest.TestCase):
             return [stock(s) for s in chunk]
 
         directory_rows = [listed(s) for s in symbols]
-        source = self.make(stocks, lambda: directory_rows, clock=Clock(T0 + timedelta(seconds=1)))
+        source = self.make(stocks, lambda: (directory_rows, T0 - timedelta(hours=1)),
+                           clock=Clock(T0 + timedelta(seconds=1)))
         facts, notes = source.collect(symbols, ranking_rows=[ranked(s, i) for i, s in enumerate(symbols, 1)],
                                       ranking_received_at=T0)
         self.assertEqual(calls, [50, 50, 20])
@@ -273,17 +315,61 @@ class SourceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.make(stocks, batch_size=51)
 
-    def test_directory_cache_keeps_first_receipt_and_stocks_get_new_stamps(self):
-        cached_dir = [listed("AAA")]
-        clock = Clock(T0 + timedelta(seconds=1), T0 + timedelta(seconds=2), T0 + timedelta(seconds=40),
-                      T0 + timedelta(seconds=41))
-        source = self.make(lambda chunk: [stock("AAA")], lambda: cached_dir, clock=clock, log=False)
-        a, _ = source.collect(["AAA"], ranking_rows=[ranked("AAA", 1)], ranking_received_at=T0)
-        b, _ = source.collect(["AAA"], ranking_rows=[ranked("AAA", 1)], ranking_received_at=T0 + timedelta(seconds=39))
-        self.assertEqual(a[0].observed_at, T0 + timedelta(seconds=1))      # stocks stamped first (call order)
-        self.assertEqual(clock.calls, 3)                                     # directory object stamped once only
-        self.assertEqual(b[0].observed_at, T0 + timedelta(seconds=40))
-        self.assertEqual(b[0].market, "KOSPI")
+    def test_directory_is_collected_first_and_uses_its_supplied_original_receipt(self):
+        order = []
+
+        def directory():
+            order.append("directory")
+            return [listed("AAA")], T0 + timedelta(seconds=1)          # received before the stocks call
+
+        def stocks(chunk):
+            order.append("stocks")
+            return [stock("AAA")]
+
+        source = self.make(stocks, directory, clock=Clock(T0 + timedelta(seconds=2)), log=False)
+        facts, notes = source.collect(["AAA"], ranking_rows=[ranked("AAA", 1)], ranking_received_at=T0)
+        self.assertEqual(order, ["directory", "stocks"])
+        self.assertEqual(notes, ())
+        self.assertEqual(facts[0].market, "KOSPI")                       # first collect no longer loses the market
+        self.assertEqual(facts[0].observed_at, T0 + timedelta(seconds=2))
+
+    def test_directory_with_unknown_stale_or_bare_receipt_is_not_used(self):
+        for name, returned in (("unknown", ([listed("AAA")], None)),
+                               ("yesterday", ([listed("AAA")], T0 - timedelta(days=1))),
+                               ("future", ([listed("AAA")], T0 + timedelta(minutes=5)))):
+            source = self.make(lambda chunk: [stock("AAA")], lambda r=returned: r, log=False)
+            facts, notes = source.collect(["AAA"], ranking_rows=[ranked("AAA", 1)], ranking_received_at=T0)
+            self.assertIsNone(facts[0].market, name)
+            self.assertTrue(any(code in ("DIRECTORY_RECEIPT_UNKNOWN", "DIRECTORY_NOT_CURRENT") for _, code in notes), name)
+        bare = self.make(lambda chunk: [stock("AAA")], lambda: [listed("AAA")], log=False)       # bare list: rejected
+        facts, notes = bare.collect(["AAA"], ranking_rows=[ranked("AAA", 1)], ranking_received_at=T0)
+        self.assertIn((None, "DIRECTORY_FETCH_FAILED"), notes)
+        self.assertIsNone(facts[0].market)
+
+    def test_log_failure_before_remembering_makes_the_batch_fail_closed_then_logs_raw_rows_on_retry(self):
+        log = ResearchLog(self.log_path, clock=Clock(T0))
+        real, calls = log.append, []
+
+        def flaky(kind, **fields):
+            calls.append(kind)
+            if kind == "stocks_fetch_ok" and calls.count("stocks_fetch_ok") == 1:
+                raise OSError("disk full")
+            return real(kind, **fields)
+
+        log.append = flaky
+        cached = [stock("AAA")]
+        source = InstrumentFactsSource(lambda chunk: cached, clock=Clock(T0 + timedelta(seconds=2),
+                                       T0 + timedelta(seconds=3)), log=log)
+        facts, notes = source.collect(["AAA"], ranking_rows=[ranked("AAA", 1)], ranking_received_at=T0)
+        self.assertEqual(facts, ())
+        self.assertIn(("AAA", "STOCKS_FETCH_FAILED"), notes)
+        facts, _ = source.collect(["AAA"], ranking_rows=[ranked("AAA", 1)], ranking_received_at=T0)
+        self.assertEqual(len(facts), 1)
+        recs = [json.loads(x) for x in self.log_path.read_text(encoding="utf-8").splitlines()]
+        ok = [r for r in recs if r["kind"] == "stocks_fetch_ok"]
+        self.assertEqual(len(ok), 1)
+        self.assertFalse(ok[0]["cache_hit"])
+        self.assertEqual(len(ok[0]["rows"]), 1)                          # raw rows were recorded
 
     def test_failures_degrade_to_fewer_facts_and_log_only_error_metadata(self):
         class Boom(Exception):
@@ -323,6 +409,16 @@ class SourceTests(unittest.TestCase):
 
 
 class WrapperTests(unittest.TestCase):
+    def setUp(self):
+        import sys
+        before = set(sys.modules)
+
+        def cleanup():
+            for name in set(sys.modules) - before:       # only what this test imported
+                if name.startswith("auto_trader.brokers"):
+                    del sys.modules[name]
+        self.addCleanup(cleanup)
+
     def test_stocks_source_uses_only_the_stocks_endpoint_inside_a_budget(self):
         seen = []
 
@@ -337,7 +433,6 @@ class WrapperTests(unittest.TestCase):
             def __getattr__(self, name):
                 raise AssertionError(f"unexpected client access: {name}")
 
-        self.addCleanup(self.drop_brokers)
         rows = toss_stocks_source(Client())(("A1", "B2"))
         self.assertEqual(len(rows), 2)
         self.assertEqual(seen, [("https://example.invalid/api/v1/stocks?symbols=A1%2CB2", True)])
@@ -348,16 +443,35 @@ class WrapperTests(unittest.TestCase):
                 return [listed("A1")]
 
             def __getattr__(self, name):
+                if name == "_stock_universe_expires_at":
+                    raise AttributeError(name)
                 raise AssertionError(f"unexpected client access: {name}")
 
-        self.addCleanup(self.drop_brokers)
-        self.assertEqual(toss_directory_source(Client())()[0]["symbol"], "A1")
+        self.assertEqual(toss_directory_source(Client())()[0][0]["symbol"], "A1")
 
-    @staticmethod
-    def drop_brokers():
-        import sys
-        for name in [n for n in sys.modules if n.startswith("auto_trader.brokers")]:
-            del sys.modules[name]
+    def test_directory_receipt_is_recovered_from_the_client_expiry_and_unknown_when_absent(self):
+        now = datetime(2026, 11, 13, 3, 0, 0, tzinfo=timezone.utc)
+
+        class Client:
+            _stock_universe_expires_at = 1000.0 + 43200 - 7200        # fetched 7200 s before "now" (mono 1000)
+
+            def _domestic_stock_universe(self):
+                return [listed("A1")]
+
+        rows, received = toss_directory_source(Client(), clock=lambda: now, monotonic=lambda: 1000.0)()
+        self.assertEqual(rows[0]["symbol"], "A1")
+        self.assertEqual(received, now - timedelta(seconds=7200))        # yesterday-cached data is dated correctly
+
+        class NoAttr:
+            def _domestic_stock_universe(self):
+                return [listed("A1")]
+
+        self.assertIsNone(toss_directory_source(NoAttr(), clock=lambda: now)()[1])
+
+        class Implausible(Client):
+            _stock_universe_expires_at = 1000.0 + 43200 + 500          # would mean a negative age
+
+        self.assertIsNone(toss_directory_source(Implausible(), clock=lambda: now, monotonic=lambda: 1000.0)()[1])
 
     def test_guard_default_blocks_stocks_and_explicit_allow_adds_only_get_stocks(self):
         class Request:
