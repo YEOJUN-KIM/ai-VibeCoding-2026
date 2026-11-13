@@ -462,8 +462,9 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
         if audit and -cost['cash_delta'] > cash - sum((r['cash'] for r in reservations() if r is not snapshot),D(0)):
             out.append('RESERVATION_RESOURCE_OVERRUN')
         if audit and dynamic:
+            # Real exposure only: positions already filled (current marks) plus THIS fill. Other orders'
+            # unfilled reservations are covered by the snapshot checks and are not real exposure yet.
             actual = sum((marks[s_] * p_['quantity'] for s_, p_ in positions.items()), D(0))
-            actual += sum((r['amount'] for r in reservations() if r is not snapshot), D(0))
             if not RiskPolicy.total_investment_allowed(config, actual, cost['amount']):
                 out.append('ACTUAL_TOTAL_EXPOSURE_OVERRUN')
         return out

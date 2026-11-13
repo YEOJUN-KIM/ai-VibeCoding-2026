@@ -324,6 +324,17 @@ class ResearchModeTests(unittest.TestCase):
         calm = replay(series('AAA', '19800', '20000', tail=6) + series('BBB', '19800', '20000', tail=6), cfg,
                       universe=['AAA', 'BBB'])
         self.assertEqual(calm['research_assumptions']['run_status'], 'ESTIMATED_ONLY')
+        # Opposite gaps (AAA up, BBB down): real exposure 96,048 + 48,024 = 144,072 <= 150,000, so NOT flagged
+        # even though AAA settles while BBB's larger signal-time reservation is still unfilled.
+        def opens(symbol, price):
+            rows = series(symbol, '19800', '20000', tail=6)
+            return [replace(r, open_price=D(price), high_price=max(r.high_price, D(price)),
+                            low_price=min(r.low_price, D(price)), close_price=D(price),
+                            turnover=D(price) * r.volume) if r.event_at == at(9, 21) else r for r in rows]
+        mixed = replay(opens('AAA', '24000') + opens('BBB', '16000'), cfg, universe=['AAA', 'BBB'])
+        self.assertEqual({t['symbol']: t['quantity'] for t in buys(mixed)}, {'AAA': 4, 'BBB': 3})
+        self.assertEqual(mixed['research_assumptions']['resource_breaches'], [])
+        self.assertEqual(mixed['research_assumptions']['run_status'], 'ESTIMATED_ONLY')
         # FIXED research keeps its original (snapshot-only) audit scope: no new breach kind
         fixed = replay(gapped('AAA') + gapped('BBB'), replace(FIXED_RESEARCH, order_quantity=3,
                        max_total_investment=D('150000')), universe=['AAA', 'BBB'])
