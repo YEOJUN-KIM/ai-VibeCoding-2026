@@ -185,6 +185,8 @@ def build_instrument_facts(*, stocks_batches, directory=None, ranking_rows=(), r
                     notes.append((symbol, "DIRECTORY_NOT_CURRENT"))
                 elif static is _CONFLICT:
                     notes.append((symbol, "DUPLICATE_CONFLICT_DIRECTORY"))
+                    for field in _STATIC:                              # an unresolved conflict blocks, not defers
+                        values[field] = None
                 else:
                     for field in _STATIC:
                         have, other = values[field], static[field]

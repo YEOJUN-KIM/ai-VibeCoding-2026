@@ -420,7 +420,7 @@ class SourceBoundaryTests(unittest.TestCase):
             elif isinstance(node, ast.ImportFrom):
                 names.add(("." * node.level) + (node.module or ""))
         allowed = {"__future__", "hashlib", "json", "os", "re", "datetime", "pathlib", "typing", "threading",
-                   "time", "collections", "urllib.parse", ".day01_scout", ".brokers.toss.request_budget"}
+                   "time", "collections", "urllib", "urllib.parse", ".day01_scout", ".brokers.toss.request_budget"}
         self.assertEqual(names - allowed, set())
 
 

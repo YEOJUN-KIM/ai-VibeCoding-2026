@@ -95,7 +95,7 @@ def main() -> int:
     if not client.configured:
         print(json.dumps({"status": "BLOCKED", "reason": "credentials not available to the existing loader"}))
         return 2
-    counts = guard_toss_client(client, max_requests=6, also_allow=APPROVED, rankings=False)
+    counts = guard_toss_client(client, max_requests=6, also_allow=APPROVED, rankings=False)   # also: no redirects
     summary: dict = {"status": "RUNNING", "requests": counts, "log": str(log.path)}
 
     def finish(code):
@@ -212,13 +212,11 @@ def main() -> int:
     }
     log.append("scout_diagnostic", **summary["scout_diagnostic"])
     # Sanitized research file for the requested symbols only (public market metadata, no headers/tokens).
-    research = out_dir / f"toss-stocks-sample-{stamp}.json"
-    research.write_text(json.dumps(redact({
-        "note": "sanitized sample of real /stocks rows for requested symbols; no credentials",
-        "rows": [r for r in fetched],
-        "directory_sample": [by_symbol[s][0] for s in symbols if s.strip().upper() in by_symbol]}),
-        ensure_ascii=False, indent=1), encoding="utf-8")
-    summary["research_file"] = str(research)
+    sample_log = ResearchLog(out_dir / f"toss-stocks-sample-{stamp}.jsonl", clock=now)   # guarded, append-only
+    sample_log.append("stocks_sample", note="real /stocks rows for requested symbols; public metadata, no credentials",
+                      rows=[r for r in fetched],
+                      directory_sample=[by_symbol[s][0] for s in symbols if s.strip().upper() in by_symbol])
+    summary["research_file"] = str(sample_log.path)
     summary["status"] = "OK"
     return finish(0)
 

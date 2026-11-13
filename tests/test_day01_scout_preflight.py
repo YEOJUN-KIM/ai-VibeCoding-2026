@@ -9,7 +9,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from auto_trader.day01_scout_facts import InstrumentFactsSource, toss_directory_source, toss_stocks_source
-from auto_trader.day01_scout_source import ResearchLog, guard_toss_client
+from auto_trader.day01_scout_source import ResearchLog, guard_toss_client, open_without_redirect
 
 T0 = datetime(2026, 11, 13, 1, 50, tzinfo=timezone.utc)
 STOCKS = [("/api/v1/stocks", "GET"), ("/api/v1/stocks/all", "GET")]
@@ -80,6 +80,46 @@ class PreflightTests(unittest.TestCase):
             with self.assertRaises(PermissionError, msg=url):
                 client._authorized_json_request(url, method=method, body=body)
         self.assertEqual([p for _, p in sent if p != "/oauth2/token"], [])     # nothing blocked reached the network
+
+    def test_redirects_are_never_followed_and_the_guard_swaps_urlopen_only_while_a_request_runs(self):
+        import io
+        import urllib.error
+        import urllib.request
+        from email.message import Message
+
+        seen = []
+
+        class Redirecting(urllib.request.BaseHandler):
+            handler_order = 100
+
+            def https_open(self, req):
+                seen.append(req.full_url)
+                headers = Message()
+                headers["Location"] = "https://example.invalid/api/v1/accounts"
+                response = urllib.request.addinfourl(io.BytesIO(b""), headers, req.full_url, 302)
+                response.msg = "Found"
+                return response
+
+        request = urllib.request.Request("https://example.invalid/api/v1/stocks?symbols=A1",
+                                         headers={"Authorization": "Bearer FAKE"})
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            open_without_redirect(request, timeout=1, _handlers=(Redirecting(),))
+        self.assertEqual(caught.exception.code, 302)
+        caught.exception.close()
+        self.assertEqual(seen, ["https://example.invalid/api/v1/stocks?symbols=A1"])      # redirect target never requested
+
+        from auto_trader.brokers.toss import transport
+        original_urlopen = transport.urlopen
+        observed = []
+
+        def handler(path, request):
+            observed.append(transport.urlopen)
+            return {"result": []}
+
+        client, counts, sent = self.client(handler)
+        toss_stocks_source(client)(("A1",))
+        self.assertEqual(observed, [open_without_redirect])        # in force during the fenced request
+        self.assertIs(transport.urlopen, original_urlopen)         # and restored afterwards
 
     def test_rankings_can_be_removed_from_the_allowlist_and_default_is_unchanged(self):
         from auto_trader.toss import TossClient

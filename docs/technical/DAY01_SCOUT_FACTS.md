@@ -62,7 +62,7 @@
 
 ## 6. 실제 응답 검증 (2026-11-13 10:48 KST, 읽기 전용)
 
-**호출**: 울타리를 통과한 요청은 6회로 상한에 정확히 도달했다: 토큰 POST 2, `GET /api/v1/stocks/all` 3(KOSPI·KOSDAQ 각 1 + 추가 1회, 원인 미기록), `GET /api/v1/stocks` 1(성공). 7번째 요청(`/stocks` 두 번째 배치)은 울타리가 네트워크 전에 차단했다. 순위·계좌·주문 호출 없음(울타리가 순위도 차단). 비밀정보는 출력·기록하지 않았다(기록 파일 3개에서 토큰·Bearer·secret·client_id 문자열 0건).
+**호출**: 울타리를 통과한 요청은 6회로 상한에 정확히 도달했다: 토큰 POST 2, `GET /api/v1/stocks/all` 3(KOSPI·KOSDAQ 각 1 + 추가 1회, 원인 미기록), `GET /api/v1/stocks` 1(성공). 7번째 요청(`/stocks` 두 번째 배치)은 울타리가 네트워크 전에 차단했다. 순위·계좌·주문 호출 없음(울타리가 순위도 차단). 인증정보 값의 노출은 발견되지 않았다. 검사 기준: 연구 기록 파일(순위 JSONL, 종목 JSONL, 표본)에서 `bearer|access_token|client_secret|client_id|authorization|password` 검색 0건. 요약 JSON(`stocks-summary.json`)에는 공개 엔드포인트 경로 `/oauth2/token`이 요청 카운트 키로 1건 있으며 이는 인증정보 값이 아니다. 표본은 이후 `ResearchLog`(JSONL)로 쓰도록 바꿨다(이번 실행의 표본은 이전 `.json` 형식).
 
 **`/stocks` 행 키(실제)**: `symbol, name, englishName, isinCode, market, currency, securityType, isCommonShare, status, listDate, delistDate, sharesOutstanding, leverageFactor, koreanMarketDetail.{nxtSupported, krxTradingSuspended, nxtTradingSuspended, liquidationTrading}`. 표본 50종목(상위 순위): `market` KOSPI 40/KOSDAQ 10, `currency` KRW 50, `status` ACTIVE 50, `krxTradingSuspended` False 50, **`liquidationTrading` False 50(전부 존재)**, `delistDate` null 50, `leverageFactor` ETF에만 값.
 

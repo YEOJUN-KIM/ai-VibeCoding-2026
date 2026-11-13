@@ -33,7 +33,7 @@ _SECRET_KEY = re.compile(r"token|secret|authorization|password|passwd|api[-_]?ke
                          re.IGNORECASE)
 
 __all__ = ["RankingFetcher", "ResearchLog", "ClockRegression", "toss_ranking_source",
-           "guard_toss_client", "redact"]
+           "guard_toss_client", "redact", "open_without_redirect"]
 
 
 def redact(value: Any) -> Any:
@@ -207,6 +207,19 @@ def toss_ranking_source(client, *, budget_seconds: float = 15.0) -> Callable[[],
     return source
 
 
+def open_without_redirect(request, timeout=None, *, _handlers=()):
+    """`urlopen` replacement that never follows a redirect (a 3xx surfaces as HTTPError), so an
+    allowed URL cannot send the Authorization header to a different path or host."""
+    import urllib.request
+
+    class _NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *args, **kwargs):
+            return None
+
+    opener = urllib.request.build_opener(_NoRedirect(), *_handlers)
+    return opener.open(request, timeout=timeout) if timeout is not None else opener.open(request)
+
+
 def guard_toss_client(client, *, max_requests: int = 6, also_allow=(), rankings: bool = True) -> dict:
     """Hard read-only fence around an existing Toss client instance.
 
@@ -214,6 +227,8 @@ def guard_toss_client(client, *, max_requests: int = 6, also_allow=(), rankings:
     GET can ever be sent, and at most `max_requests` requests in total (the client itself may
     retry a 429 or re-authorize a 401, so this cap, not the fetch count, is the real upper
     bound). Anything else raises before any network I/O. Returns the live counter (paths only).
+    While a fenced request runs, the transport module's `urlopen` is swapped for
+    `open_without_redirect` (restored afterwards), so redirects cannot bypass the allowlist or cap.
     `also_allow` adds explicit (path, GET) pairs, e.g. the stocks endpoints; the default adds none.
     `rankings=False` removes the ranking GET from the allowlist (token POST and `also_allow` only).
     """
@@ -236,7 +251,15 @@ def guard_toss_client(client, *, max_requests: int = 6, also_allow=(), rankings:
             raise PermissionError("request cap reached")
         counts["total"] += 1
         counts["paths"][path] = counts["paths"].get(path, 0) + 1
-        return original(request)
+        namespace = getattr(type(client)._json_request_once, "__globals__", None)
+        if namespace is None or "urlopen" not in namespace:
+            return original(request)
+        saved = namespace["urlopen"]
+        namespace["urlopen"] = open_without_redirect
+        try:
+            return original(request)
+        finally:
+            namespace["urlopen"] = saved
 
     client._json_request_once = fenced
     return counts

@@ -211,6 +211,14 @@ class RealShapeTests(unittest.TestCase):
         self.assertIn(("AAA", "MALFORMED:currency"), notes)
         self.assertIsNone(facts[0].currency)
 
+    def test_directory_duplicate_conflict_blocks_even_when_stocks_row_looks_eligible(self):
+        facts, notes = build([real_shaped("AAA")], dir_rows=[listed("AAA"), listed("AAA", kind="ETF", common=False)])
+        self.assertIn(("AAA", "DUPLICATE_CONFLICT_DIRECTORY"), notes)
+        self.assertEqual((facts[0].security_type, facts[0].is_common_share, facts[0].market), (None, None, None))
+        result = scout([ranked("AAA", 1)], facts)
+        self.assertEqual(result.candidates, ())
+        self.assertIn("NOT_STOCK", reasons(result, "AAA"))
+
     def test_missing_liquidation_key_is_still_unknown_even_though_the_real_sample_always_had_it(self):
         row = real_shaped("AAA")
         row["koreanMarketDetail"] = {"nxtSupported": True, "krxTradingSuspended": False}
