@@ -19,6 +19,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
+from decimal import Decimal
 from typing import Iterable, Mapping
 
 from .day01_scout import DayOneFacts, LiquidityFacts, RankingSnapshot
@@ -32,6 +33,11 @@ SESSION_MINUTES = 390          # [09:00, 15:30)
 OPENING_MINUTES = 15           # DAY-01 opening range 09:00..09:14
 DEFAULT_GRACE = timedelta(seconds=5)
 STRICT_MODES = frozenset({"next_open", "legacy_close"})
+# KRX daily price limit is +-30 %, so a single minute bar cannot span more than that, and a bar cannot open more
+# than that away from the previous minute's close. Beyond it the row is treated as bad data, never as a price.
+# (Fail-closed: a genuine first-day IPO listing, whose range is wider, is also held back.)
+MAX_BAR_MOVE = Decimal("0.30")
+MAX_CLOCK_UNCERTAINTY = timedelta(hours=1)
 
 
 @dataclass(frozen=True)
@@ -109,12 +115,24 @@ def liquidity_from_snapshot(snapshot: RankingSnapshot, *, as_of: datetime | None
 def readiness_from_rows(rows: Iterable, *, symbols: Iterable[str], as_of: datetime,
                         config: Config | None = None, vwap_mode: str | None = None,
                         allow_approximate_vwap: bool = False, grace: timedelta = DEFAULT_GRACE,
-                        max_lag: timedelta | None = None) -> tuple:
+                        max_lag: timedelta | None = None,
+                        clock_uncertainty: timedelta = timedelta(0)) -> tuple:
     """Returns (dayone_facts, readiness, candles, notes, provenance). Pure; rows are plain mappings.
 
     `candles` carry `available_at = max(available_at, collected_at)` (when we really had the bar);
-    `provenance` keeps the three original times (event_at, available_at, collected_at) plus effective_at."""
+    `provenance` keeps the three original times (event_at, available_at, collected_at) plus effective_at.
+
+    `clock_uncertainty` (default 0 = unchanged): how far OUR clock may be ahead of the provider's. All receipt
+    stamps come from this PC's clock, so a clock that runs ahead can stamp a bar as 'complete' while its minute is
+    still running (the stored bar would be partial). With a positive value, a bar whose effective availability is
+    less than `event_at + 1 min + clock_uncertainty` is not trusted (CLOCK_UNCERTAIN_BAR) and the grace window grows
+    by the same amount. Callers set it when the clock is known to be unsynchronised; strict modes (which need a bar
+    available exactly at its minute end) then stay blocked, which is the safe outcome."""
     as_of = _aware(as_of, "as_of")
+    if (not isinstance(clock_uncertainty, timedelta) or clock_uncertainty < timedelta(0)
+            or clock_uncertainty > MAX_CLOCK_UNCERTAINTY):
+        raise ValueError("clock_uncertainty must be a timedelta between 0 and 1 hour")
+    grace = grace + clock_uncertainty
     mode = vwap_mode or (config.vwap_mode if config is not None else "exact")
     if mode not in {"exact", "typical_approximation"}:
         raise ValueError("explicit vwap_mode required")
@@ -181,6 +199,9 @@ def readiness_from_rows(rows: Iterable, *, symbols: Iterable[str], as_of: dateti
         if collected is not None and collected < avail:
             defects[key]["COLLECTED_BEFORE_AVAILABLE"] += 1
             continue
+        if clock_uncertainty and moment < event + MINUTE + clock_uncertainty:
+            defects[key]["CLOCK_UNCERTAIN_BAR"] += 1             # may have been stamped while its minute still ran
+            continue
         if raw.get("interval") != "1m":
             defects[key]["NOT_1M"] += 1
             continue
@@ -206,6 +227,15 @@ def readiness_from_rows(rows: Iterable, *, symbols: Iterable[str], as_of: dateti
         origins[key][slot] = (avail, collected)
         entries.append((eff_row, dict(symbol=key, source=raw["source"], event_at=event, available_at=avail,
                                       collected_at=collected, effective_at=moment)))
+    for key in wanted:                                        # implausible prices are bad data, not a signal
+        for slot in sorted(known[key]):
+            bar = known[key][slot][0]
+            previous = known[key].get(slot - MINUTE)
+            if (bar.high_price > bar.low_price * (1 + MAX_BAR_MOVE) or (
+                    previous is not None
+                    and abs(bar.open_price - previous[0].close_price) > previous[0].close_price * MAX_BAR_MOVE)):
+                conflicted[key].add(slot)
+                defects[key]["IMPLAUSIBLE_PRICE"] += 1
     elapsed = int((as_of.astimezone(KST) - grace - open_at) // MINUTE)
     required = max(0, min(SESSION_MINUTES, elapsed))
     facts, reports = [], []
@@ -266,6 +296,16 @@ def readiness_from_rows(rows: Iterable, *, symbols: Iterable[str], as_of: dateti
         else:
             basis = "UNAVAILABLE"
             codes.append("VWAP_APPROXIMATION_NOT_ALLOWED")
+        volumes = [c.volume for c in known_prefix[:required]]
+        # DAY-01's VWAP is undefined without traded volume (it divides by it): never call that 'ready'.
+        if window_complete and (sum(volumes, Decimal(0)) <= 0
+                                or (required > 5 and sum(volumes[:required - 5], Decimal(0)) <= 0)):
+            basis = "UNAVAILABLE"
+            codes.append("VWAP_ZERO_VOLUME")
+        if any(c.volume == 0 for c in known_prefix):
+            codes.append("ZERO_VOLUME_BARS")                  # informational: legitimate for thin stocks, worth seeing
+        if clock_uncertainty:
+            codes.append("CLOCK_UNCERTAINTY_APPLIED")
         vwap_ready = window_complete and basis != "UNAVAILABLE"
         opening_ready = prefix >= OPENING_MINUTES and not any(m in blocked for m in slots[:OPENING_MINUTES])
         # Freshness of the FACT = newest availability among every usable bar we looked at. A gap therefore
@@ -302,8 +342,8 @@ def readiness_from_rows(rows: Iterable, *, symbols: Iterable[str], as_of: dateti
 def build_market_inputs(snapshot: RankingSnapshot, rows: Iterable, *, as_of: datetime,
                         symbols: Iterable[str] | None = None, config: Config | None = None,
                         vwap_mode: str | None = None, allow_approximate_vwap: bool = False,
-                        grace: timedelta = DEFAULT_GRACE, max_ranking_candle_skew: timedelta = timedelta(seconds=180)
-                        ) -> MarketInputs:
+                        grace: timedelta = DEFAULT_GRACE, max_ranking_candle_skew: timedelta = timedelta(seconds=180),
+                        clock_uncertainty: timedelta = timedelta(0)) -> MarketInputs:
     """Liquidity facts from the ranking and readiness facts/candles from stored minute rows.
 
     `symbols` defaults to the snapshot's symbols. Nothing here relaxes Scout: the spread stays UNKNOWN,
@@ -313,7 +353,7 @@ def build_market_inputs(snapshot: RankingSnapshot, rows: Iterable, *, as_of: dat
     names = sorted({r.symbol for r in snapshot.rows}) if symbols is None else list(symbols)
     dayone, readiness, candles, candle_notes, provenance = readiness_from_rows(
         rows, symbols=names, as_of=as_of, config=config, vwap_mode=vwap_mode,
-        allow_approximate_vwap=allow_approximate_vwap, grace=grace)
+        allow_approximate_vwap=allow_approximate_vwap, grace=grace, clock_uncertainty=clock_uncertainty)
     notes = list(notes) + list(candle_notes)
     skew = {}
     if snapshot.received_at <= as_of:

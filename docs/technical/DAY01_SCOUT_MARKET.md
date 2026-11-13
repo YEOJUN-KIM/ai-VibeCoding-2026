@@ -53,6 +53,20 @@
 
 테스트로 확인한 정합성(`evaluate_entry`와 대조): 개장 공백 → 준비도 opening False ↔ DAY-01 `INCOMPLETE_OPENING_RANGE`; 현재 5분 구간 공백 → DAY-01 `NO_FRESH_FIVE_MINUTE_BAR`; 과거 구간 공백 → `INCOMPLETE_SESSION_VWAP`; exact + 거래대금 없음 → `MISSING_EXACT_TURNOVER`. 준비도가 True인 합성 입력에서 DAY-01은 이 네 사유로 막지 않는다.
 
+## 5-1. 분봉 품질 보강 (CANDLE-01)
+
+기존에 이미 있는 검증: 정렬되지 않은 시각, 분 종료 전 저장(`INCOMPLETE_BAR`), `collected_at < available_at`, 1m 아님, 출처 없음, OHLC·음수·0 가격 거부(`Candle.validate`), 중복 동일/충돌, 다른 거래일·장외, `as_of` 이후 행 무시, 개장 15분 공백·세션 공백·지연 도착, 저장 전 수집기의 "분 종료 후에만 저장" 필터(`collect_candles`).
+
+합성 데이터로 확인한 공백과 보강(기본 동작은 유지):
+
+- **거래량 0의 VWAP**(`VWAP_ZERO_VOLUME`): 준비 구간의 거래량 합이 0(또는 DAY-01이 쓰는 `[:-5]` 구간 합이 0)이면 VWAP이 정의되지 않는데도 `ready=True`였다. 이제 `vwap_ready=False`다. 봉 하나의 거래량 0은 정보 코드 `ZERO_VOLUME_BARS`만 남기고 막지 않는다.
+- **비현실적 가격**(`IMPLAUSIBLE_PRICE`): OHLC가 서로 일관돼도 한 분봉의 고저폭이 30%를 넘거나 직전 분 종가 대비 시가가 30%를 넘으면(상·하한가 ±30%) 잘못된 자료로 보고 그 봉을 막는다(그 봉부터 준비도 False, DAY-01 입력에도 넣지 않음). 신규 상장 첫날처럼 정상적으로 더 넓은 경우도 보수적으로 막힌다.
+- **PC 시계 불확실성**(`clock_uncertainty`, 기본 0): 모든 수신 시각은 이 PC 시계다. 시계가 제공자보다 앞서면 아직 진행 중인 분봉이 "완성"으로 저장될 수 있다(저장은 영구 보존). 양수를 주면 유효 사용 시각이 `event_at + 1분 + clock_uncertainty`보다 이른 봉은 `CLOCK_UNCERTAIN_BAR`로 신뢰하지 않고 grace도 같은 만큼 늘린다. 시계가 동기화되지 않은 상태(ORDERBOOK-02A에서 확인)에서 호출자가 값을 준다. 엄격 모드(정시 도착 필요)는 이때 막힌 채로 남는다.
+
+시계에 의존하는 검증과 아닌 검증: 완결성(`INCOMPLETE_BAR`)·지연·정시 판정·수집기의 완료 필터·`as_of` 판정은 모두 PC 시계에 의존하며 시계가 **뒤처지면** 보수적(늦게 사용)이고 **앞서면** 진행 중 봉을 완성으로 오인할 수 있다. OHLC 유효성·중복·정렬·가격 현실성은 시계와 무관하다.
+
+미반영(운영 수집 경로라 승인 필요): `collect_candles`의 완료 필터(`timestamp + 1분 <= received_at`)에 같은 여유 시간을 두는 일. 저장이 `ON CONFLICT DO NOTHING`이라 한 번 저장된 부분 봉은 고쳐지지 않는다.
+
 ## 6. 한계 (실제 자료 없이는 검증 불가)
 
 - 실제 `ml_raw_candles`의 범위·결측률, 실제 수집 종목 목록(Scout 후보가 수집 대상인지), 마지막 봉의 확정 여부(첫 저장이 영구 보존), 호가 응답 구조는 미확인이다.

@@ -492,6 +492,75 @@ class ScoutEndToEndTests(unittest.TestCase):
         self.assertIn('SESSION_GAP', reports[0].codes)
 
 
+class CandleQualityTests(unittest.TestCase):
+    """CANDLE-01: gaps found in the existing readiness checks (all synthetic rows, no clock/DB/network)."""
+
+    def rep(self, rows, **kw):
+        _, report, candles, _ = ready(rows=rows, config=RESEARCH, allow_approximate_vwap=True, **kw)
+        return report, candles
+
+    def test_baseline_is_ready_and_unchanged(self):
+        report, candles = self.rep(bars('AAA'))
+        self.assertEqual((report.ready, report.completed_1m_bars, len(candles)), (True, 20, 20))
+        self.assertNotIn('ZERO_VOLUME_BARS', report.codes)
+
+    def test_zero_traded_volume_is_never_a_ready_vwap(self):
+        for label, volume_of in (('all zero', lambda i: D(0)), ('only the first 15 zero', lambda i: D(0) if i < 15 else D(50))):
+            with self.subTest(label):
+                report, _ = self.rep([row('AAA', i, volume=volume_of(i)) for i in range(20)])
+                self.assertFalse(report.vwap_ready)
+                self.assertFalse(report.ready)
+                self.assertEqual(report.vwap_basis, 'UNAVAILABLE')
+                self.assertIn('VWAP_ZERO_VOLUME', report.codes)
+        facts, report, _, _ = ready(rows=[row('AAA', i, volume=D(0)) for i in range(20)], config=RESEARCH, allow_approximate_vwap=True)
+        self.assertFalse(facts[0].vwap_ready)                                  # the fact Scout sees agrees
+
+    def test_a_single_zero_volume_bar_is_reported_but_does_not_block(self):
+        report, _ = self.rep([row('AAA', i, volume=D(0) if i == 7 else D(100)) for i in range(20)])
+        self.assertEqual((report.ready, 'ZERO_VOLUME_BARS' in report.codes, 'VWAP_ZERO_VOLUME' in report.codes), (True, True, False))
+
+    def test_implausible_prices_block_the_bar_and_never_reach_day01(self):
+        spike = bars('AAA')
+        spike[10] = row('AAA', 10, price='1000')                              # 10x the neighbours: OHLC-consistent but impossible
+        report, candles = self.rep(spike)
+        self.assertEqual((report.ready, report.completed_1m_bars), (False, 10))
+        self.assertIn('IMPLAUSIBLE_PRICE', report.codes)
+        self.assertTrue(all(c.high_price < 500 for c in candles))
+        wide = bars('AAA')
+        wide[3] = row('AAA', 3, high_price=D(140), low_price=D(100), open_price=D(100), close_price=D(100))   # 40 % inside one bar
+        self.assertIn('IMPLAUSIBLE_PRICE', self.rep(wide)[0].codes)
+        gap = [row('AAA', i, price='100') for i in range(10)] + [row('AAA', i, price='140') for i in range(10, 20)]
+        self.assertIn('IMPLAUSIBLE_PRICE', self.rep(gap)[0].codes)            # +40 % between adjacent minutes
+        edge = [row('AAA', i, price='100') for i in range(10)] + [row('AAA', i, price='130') for i in range(10, 20)]
+        report, _ = self.rep(edge)                                            # exactly +30 % is allowed
+        self.assertEqual((report.ready, 'IMPLAUSIBLE_PRICE' in report.codes), (True, False))
+
+    def test_clock_uncertainty_distrusts_bars_stamped_too_close_to_their_minute_end(self):
+        close = [row('AAA', i, delay=0) for i in range(20)]                   # stamped exactly at the minute end
+        self.assertTrue(self.rep(close)[0].ready)                             # default: unchanged
+        report, candles = self.rep(close, clock_uncertainty=timedelta(seconds=2))
+        self.assertFalse(report.ready)
+        self.assertIn('CLOCK_UNCERTAIN_BAR', report.codes)
+        self.assertIn('CLOCK_UNCERTAINTY_APPLIED', report.codes)
+        self.assertEqual(candles, ())
+        normal = bars('AAA', delay=2)                                         # 2 s lag is exactly the bound: trusted
+        self.assertTrue(self.rep(normal, clock_uncertainty=timedelta(seconds=2))[0].ready)
+        near = [row('AAA', i, delay=1) for i in range(20)]
+        self.assertFalse(self.rep(near, clock_uncertainty=timedelta(seconds=2))[0].ready)
+        for bad in (timedelta(seconds=-1), timedelta(hours=2), 2, None):
+            with self.assertRaises(ValueError):
+                self.rep(bars('AAA'), clock_uncertainty=bad)
+
+    def test_clock_uncertainty_flows_through_build_market_inputs_and_scout_stays_conservative(self):
+        data = [row('AAA', i, delay=1) for i in range(20)]
+        inputs = build_market_inputs(snapshot(), data, as_of=AS_OF, config=RESEARCH, allow_approximate_vwap=True,
+                                     clock_uncertainty=timedelta(seconds=5))
+        self.assertFalse(inputs.readiness[0].ready)
+        self.assertEqual(inputs.candles, ())
+        plain = build_market_inputs(snapshot(), data, as_of=AS_OF, config=RESEARCH, allow_approximate_vwap=True)
+        self.assertTrue(plain.readiness[0].ready)
+
+
 class PurityTests(unittest.TestCase):
     def test_module_imports_only_pure_dependencies(self):
         tree = ast.parse(Path(market.__file__).read_text(encoding='utf-8'))
@@ -501,7 +570,7 @@ class PurityTests(unittest.TestCase):
                 names.update(a.name.split('.')[0] for a in node.names)
             elif isinstance(node, ast.ImportFrom):
                 names.add(('.' * node.level) + (node.module or ''))
-        allowed = {'__future__', 'collections', 'dataclasses', 'datetime', 'typing',
+        allowed = {'__future__', 'collections', 'dataclasses', 'datetime', 'decimal', 'typing',
                    '.day01_scout', '.ml.day01', '.ml.day01_research'}
         self.assertEqual(names - allowed, set())
 
