@@ -38,5 +38,5 @@
 ## 결과
 
 - PR 번호·URL / 최종 SHA 확인 위치: PR 없음. 최종 commit SHA는 완료 보고(worker_done)에 기록.
-- 구현 / 자동 테스트 / 실제 동작 / 사용자 확인 / 운영 적용 상태: AI 구현 완료 / 합성 단위 테스트 65건 통과(로컬, `python -m unittest tests.test_day01_scout`) / 해당 없음(실제 API 미연결) / 미확인 / 미적용.
-- 미검증 항목·남은 위험·GPT 검토 사항: 미검증: 실제 API 응답·휴장일·production adapter. Codex 독립 검증 대기. 보유 모니터는 모든 포트폴리오가 미래일 때만 prefix invariance의 예외(모니터 전용)를 둠.
+- 구현 / 자동 테스트 / 실제 동작 / 사용자 확인 / 운영 적용 상태: AI 구현 완료 / 합성 단위 테스트 66건 통과(로컬, `python -m unittest tests.test_day01_scout`) / 해당 없음(실제 API 미연결) / 미확인 / 미적용.
+- 미검증 항목·남은 위험·GPT 검토 사항: 미검증: 실제 API 응답·휴장일·production adapter. Codex 독립 검증 대기. D-S1(미래 포트폴리오 보유 종목 누출)은 수정됨: 미래 포트폴리오는 모든 출력에서 무시.

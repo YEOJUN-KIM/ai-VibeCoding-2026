@@ -479,10 +479,27 @@ class PortfolioAndHeldTests(unittest.TestCase):
         self.assertEqual(stale.candidates, ())
         self.assertEqual(reasons(stale, sym(1)), ("PORTFOLIO_STALE",))
         future = run(pf=portfolio(observed_at=AS_OF + timedelta(seconds=1)))
-        self.assertEqual((future.portfolio_status, future.candidates), ("FUTURE", ()))
+        self.assertEqual((future.portfolio_status, future.candidates), ("MISSING", ()))
         missing = select_watchlist(AS_OF, [snap()], instruments=instruments(), liquidity=liquidity(),
                                    dayone=dayone(), portfolio=None, risk_config=RISK)
         self.assertEqual((missing.portfolio_status, missing.candidates), ("MISSING", ()))
+
+    def test_future_only_portfolio_is_indistinguishable_from_none(self):
+        future = portfolio(observed_at=AS_OF + timedelta(seconds=1), cash=0,
+                           positions=[Position("FUTURE_ONLY", 3)])
+        none = select_watchlist(AS_OF, [snap()], instruments=instruments(), liquidity=liquidity(),
+                                dayone=dayone(), portfolio=None, risk_config=RISK)
+        for pf in (future, [future]):
+            leaked = select_watchlist(AS_OF, [snap()], instruments=instruments(), liquidity=liquidity(),
+                                      dayone=dayone(), portfolio=pf, risk_config=RISK)
+            self.assertEqual(to_dict(leaked), to_dict(none))
+            self.assertEqual((leaked.held, leaked.watch_union), ((), ()))
+            self.assertNotIn("FUTURE_ONLY", json.dumps(to_dict(leaked)))
+        # Past-known stale portfolio keeps monitoring its own positions; a future one adds nothing.
+        stale = portfolio(observed_at=AS_OF - timedelta(hours=1), positions=[Position("OLD001", 2)])
+        both = run(pf=[stale, future])
+        self.assertEqual(to_dict(both), to_dict(run(pf=stale)))
+        self.assertEqual([h.symbol for h in both.held], ["OLD001"])
 
     def test_later_portfolio_ignored_when_earlier_known(self):
         early = portfolio()
