@@ -27,11 +27,11 @@
 |---|---|
 | `completed_1m_bars` | 09:00부터 **연속**으로 알려진 봉 수(공백이 있으면 거기서 멈춤) |
 | `opening_range_ready` | 09:00~09:14 15개 모두 알려짐(충돌 없음) |
-| `vwap_ready` | `required_bars`까지 연속이며 VWAP 방식이 가능 |
+| `vwap_ready` | `required_bars`까지 연속이며 VWAP 방식이 가능. `exact`는 알려진 **모든** 연속 봉에 거래대금이 있어야 함(grace는 도착 허용량에만 쓰이며 이미 알려진 봉의 결함을 가리지 않음) |
 | `observed_at` | 알려진 사용 가능 봉 중 가장 늦은 가용 시각(사실의 신선도). 공백이 있어도 피드가 살아 있으면 신선, 피드가 멈추면 오래됨(Scout `STALE`) |
-| `ready` | opening AND vwap AND (엄격 모드면 최신 필요 봉이 정시 도착) |
+| `ready` | opening AND vwap AND (엄격 모드면 **알려진 최신 봉**이 정시 도착) |
 
-**봉 선택(미래정보 차단)**: 가용 시각 = `max(available_at, collected_at)`가 `as_of` 이후인 행은 사용하지 않는다(그 분이 나중 행으로만 존재하면 `LATE_NOT_YET_AVAILABLE`로 보고하고 내용은 쓰지 않음). 이후 행을 덧붙여도 결과가 같다(테스트). `event_at`(시장), `available_at`·`collected_at`(수신)은 바꾸지 않는다.
+**봉 선택(미래정보 차단)**: 가용 시각 = `max(available_at, collected_at)`가 `as_of` 이후인 행은 사용하지 않는다(그 분이 나중 행으로만 존재하면 `LATE_NOT_YET_AVAILABLE`로 보고하고 내용은 쓰지 않음). 이후 행을 덧붙여도 결과가 같다(테스트). DAY-01로 넘기는 `Candle.available_at`은 이 **유효 가용 시각**이다(`collected_at`이 더 늦으면 그 시각). 지연·정시 판정과 엄격 모드 게이트도 같은 시각을 쓴다. 원본 `event_at`·`available_at`·`collected_at`은 바꾸지 않고 `readiness_from_rows`의 5번째 반환값 `provenance`(`MarketInputs.provenance`)에 `effective_at`과 함께 그대로 보존한다.
 
 **결함 분류(행 단위, 사용하지 않음)**: `INCOMPLETE_BAR`(분 끝 전에 찍힘), `UNALIGNED_EVENT`, `NOT_1M`, `NO_SOURCE`, `COLLECTED_BEFORE_AVAILABLE`, `INVALID_ROW`(OHLC·숫자 검증은 기존 `adapt_rows`/`Candle.validate`). 중복: 값이 같으면 하나로, **다르면 `DUPLICATE_CONFLICT`**로 그 분을 막는다(양쪽 모두 사용 안 함, 준비도 불가).
 
@@ -47,7 +47,7 @@
 
 ## 5. DAY-01 실행 모드와의 정합 (실제 수집 지연의 영향)
 
-실제 수집기는 분 끝 약 2초 뒤에 봉을 저장하므로 `available_at ≠ event_at+1분`이다. DAY-01의 `next_open`·`legacy_close`는 5분 경계에 **정시 도착**한 봉에서만 신호를 평가하므로 이런 자료로는 신호가 나오지 않는다. 그래서 `config.execution`이 엄격 모드이고 최신 필요 봉이 정시가 아니면 `ready=False`, `DayOneFacts.vwap_ready=False`로 두어 Scout가 DAY-01이 거래할 수 없는 종목을 승격하지 않게 한다. `research_estimated_open`은 지연을 허용(`research_max_observation_lag_minutes`)한다.
+실제 수집기는 분 끝 약 2초 뒤에 봉을 저장하므로 `available_at ≠ event_at+1분`이다. DAY-01의 `next_open`·`legacy_close`는 5분 경계에 **정시 도착**한 봉에서만 신호를 평가하므로 이런 자료로는 신호가 나오지 않는다. 그래서 `config.execution`이 엄격 모드이고 알려진 최신 봉이 정시가 아니면(grace로 줄인 `required_bars`의 마지막 봉이 아니라 실제로 알려진 마지막 봉 기준) `ready=False`, `DayOneFacts.vwap_ready=False`로 두어 Scout가 DAY-01이 거래할 수 없는 종목을 승격하지 않게 한다. `research_estimated_open`은 지연을 허용(`research_max_observation_lag_minutes`)한다.
 
 테스트로 확인한 정합성(`evaluate_entry`와 대조): 개장 공백 → 준비도 opening False ↔ DAY-01 `INCOMPLETE_OPENING_RANGE`; 현재 5분 구간 공백 → DAY-01 `NO_FRESH_FIVE_MINUTE_BAR`; 과거 구간 공백 → `INCOMPLETE_SESSION_VWAP`; exact + 거래대금 없음 → `MISSING_EXACT_TURNOVER`. 준비도가 True인 합성 입력에서 DAY-01은 이 네 사유로 막지 않는다.
 

@@ -49,7 +49,7 @@ def snapshot(symbols=('AAA',), *, received=at(9, 19, 40), ranked=at(9, 19, 30), 
 
 
 def ready(symbol='AAA', **kw):
-    facts, reports, candles, notes = readiness_from_rows(kw.pop('rows'), symbols=[symbol], as_of=kw.pop('as_of', AS_OF), **kw)
+    facts, reports, candles, notes, _prov = readiness_from_rows(kw.pop('rows'), symbols=[symbol], as_of=kw.pop('as_of', AS_OF), **kw)
     return facts, reports[0] if reports else None, candles, notes
 
 
@@ -209,13 +209,13 @@ class ReadinessTests(unittest.TestCase):
 
     def test_symbol_normalization_unmatched_and_ambiguous_symbols(self):
         data = bars(' aaa ') + bars('BBB') + bars('ZZZ')
-        facts, reports, candles, notes = readiness_from_rows(data, symbols=['AAA', 'CCC'], as_of=AS_OF,
+        facts, reports, candles, notes, _prov = readiness_from_rows(data, symbols=['AAA', 'CCC'], as_of=AS_OF,
                                                              config=RESEARCH, allow_approximate_vwap=True)
         self.assertEqual([f.symbol for f in facts], ['AAA'])
         self.assertEqual({r.symbol: 'NO_CANDLES' in r.codes for r in reports}, {'AAA': False, 'CCC': True})
         self.assertTrue(all(c.symbol == 'AAA' for c in candles))
         self.assertIn((None, 'CANDLE_SYMBOLS_NOT_IN_RANKING:BBB,ZZZ'), notes)
-        facts, reports, _, notes = readiness_from_rows(bars('AAA'), symbols=['AAA', 'aaa'], as_of=AS_OF,
+        facts, reports, _, notes, _prov = readiness_from_rows(bars('AAA'), symbols=['AAA', 'aaa'], as_of=AS_OF,
                                                        config=RESEARCH, allow_approximate_vwap=True)
         self.assertEqual((facts, reports), ((), ()))
         self.assertIn(('aaa', 'SYMBOL_ALIAS_AMBIGUOUS'), notes)
@@ -241,6 +241,93 @@ class ReadinessTests(unittest.TestCase):
         _, research, _, _ = ready(rows=late, config=RESEARCH, allow_approximate_vwap=True)
         self.assertTrue(research.ready)
         self.assertFalse(research.on_time_all)
+
+
+def one(rows, **kw):
+    """readiness_from_rows for a single symbol: (facts, report, candles, notes, provenance)."""
+    facts, reports, candles, notes, prov = readiness_from_rows(rows, **kw)
+    return facts, (reports[0] if reports else None), candles, notes, prov
+
+
+class BoundaryAndReviewRegressionTests(unittest.TestCase):
+    def test_collected_after_available_is_the_effective_availability_for_candles_lag_and_strict_gate(self):
+        data = bars('AAA', delay=0)
+        data[19] = row('AAA', 19, delay=0, collected_at=at(9, 20, 30))        # known to us only at 09:20:30
+        asof = at(9, 20, 40)
+        facts, rep, candles, _, prov = one(data, symbols=['AAA'], as_of=asof, config=LEGACY,
+                                           allow_approximate_vwap=True)
+        last = next(c for c in candles if c.event_at == at(9, 19))
+        self.assertEqual(last.available_at, at(9, 20, 30))                     # DAY-01 cannot use it earlier
+        meta = next(m for m in prov if m['event_at'] == at(9, 19))
+        self.assertEqual((meta['available_at'], meta['collected_at'], meta['effective_at']),
+                         (at(9, 20, 0), at(9, 20, 30), at(9, 20, 30)))        # originals preserved
+        self.assertEqual(facts[0].observed_at, at(9, 20, 30))
+        self.assertEqual(rep.max_lag_seconds, 30.0)
+        self.assertFalse(rep.on_time_all)
+        self.assertIn('NOT_ON_TIME_FOR_STRICT_MODE', rep.codes)            # strict gate sees the collected delay
+        self.assertFalse(rep.ready)
+        # DAY-01 at 09:20:00 must not have the 09:19 bar yet
+        early = [c for c in candles if c.available_at <= at(9, 20, 0)]
+        self.assertNotIn(at(9, 19), [c.event_at for c in early])
+
+    def test_grace_cannot_hide_a_missing_turnover_on_the_newest_known_bar(self):
+        data = [row('AAA', i, delay=0, turnover=True) for i in range(19)] + [row('AAA', 19, delay=0)]   # bar 19: no turnover
+        asof = at(9, 20, 0)
+        _, rep, candles, _, _ = one(data, symbols=['AAA'], as_of=asof, config=RESEARCH_EXACT)
+        self.assertEqual(rep.required_bars, 19)                                # grace still lets bar 19 be "not yet due"
+        self.assertFalse(rep.vwap_ready)
+        self.assertIn('VWAP_NEEDS_TURNOVER', rep.codes)
+        self.assertEqual(evaluate_entry(list(candles), asof, RESEARCH_EXACT).reason, 'MISSING_EXACT_TURNOVER')
+        full = [row('AAA', i, delay=0, turnover=True) for i in range(20)]
+        _, ok, candles, _, _ = one(full, symbols=['AAA'], as_of=asof, config=RESEARCH_EXACT)
+        self.assertTrue(ok.vwap_ready)
+        self.assertNotEqual(evaluate_entry(list(candles), asof, RESEARCH_EXACT).reason, 'MISSING_EXACT_TURNOVER')
+
+    def test_strict_gate_checks_the_newest_known_bar_not_the_one_inside_the_grace_window(self):
+        data = bars('AAA', 19, delay=0) + [row('AAA', 19, delay=2)]            # newest bar arrived 2 s late
+        _, rep, _, _, _ = one(data, symbols=['AAA'], as_of=at(9, 20, 3), config=LEGACY,
+                                              allow_approximate_vwap=True)
+        self.assertEqual(rep.required_bars, 19)                                # grace excludes bar 19 from "required"
+        self.assertEqual(rep.completed_1m_bars, 20)
+        self.assertIn('NOT_ON_TIME_FOR_STRICT_MODE', rep.codes)
+        self.assertFalse(rep.ready)
+        # before the late bar exists, the newest known bar (09:18) was on time
+        _, before, _, _, _ = one(bars('AAA', 19, delay=0), symbols=['AAA'], as_of=at(9, 20, 0),
+                                                 config=LEGACY, allow_approximate_vwap=True)
+        self.assertTrue(before.ready)
+
+    def test_grace_boundary_is_exact(self):
+        data = bars('AAA', 19, delay=0)                                          # bar 19 never arrives
+        for second, expect_ready in ((4, True), (5, False)):
+            _, rep, _, _, _ = one(data, symbols=['AAA'], as_of=at(9, 20, second) , config=RESEARCH,
+                                                  allow_approximate_vwap=True)
+            self.assertEqual((rep.required_bars, rep.vwap_ready), (19 if second == 4 else 20, expect_ready), second)
+        just_before = at(9, 20, 5) - timedelta(microseconds=1)
+        _, rep, _, _, _ = one(data, symbols=['AAA'], as_of=just_before, config=RESEARCH,
+                                              allow_approximate_vwap=True)
+        self.assertEqual(rep.required_bars, 19)
+
+    def test_before_the_open_and_after_the_close(self):
+        data = bars('AAA', 20)
+        facts, rep, candles, _, _ = one(data, symbols=['AAA'], as_of=at(8, 59), config=RESEARCH,
+                                        allow_approximate_vwap=True)
+        self.assertEqual((facts, candles, rep.required_bars), ((), (), 0))
+        self.assertIn('NO_CANDLES', rep.codes)
+        full = [row('AAA', i, delay=0) for i in range(391)]                     # 391st row is 15:30: outside the session
+        _, rep, candles, _, _ = one(full, symbols=['AAA'], as_of=at(16, 0), config=RESEARCH,
+                                                    allow_approximate_vwap=True)
+        self.assertEqual((rep.required_bars, rep.completed_1m_bars, len(candles), rep.ready), (390, 390, 390, True))
+
+    def test_utc_inputs_are_equivalent_to_kst_inputs(self):
+        data = bars('AAA')
+        utc_data = [dict(r, event_at=r['event_at'].astimezone(timezone.utc), available_at=r['available_at'].astimezone(timezone.utc),
+                         collected_at=r['collected_at'].astimezone(timezone.utc)) for r in data]
+        a = readiness_from_rows(data, symbols=['AAA'], as_of=AS_OF, config=RESEARCH, allow_approximate_vwap=True)
+        b = readiness_from_rows(utc_data, symbols=['AAA'], as_of=AS_OF.astimezone(timezone.utc), config=RESEARCH,
+                                allow_approximate_vwap=True)
+        self.assertEqual(a[0], b[0])
+        self.assertEqual(a[1], b[1])
+        self.assertEqual([(c.symbol, c.event_at, c.available_at) for c in a[2]], [(c.symbol, c.event_at, c.available_at) for c in b[2]])
 
 
 class ConsistencyWithDay01Tests(unittest.TestCase):
@@ -272,13 +359,13 @@ class ConsistencyWithDay01Tests(unittest.TestCase):
         # a gap older than the last two 5-minute bars: exactly INCOMPLETE_SESSION_VWAP at the 09:30 boundary
         data = [r for r in bars('AAA', 30) if r['event_at'] != at(9, 17)]
         asof = at(9, 30, 10)
-        _, reps, candles, _ = readiness_from_rows(data, symbols=['AAA'], as_of=asof, config=RESEARCH,
+        _, reps, candles, _, _prov = readiness_from_rows(data, symbols=['AAA'], as_of=asof, config=RESEARCH,
                                                   allow_approximate_vwap=True)
         self.assertEqual((reps[0].completed_1m_bars, reps[0].opening_range_ready, reps[0].vwap_ready), (17, True, False))
         self.assertEqual(evaluate_entry(list(candles), at(9, 30, 2), RESEARCH).reason, 'INCOMPLETE_SESSION_VWAP')
         # the same minute present again: both agree it is complete
         full = bars('AAA', 30)
-        _, ok, candles, _ = readiness_from_rows(full, symbols=['AAA'], as_of=asof, config=RESEARCH, allow_approximate_vwap=True)
+        _, ok, candles, _, _prov = readiness_from_rows(full, symbols=['AAA'], as_of=asof, config=RESEARCH, allow_approximate_vwap=True)
         self.assertTrue(ok[0].vwap_ready)
         self.assertNotIn(evaluate_entry(list(candles), at(9, 30, 2), RESEARCH).reason,
                          {'INCOMPLETE_SESSION_VWAP', 'INCOMPLETE_OPENING_RANGE', 'INCOMPLETE_PREVIOUS_FIVE_MINUTE_BAR'})
@@ -358,7 +445,7 @@ class ScoutEndToEndTests(unittest.TestCase):
         self.assertEqual(inputs.dayone[0].observed_at, at(9, 20, 2))                # bar 09:19 available 09:20:02
         old = bars('AAA')
         stale_asof = datetime(2026, 11, 13, 9, 26, 0, tzinfo=KST)                   # no new bars for 6 minutes
-        facts, reports, _, _ = readiness_from_rows(old, symbols=['AAA'], as_of=stale_asof, config=RESEARCH,
+        facts, reports, _, _, _prov = readiness_from_rows(old, symbols=['AAA'], as_of=stale_asof, config=RESEARCH,
                                                    allow_approximate_vwap=True)
         self.assertFalse(reports[0].vwap_ready)                                      # minutes 20..24 are missing now
         self.assertIn('SESSION_GAP', reports[0].codes)

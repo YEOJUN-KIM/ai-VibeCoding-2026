@@ -59,6 +59,7 @@ class MarketInputs:
     readiness: tuple
     notes: tuple                      # (symbol | None, code)
     ranking: dict
+    provenance: tuple = ()            # original event_at / available_at / collected_at + effective_at per candle
 
 
 def _norm(value):
@@ -109,7 +110,10 @@ def readiness_from_rows(rows: Iterable, *, symbols: Iterable[str], as_of: dateti
                         config: Config | None = None, vwap_mode: str | None = None,
                         allow_approximate_vwap: bool = False, grace: timedelta = DEFAULT_GRACE,
                         max_lag: timedelta | None = None) -> tuple:
-    """Returns (dayone_facts, readiness, candles, notes). Pure; rows are plain mappings."""
+    """Returns (dayone_facts, readiness, candles, notes, provenance). Pure; rows are plain mappings.
+
+    `candles` carry `available_at = max(available_at, collected_at)` (when we really had the bar);
+    `provenance` keeps the three original times (event_at, available_at, collected_at) plus effective_at."""
     as_of = _aware(as_of, "as_of")
     mode = vwap_mode or (config.vwap_mode if config is not None else "exact")
     if mode not in {"exact", "typical_approximation"}:
@@ -139,7 +143,7 @@ def readiness_from_rows(rows: Iterable, *, symbols: Iterable[str], as_of: dateti
     future_events: dict = {key: set() for key in wanted}
     defects: dict = {key: Counter() for key in wanted}
     other_symbols, other_day = set(), Counter()
-    clean_rows = []
+    entries = []                                          # (replay row with effective availability, provenance)
     for raw in rows:
         if not isinstance(raw, Mapping):
             notes.append((None, "ROW_NOT_MAPPING"))
@@ -182,8 +186,10 @@ def readiness_from_rows(rows: Iterable, *, symbols: Iterable[str], as_of: dateti
         if not isinstance(raw.get("source"), str) or not raw["source"].strip():
             defects[key]["NO_SOURCE"] += 1
             continue
+        # DAY-01 must see the bar only from the moment we really had it: max(available_at, collected_at).
+        eff_row = dict(raw, symbol=key, available_at=moment)
         try:
-            candle = adapt_rows([dict(raw, symbol=key)], universe=[key]).candles[0]
+            candle = adapt_rows([eff_row], universe=[key]).candles[0]
         except (ValueError, IndexError, KeyError, TypeError):
             defects[key]["INVALID_ROW"] += 1
             continue
@@ -195,7 +201,8 @@ def readiness_from_rows(rows: Iterable, *, symbols: Iterable[str], as_of: dateti
                 defects[key]["DUPLICATE_CONFLICT"] += 1
             continue
         known[key][slot] = (candle, moment)
-        clean_rows.append(dict(raw, symbol=key))
+        entries.append((eff_row, dict(symbol=key, source=raw["source"], event_at=event, available_at=avail,
+                                      collected_at=collected, effective_at=moment)))
     elapsed = int((as_of.astimezone(KST) - grace - open_at) // MINUTE)
     required = max(0, min(SESSION_MINUTES, elapsed))
     facts, reports = [], []
@@ -223,11 +230,11 @@ def readiness_from_rows(rows: Iterable, *, symbols: Iterable[str], as_of: dateti
             codes.append("SESSION_GAP")
         if any(m in future_events[key] for m in missing):
             codes.append("LATE_NOT_YET_AVAILABLE")
-        in_window = [bars[slots[i]][0] for i in range(min(prefix, max(required, 0)))]
+        known_prefix = [bars[slots[i]][0] for i in range(prefix)]     # every contiguous bar we hold, not only up to `required`
         lags = [(bars[s][0].available_at - s - MINUTE).total_seconds() for s in sorted(usable)]
         on_time = bool(lags) and all(x == 0 for x in lags)
         # DAY-01's strict modes fire only when the NEWEST needed bar arrives exactly at its minute end.
-        newest_slot = slots[min(prefix, max(required, 1)) - 1] if prefix else None
+        newest_slot = slots[prefix - 1] if prefix else None
         newest_on_time = newest_slot is not None and bars[newest_slot][0].available_at == newest_slot + MINUTE
         late = sum(1 for x in lags if x > max_lag.total_seconds())
         if late:
@@ -236,7 +243,7 @@ def readiness_from_rows(rows: Iterable, *, symbols: Iterable[str], as_of: dateti
             codes.append("NOT_ON_TIME_FOR_STRICT_MODE")
         window_complete = required >= 1 and prefix >= required and not any(m in blocked for m in slots[:required])
         if mode == "exact":
-            basis = "EXACT_TURNOVER" if window_complete and all(c.turnover is not None for c in in_window) else "UNAVAILABLE"
+            basis = "EXACT_TURNOVER" if window_complete and all(c.turnover is not None for c in known_prefix) else "UNAVAILABLE"
             if window_complete and basis == "UNAVAILABLE":
                 codes.append("VWAP_NEEDS_TURNOVER")
         elif allow_approximate_vwap:
@@ -265,14 +272,15 @@ def readiness_from_rows(rows: Iterable, *, symbols: Iterable[str], as_of: dateti
         notes.append((None, "CANDLE_SYMBOLS_NOT_IN_RANKING:" + ",".join(sorted(other_symbols))))
     for key, count in other_day.items():
         notes.append((wanted[key], f"ROWS_FROM_OTHER_SESSION_IGNORED:{count}"))
+    final = [(r, meta) for r, meta in entries if r["symbol"] not in ambiguous
+             and meta["event_at"].astimezone(KST) not in conflicted[r["symbol"]]]
     try:
-        candles = adapt_rows([r for r in clean_rows if _norm(r["symbol"]) not in ambiguous
-                              and _dt(r["event_at"]).astimezone(KST) not in conflicted[_norm(r["symbol"])]],
-                             universe=sorted(wanted)).candles if clean_rows else ()
+        candles = adapt_rows([r for r, _ in final], universe=sorted(wanted)).candles if final else ()
     except ValueError:
-        candles = ()
+        candles, final = (), []
         notes.append((None, "ADAPT_ROWS_REJECTED"))
-    return tuple(facts), tuple(reports), tuple(candles), tuple(notes)
+    provenance = tuple(sorted((meta for _, meta in final), key=lambda m: (m["symbol"], m["event_at"])))
+    return tuple(facts), tuple(reports), tuple(candles), tuple(notes), provenance
 
 
 # --------------------------------------------------------------------------- composition
@@ -289,7 +297,7 @@ def build_market_inputs(snapshot: RankingSnapshot, rows: Iterable, *, as_of: dat
     as_of = _aware(as_of, "as_of")
     liquidity, notes = liquidity_from_snapshot(snapshot, as_of=as_of)
     names = sorted({r.symbol for r in snapshot.rows}) if symbols is None else list(symbols)
-    dayone, readiness, candles, candle_notes = readiness_from_rows(
+    dayone, readiness, candles, candle_notes, provenance = readiness_from_rows(
         rows, symbols=names, as_of=as_of, config=config, vwap_mode=vwap_mode,
         allow_approximate_vwap=allow_approximate_vwap, grace=grace)
     notes = list(notes) + list(candle_notes)
@@ -302,4 +310,4 @@ def build_market_inputs(snapshot: RankingSnapshot, rows: Iterable, *, as_of: dat
                 notes.append((fact.symbol, "RANKING_CANDLE_SKEW"))
     ranking = dict(snapshot_id=snapshot.snapshot_id, received_at=snapshot.received_at,
                    provider_ranked_at=snapshot.provider_ranked_at, skew_seconds=skew)
-    return MarketInputs(liquidity, dayone, candles, readiness, tuple(notes), ranking)
+    return MarketInputs(liquidity, dayone, candles, readiness, tuple(notes), ranking, provenance)
