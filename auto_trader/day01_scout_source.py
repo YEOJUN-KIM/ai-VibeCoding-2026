@@ -207,6 +207,9 @@ def toss_ranking_source(client, *, budget_seconds: float = 15.0) -> Callable[[],
     return source
 
 
+_FENCE_LOCK = threading.RLock()   # shared by every guarded client: serializes counters and the urlopen swap
+
+
 def open_without_redirect(request, timeout=None, *, _handlers=()):
     """`urlopen` replacement that never follows a redirect (a 3xx surfaces as HTTPError), so an
     allowed URL cannot send the Authorization header to a different path or host."""
@@ -229,6 +232,9 @@ def guard_toss_client(client, *, max_requests: int = 6, also_allow=(), rankings:
     bound). Anything else raises before any network I/O. Returns the live counter (paths only).
     While a fenced request runs, the transport module's `urlopen` is swapped for
     `open_without_redirect` (restored afterwards), so redirects cannot bypass the allowlist or cap.
+    All guarded clients in the process share one lock, so their requests run one at a time and the
+    swap/restore cannot interleave; any other client of the same transport module that sends a
+    request during a guarded one also gets the no-redirect opener (stricter, never looser).
     `also_allow` adds explicit (path, GET) pairs, e.g. the stocks endpoints; the default adds none.
     `rankings=False` removes the ranking GET from the allowlist (token POST and `also_allow` only).
     """
@@ -247,19 +253,20 @@ def guard_toss_client(client, *, max_requests: int = 6, also_allow=(), rankings:
         path, method = urlparse(request.full_url).path, request.get_method()
         if (path, method) not in allowed:
             raise PermissionError("request outside the read-only ranking allowlist")
-        if counts["total"] >= max_requests:
-            raise PermissionError("request cap reached")
-        counts["total"] += 1
-        counts["paths"][path] = counts["paths"].get(path, 0) + 1
-        namespace = getattr(type(client)._json_request_once, "__globals__", None)
-        if namespace is None or "urlopen" not in namespace:
-            return original(request)
-        saved = namespace["urlopen"]
-        namespace["urlopen"] = open_without_redirect
-        try:
-            return original(request)
-        finally:
-            namespace["urlopen"] = saved
+        with _FENCE_LOCK:
+            if counts["total"] >= max_requests:
+                raise PermissionError("request cap reached")
+            counts["total"] += 1
+            counts["paths"][path] = counts["paths"].get(path, 0) + 1
+            namespace = getattr(type(client)._json_request_once, "__globals__", None)
+            if namespace is None or "urlopen" not in namespace:
+                return original(request)
+            saved = namespace["urlopen"]
+            namespace["urlopen"] = open_without_redirect
+            try:
+                return original(request)
+            finally:
+                namespace["urlopen"] = saved
 
     client._json_request_once = fenced
     return counts

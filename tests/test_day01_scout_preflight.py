@@ -121,6 +121,40 @@ class PreflightTests(unittest.TestCase):
         self.assertEqual(observed, [open_without_redirect])        # in force during the fenced request
         self.assertIs(transport.urlopen, original_urlopen)         # and restored afterwards
 
+    def test_two_guarded_clients_cannot_interleave_the_urlopen_swap(self):
+        import threading
+        from auto_trader.brokers.toss import transport
+        original_urlopen = transport.urlopen
+        observed, a_inside, release = {}, threading.Event(), threading.Event()
+
+        def slow(path, request):
+            observed["A"] = transport.urlopen
+            a_inside.set()
+            release.wait(5)
+            return {"result": []}
+
+        def quick(path, request):
+            observed["B"] = transport.urlopen
+            return {"result": []}
+
+        client_a, _, _ = self.client(slow)
+        client_b, _, _ = self.client(quick)
+        for client in (client_a, client_b):                          # token requests first, outside the race
+            client.access_token()
+        thread_a = threading.Thread(target=lambda: toss_stocks_source(client_a)(("A1",)))
+        thread_b = threading.Thread(target=lambda: toss_stocks_source(client_b)(("B1",)))
+        thread_a.start()
+        self.assertTrue(a_inside.wait(5))
+        thread_b.start()                                             # blocked on the shared fence lock
+        thread_b.join(0.3)
+        self.assertTrue(thread_b.is_alive())
+        release.set()
+        thread_a.join(5)
+        thread_b.join(5)
+        self.assertEqual(observed["A"], open_without_redirect)
+        self.assertEqual(observed["B"], open_without_redirect)      # never saw the original redirecting urlopen
+        self.assertIs(transport.urlopen, original_urlopen)           # restored exactly once at the end
+
     def test_rankings_can_be_removed_from_the_allowlist_and_default_is_unchanged(self):
         from auto_trader.toss import TossClient
         for rankings, expect_blocked in ((False, True), (True, False)):
