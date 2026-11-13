@@ -291,10 +291,51 @@ class BoundaryAndReviewRegressionTests(unittest.TestCase):
         self.assertEqual(rep.completed_1m_bars, 20)
         self.assertIn('NOT_ON_TIME_FOR_STRICT_MODE', rep.codes)
         self.assertFalse(rep.ready)
-        # before the late bar exists, the newest known bar (09:18) was on time
+        # at the 09:20 boundary the 09:19 bar has not arrived yet: DAY-01 has nothing to decide on, so not ready
         _, before, _, _, _ = one(bars('AAA', 19, delay=0), symbols=['AAA'], as_of=at(9, 20, 0),
-                                                 config=LEGACY, allow_approximate_vwap=True)
-        self.assertTrue(before.ready)
+                                 config=LEGACY, allow_approximate_vwap=True)
+        self.assertFalse(before.ready)
+        self.assertIn('STRICT_DECISION_BAR_MISSING_OR_LATE', before.codes)
+        _, arrived, _, _, _ = one(bars('AAA', 20, delay=0), symbols=['AAA'], as_of=at(9, 20, 0),
+                                  config=LEGACY, allow_approximate_vwap=True)
+        self.assertTrue(arrived.ready)                                          # bar 19 on time at 09:20:00
+        self.assertNotIn('STRICT_DECISION_BAR_MISSING_OR_LATE', arrived.codes)
+
+    def test_strict_needs_the_last_minute_before_the_latest_boundary_even_if_older_bars_are_on_time(self):
+        data = bars('AAA', 24, delay=0)                                          # 09:00..09:23, boundary 09:25 needs 09:24
+        _, rep, candles, _, _ = one(data, symbols=['AAA'], as_of=at(9, 25, 0), config=LEGACY, allow_approximate_vwap=True)
+        self.assertEqual((rep.required_bars, rep.completed_1m_bars), (24, 24))     # grace-limited report is unchanged
+        self.assertFalse(rep.ready)
+        self.assertIn('STRICT_DECISION_BAR_MISSING_OR_LATE', rep.codes)
+        self.assertEqual(evaluate_entry(list(candles), at(9, 25, 0), Config(execution='legacy_close',
+                         vwap_mode='typical_approximation')).reason, 'NO_FRESH_FIVE_MINUTE_BAR')   # DAY-01 agrees
+        _, ok, candles, _, _ = one(bars('AAA', 25, delay=0), symbols=['AAA'], as_of=at(9, 25, 0), config=LEGACY,
+                                   allow_approximate_vwap=True)
+        self.assertTrue(ok.ready)
+        # research mode tolerates the grace window (it can decide on late bars)
+        _, research, _, _, _ = one(data, symbols=['AAA'], as_of=at(9, 25, 0), config=RESEARCH, allow_approximate_vwap=True)
+        self.assertTrue(research.ready)
+        # mid-window as_of: the last boundary is 09:20 and its 09:19 bar was on time
+        _, mid, _, _, _ = one(bars('AAA', 23, delay=0), symbols=['AAA'], as_of=at(9, 23, 30), config=LEGACY,
+                              allow_approximate_vwap=True)
+        self.assertTrue(mid.ready)
+
+    def test_duplicates_with_the_same_effective_time_but_different_original_times_conflict_in_any_order(self):
+        base = bars('AAA')
+        one_row = dict(base[19], available_at=at(9, 20, 0), collected_at=at(9, 20, 30))
+        other = dict(base[19], available_at=at(9, 20, 10), collected_at=at(9, 20, 30))
+        for order in ([one_row, other], [other, one_row]):
+            data = base[:19] + order
+            _, rep, candles, _, prov = one(data, symbols=['AAA'], as_of=at(9, 20, 40), config=RESEARCH,
+                                           allow_approximate_vwap=True)
+            self.assertIn('DUPLICATE_CONFLICT', rep.codes)
+            self.assertEqual((rep.completed_1m_bars, rep.ready), (19, False))
+            self.assertNotIn(at(9, 19), [c.event_at for c in candles])
+            self.assertNotIn(at(9, 19), [m['event_at'] for m in prov])
+        same = dict(one_row)                                                     # a true duplicate is still fine
+        _, ok, _, _, _ = one(base[:19] + [one_row, same], symbols=['AAA'], as_of=at(9, 20, 40), config=RESEARCH,
+                             allow_approximate_vwap=True)
+        self.assertTrue(ok.ready)
 
     def test_grace_boundary_is_exact(self):
         data = bars('AAA', 19, delay=0)                                          # bar 19 never arrives

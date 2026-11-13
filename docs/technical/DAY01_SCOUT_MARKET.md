@@ -33,7 +33,7 @@
 
 **봉 선택(미래정보 차단)**: 가용 시각 = `max(available_at, collected_at)`가 `as_of` 이후인 행은 사용하지 않는다(그 분이 나중 행으로만 존재하면 `LATE_NOT_YET_AVAILABLE`로 보고하고 내용은 쓰지 않음). 이후 행을 덧붙여도 결과가 같다(테스트). DAY-01로 넘기는 `Candle.available_at`은 이 **유효 가용 시각**이다(`collected_at`이 더 늦으면 그 시각). 지연·정시 판정과 엄격 모드 게이트도 같은 시각을 쓴다. 원본 `event_at`·`available_at`·`collected_at`은 바꾸지 않고 `readiness_from_rows`의 5번째 반환값 `provenance`(`MarketInputs.provenance`)에 `effective_at`과 함께 그대로 보존한다.
 
-**결함 분류(행 단위, 사용하지 않음)**: `INCOMPLETE_BAR`(분 끝 전에 찍힘), `UNALIGNED_EVENT`, `NOT_1M`, `NO_SOURCE`, `COLLECTED_BEFORE_AVAILABLE`, `INVALID_ROW`(OHLC·숫자 검증은 기존 `adapt_rows`/`Candle.validate`). 중복: 값이 같으면 하나로, **다르면 `DUPLICATE_CONFLICT`**로 그 분을 막는다(양쪽 모두 사용 안 함, 준비도 불가).
+**결함 분류(행 단위, 사용하지 않음)**: `INCOMPLETE_BAR`(분 끝 전에 찍힘), `UNALIGNED_EVENT`, `NOT_1M`, `NO_SOURCE`, `COLLECTED_BEFORE_AVAILABLE`, `INVALID_ROW`(OHLC·숫자 검증은 기존 `adapt_rows`/`Candle.validate`). 중복: 봉 값과 **원본 `available_at`·`collected_at`까지 모두 같으면** 하나로, **하나라도 다르면 `DUPLICATE_CONFLICT`**로 그 분을 막는다(양쪽 모두 사용 안 함, 준비도 불가). 유효 가용 시각이 같아도 원본 시각이 다르면 입력 순서에 따라 보존되는 원본이 달라지므로 충돌로 처리한다.
 
 **상태 코드(종목별 `codes`)**: `NO_CANDLES`(분봉 없음), `OPENING_MISSING`(개장 구간 누락), `OPENING_NOT_DUE`(아직 09:15 전), `SESSION_GAP`(세션 중 누락), `LATE_NOT_YET_AVAILABLE`(지연되어 아직 수신 전), `LATE_ARRIVAL`(최대 지연 초과로 늦게 도착, 사용은 가능), `NOT_ON_TIME_FOR_STRICT_MODE`, `VWAP_NEEDS_TURNOVER`, `VWAP_APPROXIMATE`, `VWAP_APPROXIMATION_NOT_ALLOWED`, 위 결함 코드. 전체 노트: `CANDLE_SYMBOLS_NOT_IN_RANKING`, `ROWS_FROM_OTHER_SESSION_IGNORED`, `SYMBOL_ALIAS_AMBIGUOUS`.
 
@@ -48,6 +48,8 @@
 ## 5. DAY-01 실행 모드와의 정합 (실제 수집 지연의 영향)
 
 실제 수집기는 분 끝 약 2초 뒤에 봉을 저장하므로 `available_at ≠ event_at+1분`이다. DAY-01의 `next_open`·`legacy_close`는 5분 경계에 **정시 도착**한 봉에서만 신호를 평가하므로 이런 자료로는 신호가 나오지 않는다. 그래서 `config.execution`이 엄격 모드이고 알려진 최신 봉이 정시가 아니면(grace로 줄인 `required_bars`의 마지막 봉이 아니라 실제로 알려진 마지막 봉 기준) `ready=False`, `DayOneFacts.vwap_ready=False`로 두어 Scout가 DAY-01이 거래할 수 없는 종목을 승격하지 않게 한다. `research_estimated_open`은 지연을 허용(`research_max_observation_lag_minutes`)한다.
+
+**엄격 모드 판단 경계**: 첫 판단 경계(09:20) 이후에는 `as_of` 이하의 가장 최근 5분 경계 직전 마지막 분(예: 09:25면 09:24)이 존재하고 정시 도착이어야 `ready`다(`STRICT_DECISION_BAR_MISSING_OR_LATE`). grace는 이 검사를 덮지 않는다(grace는 `required_bars` 보고에만 쓰이며, 연구 모드는 grace 안의 늦은 봉을 허용한다).
 
 테스트로 확인한 정합성(`evaluate_entry`와 대조): 개장 공백 → 준비도 opening False ↔ DAY-01 `INCOMPLETE_OPENING_RANGE`; 현재 5분 구간 공백 → DAY-01 `NO_FRESH_FIVE_MINUTE_BAR`; 과거 구간 공백 → `INCOMPLETE_SESSION_VWAP`; exact + 거래대금 없음 → `MISSING_EXACT_TURNOVER`. 준비도가 True인 합성 입력에서 DAY-01은 이 네 사유로 막지 않는다.
 

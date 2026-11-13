@@ -141,6 +141,7 @@ def readiness_from_rows(rows: Iterable, *, symbols: Iterable[str], as_of: dateti
     known: dict = {key: {} for key in wanted}            # key -> {event_utc: (candle, moment)}
     conflicted: dict = {key: set() for key in wanted}
     future_events: dict = {key: set() for key in wanted}
+    origins: dict = {key: {} for key in wanted}          # key -> {slot: (original available_at, collected_at)}
     defects: dict = {key: Counter() for key in wanted}
     other_symbols, other_day = set(), Counter()
     entries = []                                          # (replay row with effective availability, provenance)
@@ -196,11 +197,13 @@ def readiness_from_rows(rows: Iterable, *, symbols: Iterable[str], as_of: dateti
         slot = candle.event_at.astimezone(KST)
         previous = known[key].get(slot)
         if previous is not None:
-            if (previous[0], previous[1]) != (candle, moment):
+            # identical bar AND identical original times, else a conflict (order-independent)
+            if (previous[0], previous[1], origins[key][slot]) != (candle, moment, (avail, collected)):
                 conflicted[key].add(slot)
                 defects[key]["DUPLICATE_CONFLICT"] += 1
             continue
         known[key][slot] = (candle, moment)
+        origins[key][slot] = (avail, collected)
         entries.append((eff_row, dict(symbol=key, source=raw["source"], event_at=event, available_at=avail,
                                       collected_at=collected, effective_at=moment)))
     elapsed = int((as_of.astimezone(KST) - grace - open_at) // MINUTE)
@@ -236,11 +239,22 @@ def readiness_from_rows(rows: Iterable, *, symbols: Iterable[str], as_of: dateti
         # DAY-01's strict modes fire only when the NEWEST needed bar arrives exactly at its minute end.
         newest_slot = slots[prefix - 1] if prefix else None
         newest_on_time = newest_slot is not None and bars[newest_slot][0].available_at == newest_slot + MINUTE
+        # Once DAY-01's first decision boundary (09:20) has passed, a strict mode decides at the latest 5-minute
+        # boundary <= as_of and needs the LAST minute before it present and on time. Grace never covers this.
+        boundary_minutes = int((as_of.astimezone(KST) - open_at) // MINUTE) // 5 * 5
+        decision_bars = min(boundary_minutes, SESSION_MINUTES) if boundary_minutes >= 20 else 0
+        decision_ok = True
+        if decision_bars:
+            last = slots[decision_bars - 1]
+            decision_ok = (prefix >= decision_bars and last in usable
+                           and bars[last][0].available_at == last + MINUTE)
         late = sum(1 for x in lags if x > max_lag.total_seconds())
         if late:
             codes.append("LATE_ARRIVAL")
         if strict and bars and not newest_on_time:
             codes.append("NOT_ON_TIME_FOR_STRICT_MODE")
+        if strict and bars and decision_bars and not decision_ok:
+            codes.append("STRICT_DECISION_BAR_MISSING_OR_LATE")
         window_complete = required >= 1 and prefix >= required and not any(m in blocked for m in slots[:required])
         if mode == "exact":
             basis = "EXACT_TURNOVER" if window_complete and all(c.turnover is not None for c in known_prefix) else "UNAVAILABLE"
@@ -257,7 +271,7 @@ def readiness_from_rows(rows: Iterable, *, symbols: Iterable[str], as_of: dateti
         # Freshness of the FACT = newest availability among every usable bar we looked at. A gap therefore
         # keeps the fact fresh (Scout reports the real reason); a dead feed makes it old (Scout: STALE).
         observed = max((bars[s][1] for s in usable), default=None)
-        strict_blocked = strict and bool(bars) and not newest_on_time
+        strict_blocked = strict and bool(bars) and not (newest_on_time and decision_ok)
         ready = bool(opening_ready and vwap_ready and not strict_blocked)
         reports.append(SymbolReadiness(
             symbol=requested, ready=ready, completed_1m_bars=prefix, required_bars=required,
