@@ -28,7 +28,7 @@ from typing import Any, Callable, Mapping
 from urllib.parse import urlencode
 
 from .day01_scout import LiquidityFacts
-from .day01_scout_source import ORDERBOOK_PATH
+from .day01_scout_source import ORDERBOOK_PATH, fence_intact
 
 DEFAULT_MAX_AGE_SECONDS = Decimal(10)      # research starting value, NOT a confirmed operating policy
 ANOMALY_SPREAD_PCT = Decimal(50)           # strictly greater than this is an anomaly, not a usable spread
@@ -138,6 +138,21 @@ def _best(levels: Any, *, pick_max: bool):
     return (best[0], best[1], skipped) if best else (None, None, skipped)
 
 
+def _max_age(value: Any) -> Decimal:
+    """The ONE freshness-window check used by both `parse_orderbook` and `with_spread`: a finite number in
+    (0, 1,000,000] seconds, never bool. Anything else is a ValueError (bad argument), so an out-of-range value
+    can neither loosen nor silently change the freshness test. Call inside the fixed Decimal context."""
+    if isinstance(value, bool):
+        raise ValueError("max_age_seconds must be a number")
+    try:
+        age = value if isinstance(value, Decimal) else Decimal(str(value))
+    except (DecimalException, ValueError):
+        raise ValueError("max_age_seconds must be a number") from None
+    if not age.is_finite() or not 0 < age <= 10**6:
+        raise ValueError("max_age_seconds must be positive and at most 1,000,000")
+    return age
+
+
 def _provider_time(value: Any):
     if value is None:
         return None, "TIMESTAMP_MISSING"
@@ -170,9 +185,7 @@ def _parse_orderbook(symbol: str, payload: Any, received_at: datetime, max_age_s
         raise ValueError("symbol must be a 6-character [0-9A-Z] code")
     if not isinstance(received_at, datetime) or received_at.tzinfo is None or received_at.utcoffset() is None:
         raise ValueError("received_at must be timezone-aware")
-    max_age = max_age_seconds if isinstance(max_age_seconds, Decimal) else Decimal(str(max_age_seconds))
-    if not max_age.is_finite() or not 0 < max_age <= 10**6:
-        raise ValueError("max_age_seconds must be positive and at most 1,000,000")
+    max_age = _max_age(max_age_seconds)
     received = received_at.astimezone(timezone.utc)
 
     result = payload.get("result") if isinstance(payload, Mapping) else None
@@ -250,7 +263,7 @@ def with_spread(liquidity: LiquidityFacts, result: OrderbookResult, *, as_of: da
         raise ValueError("as_of must be timezone-aware")
     as_of = as_of.astimezone(timezone.utc)
     with localcontext(_fixed_context()):
-        limit = timedelta(microseconds=int(Decimal(str(max_age_seconds)) * 1_000_000))
+        limit = timedelta(microseconds=int(_max_age(max_age_seconds) * 1_000_000))
     if (result.status != OK or result.received_at > as_of or liquidity.observed_at > as_of
             or as_of - result.provider_time > limit):
         return replace(liquidity, spread_pct=None)
@@ -276,8 +289,8 @@ def fetch_orderbook_results(client, symbols, *, clock: Callable[[], datetime],
     `NOT_FETCHED`) on a fence refusal, 429, 401, a redirect/3xx, a timeout/network error, an unexpected error
     or a clock regression; only a 400/404 (bad symbol) is per-symbol. Failures keep only status and a slug
     code. Provider text, URLs and headers are never stored."""
-    if getattr(client, "_day01_orderbook_fence", None) is None:
-        raise ValueError("client must be fenced with guard_toss_orderbook_client first")
+    if not fence_intact(client):
+        raise ValueError("client must be fenced with guard_toss_orderbook_client first (and the fence left intact)")
     wanted = validate_symbols(symbols)
     from .brokers.toss.request_budget import RequestBudget, RequestBudgetExceeded  # pure module
 
@@ -286,6 +299,12 @@ def fetch_orderbook_results(client, symbols, *, clock: Callable[[], datetime],
         raw = None
         if stopped:
             results.append(_failure(symbol, "NOT_FETCHED", None, f"stopped={stopped}"))
+            continue
+        if not fence_intact(client):                       # re-proved before every request, not only once
+            stopped = "FENCE_REFUSED"
+            results.append(_failure(symbol, "FENCE_REFUSED", None, "fence-replaced"))
+            if log is not None:
+                _log(log, results[-1], None)
             continue
         try:
             url = f"{client.base_url}{ORDERBOOK_PATH}?{urlencode({'symbol': symbol})}"

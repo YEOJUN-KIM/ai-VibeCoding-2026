@@ -370,6 +370,72 @@ class FenceTests(unittest.TestCase):
             client2._authorized_json_request(f"{self.base}/api/v1/orderbook?symbol=005930")
         self.assertEqual(len(self.server.hits), 2)                                          # no new request was sent
 
+    def expire(self, client, seconds=-1):
+        client._token_expires_at = datetime.now(timezone.utc) + timedelta(seconds=seconds)
+
+    def test_expired_token_is_a_token_need_so_a_small_cap_refuses_before_any_authentication(self):
+        client, counts = self.fenced(max_requests=3, max_auth=2, max_orderbook=2)
+        fetch_orderbook_results(client, ["005930"], clock=self.clock)                  # token + GET
+        self.assertEqual((counts["total"], len(self.server.hits)), (2, 2))
+        self.expire(client)                                                            # token present but expired
+        results, stopped = fetch_orderbook_results(client, ["000660"], clock=self.clock)
+        self.assertEqual((stopped, results[0].reasons), ("FENCE_REFUSED", ("FENCE_REFUSED",)))
+        self.assertEqual((counts["total"], len(self.server.hits)), (2, 2))             # no token request was wasted
+        client._token_expires_at = None                                                # unknown expiry: not provably usable
+        with self.assertRaises(PermissionError):
+            client._authorized_json_request(f"{self.base}/api/v1/orderbook?symbol=000660")
+        self.assertEqual(len(self.server.hits), 2)
+
+    def test_expired_token_is_reissued_once_when_the_caps_allow_and_caps_still_hold(self):
+        client, counts = self.fenced()
+        fetch_orderbook_results(client, ["005930"], clock=self.clock)
+        self.expire(client)
+        results, stopped = fetch_orderbook_results(client, ["000660"], clock=self.clock)
+        self.assertEqual((stopped, results[0].status), (None, OK))
+        self.assertEqual(counts["paths"], {"/oauth2/token": 2, "/api/v1/orderbook": 2})
+        self.expire(client)
+        results, stopped = fetch_orderbook_results(client, ["035420"], clock=self.clock)   # a third token: auth cap is 2
+        self.assertEqual(stopped, "FENCE_REFUSED")
+        self.assertEqual((counts["paths"]["/oauth2/token"], len(self.server.hits)), (2, 4))
+        client2, _ = self.fenced()
+        client2._access_token, client2._token_expires_at = "DUMMY", datetime.now(timezone.utc) + timedelta(hours=1)
+        before = len(self.server.hits)
+        fetch_orderbook_results(client2, ["005930"], clock=self.clock)                 # valid token: no authentication
+        self.assertEqual([m for m, _ in self.paths()[before:]], ["GET"])
+
+    def test_fetch_refuses_a_client_whose_transport_boundary_changed_after_fencing(self):
+        from types import MethodType
+        def raw_send(client):                       # the unfenced original transport entry point
+            return MethodType(type(client)._json_request_once, client)
+        tampering = {
+            "send restored": lambda c: setattr(c, "_json_request_once", raw_send(c)),
+            "send deleted (class method visible again)": lambda c: delattr(c, "_json_request_once"),
+            "json_request unwrapped": lambda c: delattr(c, "_json_request"),
+            "access_token unwrapped": lambda c: delattr(c, "access_token"),
+            "entry point replaced": lambda c: setattr(c, "_authorized_json_request", lambda *a, **k: {"result": {}}),
+            "weaker guard applied last": lambda c: src.guard_toss_client(c),
+        }
+        for name, tamper in tampering.items():
+            with self.subTest(name):
+                client, _ = self.fenced()
+                self.assertTrue(src.fence_intact(client))
+                tamper(client)
+                self.assertFalse(src.fence_intact(client))
+                with self.assertRaises(ValueError):
+                    fetch_orderbook_results(client, ["005930"], clock=self.clock)
+        self.assertEqual(self.server.hits, [])
+
+    def test_fence_replaced_in_the_middle_of_a_run_stops_before_the_next_request(self):
+        client, counts = self.fenced()
+        def clock():
+            client._json_request_once = type(client)._json_request_once.__get__(client)     # unfence after symbol 1
+            return datetime.now(timezone.utc)
+        results, stopped = fetch_orderbook_results(client, ["005930", "000660"], clock=clock)
+        self.assertEqual((stopped, [r.status for r in results]), ("FENCE_REFUSED", [OK, UNKNOWN]))
+        self.assertEqual(results[1].reasons, ("FENCE_REFUSED",))
+        self.assertEqual(self.paths(), [("POST", "/oauth2/token"), ("GET", "/api/v1/orderbook")])   # symbol 2 never sent
+        self.assertEqual(counts["total"], 2)
+
     def test_redirect_is_not_followed(self):
         self.server.mode = "302"
         client, counts = self.fenced()
@@ -631,6 +697,29 @@ class ScoutUnchangedTests(unittest.TestCase):
         self.assertIsNone(with_spread(base, good, as_of=AS_OF + timedelta(seconds=6)).spread_pct)        # 11.0 s
         self.assertIsNotNone(with_spread(base, good, as_of=AS_OF + timedelta(seconds=6), max_age_seconds=20).spread_pct)
         self.assertIsNone(with_spread(replace(base, observed_at=AS_OF + timedelta(seconds=1)), good, as_of=AS_OF).spread_pct)
+
+    def test_freshness_window_is_validated_identically_and_cannot_be_loosened(self):
+        helper, snap, inputs = self.liquidity_with(self.result(book(timestamp=self.stamp())))
+        base = replace(inputs.liquidity[0], spread_pct=None)
+        good = self.result(book(timestamp=self.stamp()))
+        bad = (0, -1, 10**6 + 1, 10**7, 10**30, float("nan"), float("inf"), D("NaN"), "abc", "", True, None, [20])
+        for value in bad:
+            with self.subTest(value):
+                with self.assertRaises(ValueError):
+                    with_spread(base, good, as_of=AS_OF, max_age_seconds=value)
+                with self.assertRaises(ValueError):
+                    parse(book(), max_age_seconds=value)
+        self.assertIsNotNone(with_spread(base, good, as_of=AS_OF, max_age_seconds=10**6).spread_pct)   # upper bound inclusive
+        for value in (10, 10.0, "10", D("10")):                              # the default stays 10 s, whatever the type
+            self.assertIsNotNone(with_spread(base, good, as_of=AS_OF + timedelta(seconds=5), max_age_seconds=value).spread_pct)
+            self.assertIsNone(with_spread(base, good, as_of=AS_OF + timedelta(seconds=6), max_age_seconds=value).spread_pct)
+        self.assertEqual(ob.DEFAULT_MAX_AGE_SECONDS, D(10))
+        old_book = self.result(book(timestamp=self.stamp(3600)))             # an hour old: never a normal spread
+        self.assertEqual(old_book.status, UNKNOWN)
+        self.assertIsNone(with_spread(base, old_book, as_of=AS_OF).spread_pct)
+        scouted, reasons = self.reasons(book(timestamp=self.stamp(3600)))
+        self.assertEqual(scouted.candidates, ())
+        self.assertIn("LIQUIDITY_SPREAD_UNKNOWN", reasons)
 
     def test_an_old_ranking_does_not_become_fresh_by_merging_a_new_book(self):
         helper, snap, inputs = self.liquidity_with(self.result(book(timestamp=self.stamp())))

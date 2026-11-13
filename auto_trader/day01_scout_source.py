@@ -21,7 +21,7 @@ import re
 import threading
 import time
 from collections import OrderedDict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -34,7 +34,7 @@ _SECRET_KEY = re.compile(r"token|secret|authorization|password|passwd|api[-_]?ke
 
 __all__ = ["RankingFetcher", "ResearchLog", "ClockRegression", "toss_ranking_source",
            "guard_toss_client", "guard_toss_orderbook_client", "OFFICIAL_TOSS_ORIGIN",
-           "ORDERBOOK_PATH", "FenceRefusal", "TossFenceError", "redact", "open_without_redirect"]
+           "ORDERBOOK_PATH", "fence_intact", "FenceRefusal", "TossFenceError", "redact", "open_without_redirect"]
 
 
 def redact(value: Any) -> Any:
@@ -206,6 +206,14 @@ def toss_ranking_source(client, *, budget_seconds: float = 15.0) -> Callable[[],
         with RequestBudget(budget_seconds, 1).activate():
             return client._domestic_trading_amount_rankings()
     return source
+
+
+def _needs_token(client) -> bool:
+    """True unless the client holds an unexpired token (the same test `access_token()` applies). Unknown
+    expiry counts as expired, so the fence never assumes a token it cannot prove is still usable."""
+    expires = getattr(client, "_token_expires_at", None)
+    return not (getattr(client, "_access_token", None) and isinstance(expires, datetime)
+                and expires.tzinfo is not None and datetime.now(timezone.utc) < expires)
 
 
 _FENCE_LOCK = threading.RLock()   # shared by every guarded client: serializes counters and the urlopen swap
@@ -476,8 +484,9 @@ def guard_toss_client(client, *, max_requests: int = 6, also_allow=(), rankings:
                 path = urlparse(url).path
                 with _FENCE_LOCK:
                     why = room(path)
-                    if not why and getattr(client, "_access_token", None) is None:
-                        # a token request would be needed first: both it and the data request must fit
+                    if not why and _needs_token(client):
+                        # a token request would be needed first (none, or an expired one, exactly as the
+                        # client's own `access_token` decides): both it and the data request must fit
                         why = room(TOKEN_PATH) or (
                             "request cap would be reached before the data request"
                             if counts["total"] + 2 > max_requests else None)
@@ -496,7 +505,25 @@ def guard_toss_client(client, *, max_requests: int = 6, also_allow=(), rankings:
             entry = _scrubbing(entry)
     if entry is not None and (preflight or sanitize_errors):
         client._authorized_json_request = entry
+    # What this guard installed, so a caller can prove the fence is still in place (see `fence_intact`).
+    client._day01_fence_installed = {
+        "counts": counts, "strict": strict_requests, "preflight": preflight, "sanitize": sanitize_errors,
+        "callables": {name: getattr(client, name, None)
+                      for name in ("_json_request_once", "_json_request", "access_token", "_authorized_json_request")}}
     return counts
+
+
+def fence_intact(client) -> bool:
+    """True only if `guard_toss_orderbook_client` is the LAST guard applied to this client and none of the
+    wrapped transport entry points has been replaced or unwrapped since (identity check, no I/O). A client
+    whose `_json_request_once` was restored or swapped would send unfenced, so callers must refuse it.
+    A caller who deliberately forges the record is out of scope: this catches accidental or later changes."""
+    record = getattr(client, "_day01_fence_installed", None)
+    if not isinstance(record, dict) or not (record.get("strict") and record.get("preflight") and record.get("sanitize")):
+        return False
+    if getattr(client, "_day01_orderbook_fence", None) is not record.get("counts"):
+        return False
+    return all(getattr(client, name, None) is fn and fn is not None for name, fn in record["callables"].items())
 
 
 def guard_toss_orderbook_client(client, *, origins=(OFFICIAL_TOSS_ORIGIN,), max_requests: int = 6,
