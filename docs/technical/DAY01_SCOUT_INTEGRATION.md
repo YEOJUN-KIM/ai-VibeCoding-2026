@@ -25,6 +25,9 @@ DAY-01 변경은 `replay`의 선택 인자 `entry_allowed=None` 하나다. None�
 
 ## 3. 한도 일관성 관찰 (코드 대조)
 
+동적 수량 모드(`sizing='AFFORDABLE_UP_TO_CAP'`)에서는 Scout가 `quantity=1`로 "최소 1주 가능"만 판정하고 최종 수량은 DAY-01이 신호 시점에 정한다. 자세한 규칙은 `docs/specs/DAY01_BACKTEST.md`의 "동적 수량" 참조.
+
+
 - 수수료: DAY-01은 `ROUND_DOWN` 원 단위, Scout는 반올림 없는 값 → Scout가 1원 미만 보수적. 경계에서 Scout가 DAY-01이 받아들일 후보를 거부할 수 있으나 반대는 없다. 허용.
 - 종목 한도: DAY-01은 기존 종목 가치 0 기준(종목당 1회 진입), Scout는 보유 가치+예약 노출 포함 → Scout가 더 엄격. 허용.
 - 일일 손실: DAY-01은 순청산자산 변화 `<= -한도`로 차단, Scout는 호출자가 준 `daily_loss`(양수 손실액) `< 한도`일 때만 허용. 어댑터가 **같은 정의**(순청산자산 기준 손실액)로 채워야 한다. 필수 조건.

@@ -49,7 +49,8 @@ assert result['summary']['status'] == 'FLAT'
 |---|---:|---|
 | execution | next_open | `next_open`, `legacy_close`, `research_estimated_open` |
 | initial_cash | 1000000 | 초기 KRW 현금 |
-| order_quantity | 10 | 매수 주문 수량; 신호 시 고정 |
+| order_quantity | 10 | 매수 주문 수량. `sizing='FIXED'`(기본)이면 신호 시 고정 수량, `AFFORDABLE_UP_TO_CAP`이면 **상한**(최대 1000) |
+| sizing | FIXED | `FIXED`: 기존 동작(기본, 기존 결과 재현). `AFFORDABLE_UP_TO_CAP`: 위험 한도 안에서 가능한 최대 정수 수량(아래 "동적 수량") |
 | volume_multiplier | 1.2 | 현재 완성 5분 거래량 / 직전 완성 5분 거래량 하한 |
 | stop_rate / target_rate | 0.01 / 0.02 | 체결 매수가 기준 손절·목표 비율 |
 | min_reward_risk | 2 | target_rate / stop_rate 하한; 수수료 차감 전 설정 비율 |
@@ -175,3 +176,19 @@ summary에는 estimated_open_fills, unfilled_entry_quantity, unfilled_exit_quant
 검증 명령: `python -B -m unittest discover -s tests -p test_day01_research.py -v`로 D-R3 관련 준비/연구33개를 이번에 재실행해 통과했다(기존31+신규2). 앞선 D-R1/D-R2 검증은 기존67+108+연구31+guarded55=261개였으며 이번 현재 결과에 재집계하지 않는다. 기본/legacy/기존 금융 엔진·실행기는 변경하지 않아 불필요한 반복 실행을 하지 않았다. Claude 최신 독립49개 수정본 재검증과 지연 상한에 어긋난 익일 기대값 수정은 별도다. Claude 소유 파일은 편집하지 않았다. 정확한 범위와 남은 검증은 작업 기록에 명시한다.
 
 장점은 환경 접근 없는 결정성, 인과적 시각, 비용·위험의 명시성이다. 단점은 엄격한 온타임 조건, 보수적인 청산 proxy, 단순 유동성 모형, 미청산 평가가격 동결이다. 학습 개념은 정보 이용 가능 시각과 사건 시각의 분리, 전략 판단과 실행 증거의 분리다. 사용자는 운영 환경 없이 위 단일 합성 명령과 예제로 재현하고, GPT/Claude는 늦은 데이터·미청산 동결·위험 감소 주문 정책과 보수적 가격 proxy를 검토해야 한다. 실제 시장 데이터, PAPER 연결, 운영 DB, LIVE, 배포는 별도 설계·환경 분리·사용자 승인이 필요하다.
+
+## 동적 수량 (`sizing='AFFORDABLE_UP_TO_CAP'`, 연구 모드)
+
+기본값 `FIXED`는 한 줄도 바뀌지 않았다(기존 DAY-01·Scout 테스트 전체 무변경 통과). 동적 모드는 선택 사항이다. 한도 숫자(`max_order_amount` 등)는 바꾸지 않고, 수량만 한도에 맞춘다.
+
+**신호 시점**: 진입 신호가 나면 그 시점에 알려진 가격(마지막 완성 분봉 종가)과 계좌로 `risk()`(기존 한도 검사 그대로: 주문 금액·종목 노출·전체 노출·현금·최소 현금 비율·포지션 수·일일 손실·미청산·지연 위험)를 `order_quantity`(상한)부터 1까지 내려가며 호출해 처음 통과하는 수량을 쓴다. 이 수량이 주문의 **신호 수량**이며 `ENTRY_QUANTITY_SIZED`(수량·상한·기준가)로 기록한다.
+- 1주도 안 되면 주문하지 않는다. 수량에 의존하는 한도(`ORDER_AMOUNT_LIMIT`, `SYMBOL_EXPOSURE_LIMIT`, `TOTAL_EXPOSURE_LIMIT`, `INSUFFICIENT_CASH`, `MIN_CASH_RATIO`)가 원인이면 `ZERO_AFFORDABLE_QUANTITY`(`blocking`에 원인)로, 수량과 무관한 원인(`DAILY_LOSS_LIMIT`, `POSITION_LIMIT` 등)은 기존 사유 그대로 기록한다. 0주 신호는 일일 ENTRY 주문 수와 `entered`에 계산하지 않는다.
+- **자원 예약**: 동적 모드는 연구 모드뿐 아니라 `next_open`·`legacy_close`에서도 대기 중인 BUY 주문의 현금·주문 금액·포지션 슬롯을 예약하고, 다음 신호의 `risk()`가 이를 차감한다(동시 신호가 같은 한도를 중복 사용하지 못함). 체결·취소·만료로 주문이 사라지면 예약도 사라진다. 동적 모드의 `equity_curve`에는 `reserved_cash`, `reserved_position_slots`가 추가된다(FIXED 비연구 모드에는 없음).
+
+**체결 시점**(`next_open`, `legacy_close`): 체결 가격과 그 시점의 계좌로 다시 검사한다(자기 예약은 제외). 거래량 한도로 이미 줄어든 수량 이하에서 통과하는 최대 수량으로 **줄이고** `ENTRY_QUANTITY_REDUCED`(from/quantity/signal_quantity/reference_price)를 기록한다. 신호 수량보다 늘리지 않는다. 1주도 안 되면 주문을 취소하고 `ZERO_AFFORDABLE_QUANTITY`(phase `FILL`)를 기록한다. 줄어든 나머지는 기존처럼 `ENTRY_REMAINDER_CANCELLED`로 취소되고 예약이 해제된다.
+
+**`research_estimated_open`**: 기존 신호 시점 예약 스냅샷과 초과 검증을 그대로 유지한다. 결산 시 추정 open 가격에서 예약에 맞지 않으면, 맞는 최대 수량(≥1)으로 줄이고 `ENTRY_QUANTITY_REDUCED`(phase `SETTLEMENT`)와 거래의 `QUANTITY_REDUCED_AT_OPEN_PRICE` 플래그를 남기며 실행은 무효화하지 않는다(정상적인 수량 조정). **1주도 맞지 않으면 아무것도 취소·은폐하지 않고 기존 `RESEARCH_RESOURCE_OVERRUN` → `INVALID_RESOURCE_OVERRUN`이 그대로 적용된다.** 줄인 뒤에도 초과 검사는 다시 수행되므로 실제 회계 불일치는 여전히 무효로 표시된다. 한계: 이 감소는 추정 open 가격이라는 사후 관측(`hindsight_fields`의 `open_price`)에 의존한다.
+
+**Scout 연결**: Scout는 최종 수량을 정하지 않는다. `scout_config_for(day01_config)`는 동적 모드에서 `quantity=1`(최소 1주 가능 여부)로, FIXED에서는 `order_quantity`로 설정한다(`scout_quantity_for`, `limit_mismatches`가 이 규칙을 검사). Scout의 수수료 비반올림 때문에 경계(1원 미만)에서 Scout가 DAY-01보다 보수적일 수 있으나 반대는 없다.
+
+**한계**: 합성 데이터 검증이며 실제 체결 가능 수량이나 호가 깊이를 보장하지 않는다. 신호 가격과 체결 가격의 차이는 위 재검증으로만 흡수된다.

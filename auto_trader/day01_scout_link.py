@@ -11,13 +11,21 @@ from datetime import datetime, timezone
 
 from .day01_scout import OK, Portfolio, ScoutConfig, ScoutResult, WatchEntry
 
-__all__ = ["scout_config_for", "portfolio_limits_for", "limit_mismatches", "WatchTimeline"]
+__all__ = ["scout_quantity_for", "scout_config_for", "portfolio_limits_for", "limit_mismatches", "WatchTimeline"]
+
+
+def scout_quantity_for(day01_config) -> int:
+    """Quantity Scout checks affordability with. FIXED sizing: the order quantity itself. Dynamic
+    sizing (`AFFORDABLE_UP_TO_CAP`): 1, because Scout only decides whether at least one share can be
+    ordered; the final quantity is DAY-01's decision at signal time."""
+    return 1 if getattr(day01_config, "sizing", "FIXED") == "AFFORDABLE_UP_TO_CAP" else day01_config.order_quantity
 
 
 def scout_config_for(day01_config, **overrides) -> ScoutConfig:
-    """Scout config whose quantity and cost model equal the DAY-01 order the replay would place."""
+    """Scout config whose quantity and cost model equal the DAY-01 order the replay would place
+    (or, for dynamic sizing, the minimum 1-share order)."""
     day01_config.validate()
-    values = dict(quantity=day01_config.order_quantity, fee_rate=day01_config.fee_rate,
+    values = dict(quantity=scout_quantity_for(day01_config), fee_rate=day01_config.fee_rate,
                   buy_slippage_rate=day01_config.slippage_rate)
     values.update(overrides)
     return ScoutConfig(**values)
@@ -36,7 +44,7 @@ def limit_mismatches(day01_config, scout_config: ScoutConfig, portfolio: Portfol
     `risk_config` is the object passed to `select_watchlist`; it must expose DAY-01's three
     amount limits (the DAY-01 `Config` itself qualifies)."""
     bad = []
-    if scout_config.quantity != day01_config.order_quantity:
+    if scout_config.quantity != scout_quantity_for(day01_config):
         bad.append("QUANTITY")
     if scout_config.fee_rate != day01_config.fee_rate:
         bad.append("FEE_RATE")

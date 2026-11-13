@@ -100,10 +100,18 @@ class Config:
     volume_participation: D = D('1')  # per executable minute, integer capacity
     max_signal_to_fill_minutes: D = D('2')  # exclusive ENTRY age limit
     research_max_observation_lag_minutes: D = D('2')
+    # FIXED: every entry orders exactly `order_quantity` (historical behavior, the default).
+    # AFFORDABLE_UP_TO_CAP: `order_quantity` is a CAP; the entry quantity is the largest integer <= cap
+    # that passes every risk limit at signal time (0 => no order), and fills never exceed it.
+    sizing: str = 'FIXED'
 
     def validate(self):
         if self.execution not in {'next_open', 'legacy_close', 'research_estimated_open'}:
             raise ValueError('unknown execution mode')
+        if self.sizing not in {'FIXED', 'AFFORDABLE_UP_TO_CAP'}:
+            raise ValueError('unknown sizing mode')
+        if self.sizing == 'AFFORDABLE_UP_TO_CAP' and type(self.order_quantity) is int and self.order_quantity > 1000:
+            raise ValueError('order_quantity cap must be <= 1000')
         _number(self.research_max_observation_lag_minutes, 'research_max_observation_lag_minutes')
         if self.research_max_observation_lag_minutes > 30:
             raise ValueError('research observation lag exceeds 30 minutes')
@@ -281,6 +289,7 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
         quote_keys.add(key)
         quotes.append(quote)
     research = config.execution == 'research_estimated_open'
+    dynamic = config.sizing == 'AFFORDABLE_UP_TO_CAP'
     if config.execution != 'next_open' and quotes:
         raise ValueError('only next_open accepts selected open_quotes')
     quotes_at, quote_history = defaultdict(list), {}
@@ -326,8 +335,9 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
         return cash - research_liability + sum((execution_costs(marks[s], p['quantity'], 'SELL', config)['cash_delta']
                                                for s, p in positions.items()), D(0))
 
-    def reservations():
-        return [o['reservation'] for o in pending.values() if o['side']=='BUY' and 'reservation' in o]
+    def reservations(skip=None):
+        return [o['reservation'] for s, o in pending.items()
+                if o['side']=='BUY' and 'reservation' in o and s != skip]
 
     def reason(at, symbol, code, **details):
         reasons.append(dict(at=at, symbol=symbol, reason=code, **details))
@@ -346,10 +356,12 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
         pending[symbol] = order
         signals.append(dict(order))
 
-    def risk(at, symbol, price, quantity):
+    def risk(at, symbol, price, quantity, skip=None):
         cost = execution_costs(price, quantity, 'BUY', config)
         asset = equity()
-        reserved = reservations() if research else []
+        # Dynamic sizing reserves resources for pending entries in EVERY mode; `skip` removes the
+        # order being filled so it is not counted against itself.
+        reserved = reservations(skip) if (research or dynamic) else []
         if research and research_invalid:
             return 'RESEARCH_RUN_INVALID'
         if any(p['unresolved'] for p in positions.values()):
@@ -404,9 +416,51 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
             reason(at, symbol, 'OLDER_OBSERVATION_MARK_PRESERVED', event_at=event_at,
                    mark_event_at=mark_events[symbol])
 
+    quantity_limited = {'ORDER_AMOUNT_LIMIT', 'SYMBOL_EXPOSURE_LIMIT', 'TOTAL_EXPOSURE_LIMIT',
+                        'INSUFFICIENT_CASH', 'MIN_CASH_RATIO'}
+
+    def fit_quantity(at, symbol, price, upper, skip=None):
+        """Largest q in 1..upper with risk(...) clear, else (0, breach code at q=1)."""
+        if upper < 1:
+            return 0, 'NO_QUANTITY'
+        first = risk(at, symbol, price, 1, skip)
+        if first:
+            return 0, first
+        for q in range(upper, 0, -1):
+            if risk(at, symbol, price, q, skip) is None:
+                return q, None
+        return 0, first
+
+    def zero_reason(at, symbol, breach, phase):
+        if breach in quantity_limited:
+            reason(at, symbol, 'ZERO_AFFORDABLE_QUANTITY', phase=phase, blocking=breach)
+        else:
+            reason(at, symbol, breach, phase=phase)
+
+    def overruns(order, quantity, reference):
+        """Research-mode resource breaches of a BUY settlement against its signal-time reservation."""
+        snapshot = order['reservation']
+        cost = execution_costs(reference, quantity, 'BUY', config)
+        out = []
+        if -cost['cash_delta'] > snapshot['cash_available']:
+            out.append('SIGNAL_CASH_OVERRUN')
+        if not RiskPolicy.order_amount_allowed(config,cost['amount'],cost['fee']):
+            out.append('ORDER_AMOUNT_OVERRUN')
+        if not RiskPolicy.symbol_amount_allowed(config,D(0),cost['amount']):
+            out.append('SYMBOL_EXPOSURE_OVERRUN')
+        if not RiskPolicy.total_investment_allowed(config,snapshot['invested'],cost['amount']):
+            out.append('TOTAL_EXPOSURE_OVERRUN')
+        post_asset = snapshot['equity']+cost['cash_delta']+execution_costs(reference,quantity,'SELL',config)['cash_delta']
+        if RiskPolicy.cash_ratio(snapshot['cash_available']+cost['cash_delta'],post_asset)<config.min_cash_ratio:
+            out.append('MIN_CASH_RATIO_OVERRUN')
+        if -cost['cash_delta'] > cash - sum((r['cash'] for r in reservations() if r is not snapshot),D(0)):
+            out.append('RESERVATION_RESOURCE_OVERRUN')
+        return out
+
     def fill(symbol, at, event_at, reference, capacity, evidence_close, price_source, bar_open=None, outcome=None):
         nonlocal cash, research_liability, research_invalid
         order = pending[symbol]
+        reduced = False
         if order['side'] == 'BUY' and not time(9, 20) <= (event_at if research else at).time() < time(11, 30):
             reason(at, symbol, 'ENTRY_EXPIRED')
             pending.pop(symbol)
@@ -423,29 +477,37 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
                     reference = min(reference, bar_open, order['trigger'])
                 elif order['reason'] == 'TARGET':
                     reference = min(reference, order['trigger'])
+        elif not research and dynamic:
+            # Re-verify at the real fill price/account: shrink (never grow) or cancel. Quantity never
+            # exceeds the signal quantity (min above) and the freed reservation is released on pop.
+            fitted, breach = fit_quantity(at, symbol, reference, quantity, skip=symbol)
+            if fitted < 1:
+                zero_reason(at, symbol, breach, 'FILL')
+                pending.pop(symbol)
+                return False
+            if fitted < quantity:
+                reason(at, symbol, 'ENTRY_QUANTITY_REDUCED', phase='FILL', from_quantity=quantity,
+                       quantity=fitted, signal_quantity=order['quantity'], reference_price=reference)
+                quantity = fitted
         elif not research:
             breach = risk(at, symbol, reference, quantity)
             if breach:
                 reason(at, symbol, breach, phase='FILL')
                 pending.pop(symbol)
                 return False
+        if research and dynamic and order['side'] == 'BUY':
+            # A reduction that makes the settlement fit its reservation is normal sizing, not an accounting
+            # mismatch. If even 1 share does not fit, nothing is cancelled or hidden: the existing overrun
+            # detection below still flags the run INVALID_RESOURCE_OVERRUN.
+            fitted = next((q for q in range(quantity, 0, -1) if not overruns(order, q, reference)), None)
+            if fitted is not None and fitted < quantity:
+                reason(at, symbol, 'ENTRY_QUANTITY_REDUCED', phase='SETTLEMENT', from_quantity=quantity,
+                       quantity=fitted, signal_quantity=order['quantity'], reference_price=reference)
+                quantity, reduced = fitted, True
         cost = execution_costs(reference, quantity, order['side'], config)
         breaches = []
         if research and order['side']=='BUY':
-            snapshot = order['reservation']
-            if -cost['cash_delta'] > snapshot['cash_available']:
-                breaches.append('SIGNAL_CASH_OVERRUN')
-            if not RiskPolicy.order_amount_allowed(config,cost['amount'],cost['fee']):
-                breaches.append('ORDER_AMOUNT_OVERRUN')
-            if not RiskPolicy.symbol_amount_allowed(config,D(0),cost['amount']):
-                breaches.append('SYMBOL_EXPOSURE_OVERRUN')
-            if not RiskPolicy.total_investment_allowed(config,snapshot['invested'],cost['amount']):
-                breaches.append('TOTAL_EXPOSURE_OVERRUN')
-            post_asset = snapshot['equity']+cost['cash_delta']+execution_costs(reference,quantity,'SELL',config)['cash_delta']
-            if RiskPolicy.cash_ratio(snapshot['cash_available']+cost['cash_delta'],post_asset)<config.min_cash_ratio:
-                breaches.append('MIN_CASH_RATIO_OVERRUN')
-            if -cost['cash_delta'] > cash - sum((r['cash'] for r in reservations() if r is not snapshot),D(0)):
-                breaches.append('RESERVATION_RESOURCE_OVERRUN')
+            breaches = overruns(order, quantity, reference)
             if breaches:
                 research_invalid = True
                 research_breaches.append(dict(at=at,symbol=symbol,reasons=list(breaches)))
@@ -494,7 +556,8 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
             trades[-1].update(mode=config.execution, estimated_execution_at=event_at,
                 observation_at=outcome.available_at, observed_at=outcome.available_at,settlement_at=at,
                 settlement_lag=at-event_at,physical_fill_claim=False,uncertain=True,
-                uncertainty_flags=['HISTORICAL_OPEN_OUTCOME','NO_EXECUTABLE_DEPTH','CONFIGURED_QUANTITY_ASSUMPTION','OBSERVATION_TIME_LEDGER'],
+                uncertainty_flags=['HISTORICAL_OPEN_OUTCOME','NO_EXECUTABLE_DEPTH','CONFIGURED_QUANTITY_ASSUMPTION','OBSERVATION_TIME_LEDGER']
+                                  + (['QUANTITY_REDUCED_AT_OPEN_PRICE'] if reduced else []),
                 hindsight_fields=['open_price','bar_exists','positive_volume_veto','availability_lag'],
                 resource_breaches=breaches, fee_rate=config.fee_rate,sell_tax_rate=config.sell_tax_rate,
                 slippage_rate=config.slippage_rate)
@@ -716,17 +779,26 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
                     reason(at, symbol, 'DAILY_ENTRY_ORDER_LIMIT')
                     continue
                 price = max(own, key=lambda r: r.event_at).close_price
-                breach = risk(at, symbol, price, config.order_quantity)
-                if breach:
-                    reason(at, symbol, breach, phase='SIGNAL')
-                    continue
+                if dynamic:
+                    order_quantity, breach = fit_quantity(at, symbol, price, config.order_quantity)
+                    if order_quantity < 1:
+                        zero_reason(at, symbol, breach, 'SIGNAL')
+                        continue
+                    reason(at, symbol, 'ENTRY_QUANTITY_SIZED', quantity=order_quantity, cap=config.order_quantity,
+                           reference_price=price)
+                else:
+                    order_quantity = config.order_quantity
+                    breach = risk(at, symbol, price, order_quantity)
+                    if breach:
+                        reason(at, symbol, breach, phase='SIGNAL')
+                        continue
                 entry_counts[day] += 1
                 order_counts[day] += 1
                 entered.add((symbol, day))
-                order = dict(symbol=symbol, side='BUY', at=at, reason='ENTRY', quantity=config.order_quantity, trigger=None)
-                if research:
+                order = dict(symbol=symbol, side='BUY', at=at, reason='ENTRY', quantity=order_quantity, trigger=None)
+                if research or dynamic:
                     reserved = reservations()
-                    cost = execution_costs(price,config.order_quantity,'BUY',config)
+                    cost = execution_costs(price,order_quantity,'BUY',config)
                     order['reservation'] = dict(cash=-cost['cash_delta'],amount=cost['amount'],
                         cash_available=cash-sum((r['cash'] for r in reserved),D(0)),
                         equity=equity(),
@@ -738,6 +810,9 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
                           daily_net_change=value-baselines[day],
                           loss_limit_exceeded=value-baselines[day] <= -config.daily_loss_limit,
                           unresolved=any(p['unresolved'] for p in positions.values())))
+        if dynamic and not research:
+            curve[-1].update(reserved_cash=sum((r['cash'] for r in reservations()),D(0)),
+                             reserved_position_slots=len(reservations()))
         if research:
             curve[-1].update(research_liability=research_liability,reserved_cash=sum((r['cash'] for r in reservations()),D(0)),
                              reserved_position_slots=len(reservations()),research_run_invalid=research_invalid)
