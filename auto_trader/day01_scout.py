@@ -1190,7 +1190,11 @@ def _merge(snapshots: tuple, claims: tuple, incoming, as_of: datetime, max_histo
     kept = tuple(known[-max_history:] + later[:max_history])
     kept_future = {x.content_digest for x in later[:max_history]}
     ordered_claims = sorted(claim_map.values(), key=lambda c: (c.received_at, c.provider, c.kind, c.key, c.digest))
-    known_claims = [c for c in ordered_claims if c.received_at <= as_of]
+    # Expire past-session evidence BEFORE counting/capping, so yesterday's claims can neither
+    # trigger nor extend today's overflow quarantine (refresh and ingest_fetch share this path).
+    today = _kst_date(as_of)
+    known_claims = [c for c in ordered_claims
+                    if c.received_at <= as_of and _kst_date(c.received_at) >= today]
     future_claims = [c for c in ordered_claims if c.received_at > as_of and c.digest in kept_future][:MAX_CLAIMS]
     overflow = len(known_claims) > MAX_CLAIMS
     return (kept, tuple(known_claims[:MAX_CLAIMS] + future_claims), tuple(ingested), tuple(rejected),

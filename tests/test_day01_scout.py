@@ -948,6 +948,49 @@ class DisputeEvidenceRetentionTests(unittest.TestCase):
         self.assertIsNone(rolled_state.claims_overflow_day) if rolled_state.claims_overflow_day !=             sc._kst_date(next_day).isoformat() else None
         self.assertTrue(all(sc._kst_date(c.received_at) >= sc._kst_date(next_day) for c in rolled_state.claims))
 
+    def test_d_s10_expired_day_claims_never_requarantine_the_next_session(self):
+        nxt = RECEIVED + timedelta(days=1)
+
+        def fresh(sid):
+            return snap(raw_rows(60), sid=sid, ranked=nxt - timedelta(seconds=10),
+                        received=nxt - timedelta(seconds=5))
+
+        original_limit = sc.MAX_CLAIMS
+        sc.MAX_CLAIMS = 3          # unchanged low capacity for the WHOLE test, across the rollover
+        try:
+            day1 = [snap(raw_rows(60, price=100 + i), sid=f"d{i}", ranked=RANKED - timedelta(seconds=i),
+                         received=RECEIVED - timedelta(seconds=i)) for i in range(2)]   # 4 claims > 3
+            state, first = self.go(ScoutState.empty(), day1, as_of=RECEIVED)
+            self.assertEqual(first.result.status, sc.INVALID_SNAPSHOT)
+            self.assertIsNotNone(state.claims_overflow_day)
+            # Current-session latch is preserved: same KST day, new evidence, still quarantined.
+            same_day = RECEIVED + timedelta(seconds=30)
+            _, latched = self.go(state, [snap(raw_rows(60), sid="s", ranked=same_day - timedelta(seconds=5),
+                                              received=same_day - timedelta(seconds=2))],
+                                 as_of=same_day, portfolio_=portfolio(observed_at=same_day))
+            self.assertEqual(latched.result.status, sc.INVALID_SNAPSHOT)
+            # Next session via refresh: old claims expire BEFORE the cap, so no re-quarantine.
+            rolled, out = self.go(state, [fresh("n1")], as_of=nxt, portfolio_=portfolio(observed_at=nxt))
+            self.assertIsNone(rolled.claims_overflow_day)
+            self.assertEqual(out.result.status, sc.OK)
+            self.assertTrue(all(sc._kst_date(c.received_at) == sc._kst_date(nxt) for c in rolled.claims))
+            # Same through ingest_fetch: stale day-1 evidence does not latch day 2.
+            fetched, outcome = ingest_fetch(
+                state, lambda: FetchResult({"result": {"rankedAt": (nxt - timedelta(seconds=10)).isoformat(),
+                                                       "rankings": raw_rows(60)}}, nxt - timedelta(seconds=5)),
+                clock=lambda: nxt)
+            self.assertEqual(outcome.status, "INGESTED")
+            self.assertNotEqual(fetched.claims_overflow_day, sc._kst_date(nxt).isoformat())
+            after, report = self.go(fetched, as_of=nxt, portfolio_=portfolio(observed_at=nxt))
+            self.assertEqual(report.result.status, sc.OK)
+            # Overflow inside the new session still quarantines it (past expiry is not a reset).
+            burst = [snap(raw_rows(60, price=300 + i), sid=f"b{i}", ranked=nxt - timedelta(seconds=20 + i),
+                          received=nxt - timedelta(seconds=10 + i)) for i in range(2)]
+            _, new_overflow = self.go(after, burst, as_of=nxt, portfolio_=portfolio(observed_at=nxt))
+            self.assertEqual(new_overflow.result.status, sc.INVALID_SNAPSHOT)
+        finally:
+            sc.MAX_CLAIMS = original_limit
+
     def test_claims_are_bounded_and_serializable(self):
         a, b = self.pair()
         state, _ = self.go(ScoutState.empty(), [a, b])

@@ -38,5 +38,5 @@
 ## 결과
 
 - PR 번호·URL / 최종 SHA 확인 위치: PR 없음. 최종 commit SHA는 완료 보고(worker_done)에 기록.
-- 구현 / 자동 테스트 / 실제 동작 / 사용자 확인 / 운영 적용 상태: AI 구현 완료 / 합성 단위 테스트 78건 통과(로컬, `python -m unittest tests.test_day01_scout`) / 해당 없음(실제 API 미연결) / 미확인 / 미적용.
-- 미검증 항목·남은 위험·GPT 검토 사항: 미검증: 실제 API 응답·휴장일·production adapter. Codex 독립 검증 대기. D-S1(미래 포트폴리오 누출)과 독립 검토 결함 D-S2~D-S7(미래 스냅샷 가지치기, 분쟁 first-wins, 최초 수신 시각, 포트폴리오 필드 충돌, 공개 생성자 검증, opt-out fully_eligible)을 수정함. D-S8/D-S9(분쟁 증거 보존·id 별칭·격리)도 수정함. Codex 재검증 대기.
+- 구현 / 자동 테스트 / 실제 동작 / 사용자 확인 / 운영 적용 상태: AI 구현 완료 / 합성 단위 테스트 79건 통과(로컬, `python -m unittest tests.test_day01_scout`) / 해당 없음(실제 API 미연결) / 미확인 / 미적용.
+- 미검증 항목·남은 위험·GPT 검토 사항: 미검증: 실제 API 응답·휴장일·production adapter. Codex 독립 검증 대기. D-S1(미래 포트폴리오 누출)과 독립 검토 결함 D-S2~D-S7(미래 스냅샷 가지치기, 분쟁 first-wins, 최초 수신 시각, 포트폴리오 필드 충돌, 공개 생성자 검증, opt-out fully_eligible)을 수정함. D-S8/D-S9(분쟁 증거 보존·id 별칭·격리)와 D-S10(지난 세션 claim 만료 순서)도 수정함. Codex 재검증 대기.
