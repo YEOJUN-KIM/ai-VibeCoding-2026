@@ -1,6 +1,6 @@
 # DAY01-SCOUT 독립 검증
 
-상태: 2026-11-13 사전 조사 및 검증 설계. 구현 인계·자동 테스트·사용자 동작 확인 전이며 기능 완료 보고가 아니다.
+상태: 2026-11-13 독립 검증 수행, **수정 필요 / 통합 불가**. 미래 포트폴리오 결함 D-S1은 수정 확인했으나 추가 결함 D-S2~D-S7이 남았다. 실제 동작·사용자 확인·운영 적용 완료가 아니다.
 작업 기록: [20261113-Codex-DAY01-scout-review](../plans/ai-tasks/20261113-Codex-DAY01-scout-review.md).
 
 ## 기존 재사용 계약 조사
@@ -33,13 +33,45 @@ Claude의 커밋 및 공개 API를 받은 뒤 정적 import 감사를 먼저 한
 
 기존 DAY01 호환성은 보존 브랜치 소스 blob/hash·인터페이스 정적 확인을 우선한다. 기존 259개 회귀 테스트는 읽기 전용 대상 worktree의 소유권과 안전 import를 확인한 뒤 승인 범위에서 최종 한 번만 실행하며, 현재까지 실행하지 않았다. 과거 259개 통과 기록은 이번 결과가 아니다.
 
-## 결과 및 인계 대기
+## 구현 인계와 실제 검증 결과
 
-- 독립 테스트 작성/자동 테스트: 미실행, API 인계 대기.
+- Claude 구현 `7532380cb3134bc56079b5618064bbb3c24f06f6`의 신규 4파일 전체 경로를 확인하고 정확한 로컬 cherry-pick을 수행했다(`e590400`); 기존 DAY01 소스는 합치거나 복사하지 않았다.
+- 첫 실제 재현: `select_watchlist(T, (), portfolio=Portfolio(T+1초, 0, positions=(Position('FUTURE_ONLY',3),)))`가 과거 시점 보유 종목·수량을 노출했다(D-S1). 조정자를 통해 Claude에 보고했다.
+- 승인된 수정 `afaee13547598950c46887f64390e3c904726a72`를 `96a6b785ce6e669588f150a9197792fa51802dbc`로 cherry-pick했다. 미래 포트폴리오 전체 무시 및 stale known+future prefix 회귀를 독립 테스트로 확인했다.
+- `tests/test_day01_scout_review.py`는 구현자 테스트 fixture를 재사용하지 않은 **40개 합성 테스트**이다. 현 구현에서 31개 통과, 9개 실패, 오류·skip 없음. 실패를 expectedFailure로 숨기지 않았다.
+- 실행 명령: `python -B -m unittest tests.test_day01_scout_review` → 40개, 실패 9개.
+- 합동 검증 명령: `python -B -m unittest tests.test_day01_scout tests.test_day01_scout_review tests.test_chart_candles` → **109개, 실패 9개**. Claude 기본 66개 및 기존 chart 3개는 통과. `chart_candles`/models는 소스 import를 먼저 감사했으며 stdlib/pydantic만 사용하고 운영 설정·DB·broker 연결을 import하지 않는다.
+- 독립 테스트의 preserved DAY01 `select_universe` 접점은 읽기 전용 `importlib`로 감사한 순수 모듈만 로드하여 합성 WATCH 심볼 전달을 확인했다. 입력 universe를 고정하는 형식 호환성 확인이며 과거 순위 생성·백테스트·주문 연결이 아니다. 후보가 0개일 때 기존 DAY01의 비어 있지 않은 universe 계약 때문에 호출자가 replay를 건너뛰어야 한다.
+
+## 재현된 미해결 결함
+
+| ID | 실제 재현 및 영향 | 독립 테스트 |
+|---|---|---|
+| D-S2 | max_history=2 상태에 알려진 현재 스냅샷과 미래 스냅샷 8개를 한 batch로 추가하면 미래 자료가 현재 이력을 퇴출한다. 기준 결과 OK가 NO_SNAPSHOT으로 바뀌어 prefix invariance 위반. | `test_future_snapshot_must_not_evict_known_history` |
+| D-S3 | 동일 ID의 다른 내용 또는 같은 공급자 기준시각의 다른 내용이 refresh batch로 들어오면 먼저 입력한 것만 채택하고 후보를 생성한다. 순서를 뒤집으면 가격·결과가 바뀐다. 직접 selector의 충돌 차단과 달리 refresh가 충돌 증거를 지운다. | `test_refresh_conflicting_snapshot_batch_does_not_choose_first`, `test_different_ids_conflicting_same_provider_basis_fail_closed` |
+| D-S4 | 같은 ID/내용의 늦은 수신 뒤 원래 이른 수신을 넣으면 이른 시각을 보존하지 않는다. 직접 selector에 같은 내용/다른 ID를 주어도 최신 수신 시각으로 provenance와 만료가 갱신된다. | `test_same_content_earlier_receipt_must_survive_reverse_arrival`, `test_direct_selector_cached_content_preserves_earliest_receipt` |
+| D-S5 | 동일 이용 가능 시각의 상충 포트폴리오에 같은 보유수량, 다른 가격(100/200)을 주면 첫 항목의 보유 가격을 채택한다. 감시 출력이 입력 순서에 의존. | `test_conflicting_portfolio_held_prices_are_order_independent` |
+| D-S6 | 공개 RankedRow(True, ...)를 공개 RankingSnapshot으로 전달하면 rank=True 후보가 생성되어 bool 검증 우회. 직접 snapshot에 list rows를 주면 frozen인데도 외부 list.clear로 내용 변경 가능. | `test_public_rankedrow_bool_rank_cannot_bypass_validation`, `test_direct_snapshot_owns_immutable_rows` |
+| D-S7 | require_liquidity/readiness/capital=False opt-out에 사실이 제공되어 있으면 fully_eligible=True가 된다. 조정자가 전달한 opt-out은 unverified라는 계약과 다름. | `test_opt_out_never_claims_fully_eligible_even_with_present_facts` |
+
+결함은 조정자에게 재현과 함께 전달했고 Claude가 구현 수정을 담당한다. Codex는 소스를 수정하지 않았다. 수정 커밋 수신 뒤 위 실패가 사라지는지 다시 검증해야 한다.
+
+## 기존 DAY01 보존 검증
+
+- 조정자가 승인한 읽기 전용 경로: `C:/Users/User/orca/workspaces/ai-VibeCoding-2026/day01-claude-review-20261112`.
+- 실행 전 HEAD `6a034f91bf34acd0a29cab703d275650b02bcd0e`, auto_trader tree `7292df68b2f2e6523d7751923b29110841daa203`, tests tree `f4e140a196aafd227024ad928e583ffc579784d7`, status clean. 실행 이후에도 tree와 status 동일 확인.
+- 감사 대상은 `test_day01`, `test_day01_review`, `test_day01_research`, `test_day01_research_review`와 이들이 사용하는 순수 day01/day01_research/risk_policy 및 inert package init. 소스·테스트에는 운영 설정·DB·broker import가 없다. 별도 safe_regression_runner는 이번 대상과 달리 settings를 허용하는 경로가 있어 사용하지 않았다.
+- 첫 승인 실행은 도구 출력 처리에서 진행 중 session 메타데이터를 놓쳐 일부 진행 점만 확보했다. **최종 결과 미확보이므로 통과로 계산하지 않는다.** 조정자의 추가 지시에 따라 필터된 Python 프로세스 읽기 전용 점검에서 대상 active=0을 확인한 뒤 증거 수집용 재실행 1회를 승인받았다. 기본 sandbox에서 프로세스 조회가 거부된 결과는 종료 증거로 사용하지 않았으며, 별도 허용된 읽기 전용 조회에서 정상 확인했다.
+- 재실행은 `python -B -c`에서 `sys.path.insert(0,'tests')` 후 위 네 정확한 모듈만 unittest loader로 로드한다. 전체 discovery 없음. 끝에 tests/failures/errors/skipped와 unsafe import 목록을 출력하고 성공 여부를 exit code로 보존한다. stdout/stderr·시작/끝 시각·exit code는 chat scratch의 `day01-259-review.log`, `day01-259-review-result.txt`에만 저장한다.
+- 최종 재실행 결과: **259개 통과, 실패 0, 오류 0, skip 0, unsafe_imports=[]; exit code 0**. 2026-11-13 09:25:07~09:26:05 KST, 57.424초. Python unittest가 stderr에 출력하는 진행 문자는 PowerShell에서 NativeCommandError 형식으로 감싸졌지만 실제 Python 종료 코드·unittest 결과·JSON 결과는 모두 성공이다. Scout 변경으로 이 순수 기존 소스를 다시 실행할 필요는 없다.
+
+## 검증 범위와 다음 인계
+
+- 독립 테스트 작성/자동 테스트: 수행, 결함 6범주/9개 실패로 수정 필요. D-S1은 수정 확인.
 - 실제 API·실계좌·장중·UI·운영 적용: 미실행 및 승인 범위 밖.
-- API·DB 계약: 변경 없음. scout 신규 순수 인터페이스는 인계 후 검토 예정.
-- 기존 기능 영향: 현재 두 문서만 신규 생성하므로 실행 동작 변경 없음.
+- API·DB 계약: 기존 계약 변경 없음. scout 신규 순수 인터페이스를 검토했고 위 미해결 사항이 있다.
+- 기존 기능 영향: Claude 신규 순수 scout 모듈은 실제 경로에 연결되지 않았다. Codex 변경은 신규 테스트와 검토 문서·작업 기록뿐이다.
 - GPT 검토 사항: 시각 출처와 캐시 보존, 모든 사실의 이용 가능 시각, 개별 affordability와 watchlist 전체 예산 의미, 실제 수집기 연결 이전 한계.
 - 학습 개념: point-in-time 검증은 가격 외 모든 판단 사실의 이용 가능 시각에도 적용된다. 후보 집합과 주문·보유 감시 집합은 서로 다른 책임을 갖는다.
 
-직접 확인은 현재 문서의 범위·계약·미검증 항목을 읽는 단계다. 향후 합성 테스트 재실행 절차와 예상 결과는 구현 인계 및 실행 후 이 문서에 기록하며, 실제 운영 연결 검증으로 확대하지 않는다.
+직접 확인: 위 합동 명령은 합성 검증만 수행하며 현재 예상 결과는 109개 중 9개 실패이다. Claude 수정 후 동일 명령을 다시 실행하여 실패 0개를 확인해야 통합 검토 후보가 된다. 실제 수집기의 최초 수신시각 보존과 모든 사실의 이용 가능 시각 저장은 별도 작업이며 실환경 검증·main 병합·배포는 사용자 승인이 필요하다. 저장소는 https://github.com/YEOJUN-KIM/ai-VibeCoding-2026 이고 작업 브랜치는 `YEOJUN-KIM/day01-scout-codex-review-20261113`; push/PR은 지시에 따라 수행하지 않는다. 다른 AI와 파일 충돌을 피하도록 구현 파일은 Claude 소유로 유지한다.
