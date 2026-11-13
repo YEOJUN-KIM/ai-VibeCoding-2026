@@ -22,7 +22,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal, DecimalException, InvalidOperation, localcontext
+from decimal import Context, Decimal, DecimalException, DivisionByZero, InvalidOperation, Overflow, localcontext
 from fractions import Fraction
 from typing import Any, Callable, Mapping
 from urllib.parse import urlencode
@@ -35,17 +35,24 @@ ANOMALY_SPREAD_PCT = Decimal(50)           # strictly greater than this is an an
 # A provider time later than our receipt time is never accepted (no tolerance): data stamped after we received
 # it cannot be trusted as 'already known'. A tolerance for clock skew would need an explicit policy decision.
 MAX_ABS_EXPONENT_HIGH, MAX_ABS_EXPONENT_LOW, MAX_DIGITS = 15, -9, 30   # accepted magnitude: 1e-9 .. <1e16
-DEFAULT_MAX_SKEW_SECONDS = Decimal(60)     # max gap between the ranking stamp and the book stamp in with_spread
 MAX_SYMBOLS = 4                            # matches the 4-request orderbook cap of the fence
 _SYMBOL = re.compile(r"[0-9A-Z]{6}")
 _NUMERIC = re.compile(r"[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?")   # ASCII only: Decimal() also takes "1_0" and Arabic digits
+
+
+
+def _fixed_context() -> Context:
+    """Every Decimal operation here runs in THIS context, never the caller's ambient one (a low precision or an
+    Inexact trap elsewhere in the process must not change results or abort a run). 60 digits hold the exact sum
+    or difference of any two accepted numbers (<= 30 digits, exponents within 1e-9..1e16)."""
+    return Context(prec=60, traps=[InvalidOperation, DivisionByZero, Overflow])
+
 
 OK, UNKNOWN, ANOMALY = "OK", "UNKNOWN", "ANOMALY"
 
 __all__ = ["OrderbookResult", "parse_orderbook", "with_spread", "fetch_orderbook_results", "valid_symbol",
            "validate_symbols", "DEFAULT_MAX_AGE_SECONDS", "ANOMALY_SPREAD_PCT", "MAX_SYMBOLS", "OK", "UNKNOWN",
-           "ANOMALY",
-           "DEFAULT_MAX_SKEW_SECONDS"]
+           "ANOMALY"]
 
 
 @dataclass(frozen=True)
@@ -148,7 +155,17 @@ def _provider_time(value: Any):
 def parse_orderbook(symbol: str, payload: Any, *, received_at: datetime,
                     max_age_seconds: Any = DEFAULT_MAX_AGE_SECONDS) -> OrderbookResult:
     """Convert one official order-book response into a spread. Never raises for a bad payload: every
-    failure becomes UNKNOWN with reason codes. `received_at` is OUR receipt time (tz-aware)."""
+    failure becomes UNKNOWN with reason codes (arithmetic failures become NUMERIC_ERROR). `received_at` is
+    OUR receipt time (tz-aware). Raises ValueError only for bad arguments."""
+    try:
+        with localcontext(_fixed_context()):
+            return _parse_orderbook(symbol, payload, received_at, max_age_seconds)
+    except (DecimalException, ArithmeticError):
+        received = received_at.astimezone(timezone.utc) if isinstance(received_at, datetime) and received_at.tzinfo else None
+        return OrderbookResult(symbol, UNKNOWN, None, ("NUMERIC_ERROR",), received_at=received)
+
+
+def _parse_orderbook(symbol: str, payload: Any, received_at: datetime, max_age_seconds: Any) -> OrderbookResult:
     if not valid_symbol(symbol):
         raise ValueError("symbol must be a 6-character [0-9A-Z] code")
     if not isinstance(received_at, datetime) or received_at.tzinfo is None or received_at.utcoffset() is None:
@@ -217,22 +234,28 @@ def parse_orderbook(symbol: str, payload: Any, *, received_at: datetime,
     return OrderbookResult(symbol, OK, spread, (), **common)
 
 
-def with_spread(liquidity: LiquidityFacts, result: OrderbookResult, *,
-                max_skew_seconds: Any = DEFAULT_MAX_SKEW_SECONDS) -> LiquidityFacts:
-    """Copy of a `LiquidityFacts` with the spread filled from an OK result. Not OK -> spread None (UNKNOWN),
-    even if one was present. The combined fact is available only when its LATEST component was received, so
-    `observed_at` becomes the later of the two stamps (never back-dated). To stop a fresh book from making an
-    old ranking look fresh (or the reverse), the two stamps must be within `max_skew_seconds`; otherwise the
-    spread stays None. Turnover and volume are untouched; Scout's thresholds are not read or changed."""
+def with_spread(liquidity: LiquidityFacts, result: OrderbookResult, *, as_of: datetime,
+                max_age_seconds: Any = DEFAULT_MAX_AGE_SECONDS) -> LiquidityFacts:
+    """Copy of a `LiquidityFacts` with the spread filled from an OK result, judged AT the decision time `as_of`.
+
+    The spread stays None (UNKNOWN) when: the result is not OK; the book was received after `as_of` (it did not
+    exist yet for that decision); or the book's provider time is older than `max_age_seconds` at `as_of`.
+    `observed_at` becomes the EARLIER of the two receipt stamps, so Scout's own `max_fact_age` rule is applied
+    to the oldest source and a fresh book cannot make an old ranking look fresh. Because both stamps are known
+    to be <= `as_of`, taking the earlier one never claims availability before it happened. Turnover and volume
+    are untouched; Scout's thresholds are not read or changed."""
     if liquidity.symbol != result.symbol:
         raise ValueError("symbol mismatch")
-    if result.status != OK:
-        return replace(liquidity, spread_pct=None)
-    skew = abs(result.received_at - liquidity.observed_at)
-    if skew > timedelta(microseconds=int(Decimal(str(max_skew_seconds)) * 1_000_000)):
+    if not isinstance(as_of, datetime) or as_of.tzinfo is None or as_of.utcoffset() is None:
+        raise ValueError("as_of must be timezone-aware")
+    as_of = as_of.astimezone(timezone.utc)
+    with localcontext(_fixed_context()):
+        limit = timedelta(microseconds=int(Decimal(str(max_age_seconds)) * 1_000_000))
+    if (result.status != OK or result.received_at > as_of or liquidity.observed_at > as_of
+            or as_of - result.provider_time > limit):
         return replace(liquidity, spread_pct=None)
     return replace(liquidity, spread_pct=result.spread_pct,
-                   observed_at=max(liquidity.observed_at, result.received_at))
+                   observed_at=min(liquidity.observed_at, result.received_at))
 
 
 class _Stop(Exception):
@@ -302,6 +325,11 @@ MAX_LOGGED_LEVELS = 50
 
 
 def _safe_raw(payload: Any):
+    with localcontext(_fixed_context()):
+        return _safe_raw_inner(payload)
+
+
+def _safe_raw_inner(payload: Any):
     """Diagnostic copy limited to the documented fields in a validated shape: timestamp text of date characters
     only, a 3-letter currency, and price/volume as parsed numbers. Any other key or free text in the response
     (messages, ids, echoed secrets or URLs) is dropped, because key-based redaction cannot see secrets in values."""

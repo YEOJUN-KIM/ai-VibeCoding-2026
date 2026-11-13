@@ -34,7 +34,7 @@ _SECRET_KEY = re.compile(r"token|secret|authorization|password|passwd|api[-_]?ke
 
 __all__ = ["RankingFetcher", "ResearchLog", "ClockRegression", "toss_ranking_source",
            "guard_toss_client", "guard_toss_orderbook_client", "OFFICIAL_TOSS_ORIGIN",
-           "ORDERBOOK_PATH", "redact", "open_without_redirect"]
+           "ORDERBOOK_PATH", "FenceRefusal", "TossFenceError", "redact", "open_without_redirect"]
 
 
 def redact(value: Any) -> Any:
@@ -232,6 +232,86 @@ _SAFE_ERROR_CODE = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
 
 
+class FenceRefusal(PermissionError):
+    """A request or cap refused by the fence. The message is ours (never provider text)."""
+
+
+class TossFenceError(RuntimeError):
+    """Stand-in for any unexpected failure that came from a response or transport internals. It carries no
+    provider text, URL or header; `status_code`/`error_code` mirror the shape the Toss client uses."""
+
+    def __init__(self, message: str, *, status_code: int | None = None, error_code: str | None = "unexpected-response"):
+        super().__init__(message)
+        self.status_code = status_code
+        self.error_code = error_code
+
+
+def _scrub(exc: BaseException) -> BaseException:
+    """A fresh exception with only safe fields: no cause/context/notes, no provider text, URL or headers.
+    Call it inside `except`, but RAISE the result after the block so no context is attached."""
+    if isinstance(exc, FenceRefusal):
+        return FenceRefusal(str(exc))
+    if type(exc).__name__ == "RequestBudgetExceeded":          # our own control-flow signal, args are slugs
+        return type(exc)(*[a for a in exc.args if isinstance(a, str)][:1])
+    if hasattr(exc, "status_code") and hasattr(exc, "error_code"):
+        status = exc.status_code if isinstance(exc.status_code, int) and not isinstance(exc.status_code, bool) else None
+        code = exc.error_code if isinstance(exc.error_code, str) and _SAFE_ERROR_CODE.fullmatch(exc.error_code) else None
+        message = f"Toss request failed (status={status}, code={code})"
+        try:
+            return type(exc)(message, status_code=status, error_code=code)
+        except Exception:
+            return TossFenceError(message, status_code=status, error_code=code)
+    return TossFenceError("Toss request failed (unexpected error)")
+
+
+def _scrubbing(function):
+    """Wrap an entry point so every failure leaving it is `_scrub`bed and raised outside the except block."""
+    def wrapper(*args, **kwargs):
+        failure = None
+        try:
+            return function(*args, **kwargs)
+        except Exception as exc:
+            failure = _scrub(exc)
+        raise failure
+    return wrapper
+
+
+_HEADER_RULES = {(TOKEN_PATH, "POST"): frozenset({"content-type", "accept"}),
+                 (ORDERBOOK_PATH, "GET"): frozenset({"authorization", "accept"})}
+_BEARER = re.compile(r"Bearer [\x21-\x7e]{1,4096}")
+_HEADER_VALUE = re.compile(r"[\x20-\x7e]{0,4096}")
+_MAX_BODY = 4096
+
+
+def _private_request(request, origins):
+    """(clone, None) or (None, reason). Every field is read ONCE from the caller's mutable Request and the
+    result is a brand-new Request built from those values (no proxy/tunnel state, no inherited attributes),
+    validated as it will be sent. Header names are compared case-insensitively and duplicates are refused."""
+    import urllib.request
+    url, method, data = request.full_url, request.get_method(), request.data
+    items = list(request.header_items())
+    why = _strict_denial(origins, url, method, data is not None, None)
+    if why:
+        return None, why
+    if data is not None and (not isinstance(data, bytes) or len(data) > _MAX_BODY):
+        return None, "request body must be small bytes"
+    allowed_names = _HEADER_RULES.get((urlsplit_path(url), method), frozenset())
+    headers, seen = {}, set()
+    for name, value in items:
+        lowered = str(name).lower()
+        if lowered in seen or lowered not in allowed_names or not isinstance(value, str) \
+                or not _HEADER_VALUE.fullmatch(value) or (lowered == "authorization" and not _BEARER.fullmatch(value)):
+            return None, "header not allowed"
+        seen.add(lowered)
+        headers[str(name)] = value
+    return urllib.request.Request(url, data=data, method=method, headers=headers), None
+
+
+def urlsplit_path(url: str) -> str:
+    from urllib.parse import urlsplit
+    return urlsplit(url).path
+
+
 def _normalize_origins(origins) -> frozenset:
     """`https://host[:port]` only. Plain http is accepted solely for loopback (local fake servers)."""
     from urllib.parse import urlsplit
@@ -303,7 +383,9 @@ def guard_toss_client(client, *, max_requests: int = 6, also_allow=(), rankings:
     would be refused never costs an authentication; `sanitize_errors` re-raises, at the single send boundary
     (so also for direct `access_token()`/`_json_request` calls), any `TossApiError`-shaped failure with only
     status and a slug-shaped code (provider text, URLs and headers dropped; no cause or context).
-    With `origins` the Request's real host/type/selector/Host header must also match the validated URL.
+    With `strict_requests` the request is copied into a private, re-validated Request inside the lock and
+    only that copy is sent (the caller's mutable Request object cannot change what goes out); headers are
+    limited to a case-insensitive allowlist. Environment proxy settings of urllib are NOT disabled.
     """
     from urllib.parse import urlparse, urlsplit
     original = client._json_request_once
@@ -335,16 +417,6 @@ def guard_toss_client(client, *, max_requests: int = 6, also_allow=(), rankings:
             return "path request cap reached"
         return None
 
-    def tampered(request) -> bool:
-        """urllib connects to `request.host`/`request.type` and sends `request.selector` (and any Host header),
-        not to `full_url`. Those attributes are mutable (and `set_proxy` rewrites them), so they must agree
-        with the URL that was validated, or a validated URL could be sent to another host/path."""
-        parts = urlsplit(request.full_url)
-        selector = parts.path + ("?" + parts.query if parts.query else "")
-        return (getattr(request, "type", None) != parts.scheme or getattr(request, "host", None) != parts.netloc
-                or getattr(request, "selector", None) != selector
-                or request.get_header("Host") not in (None, parts.netloc))   # urllib itself adds Host on first send
-
     def send(request):
         namespace = getattr(type(client)._json_request_once, "__globals__", None)
         if namespace is None or "urlopen" not in namespace:
@@ -357,40 +429,44 @@ def guard_toss_client(client, *, max_requests: int = 6, also_allow=(), rankings:
             namespace["urlopen"] = saved
 
     def fenced(request):
-        path, method = urlparse(request.full_url).path, request.get_method()
-        if (path, method) not in allowed:
-            raise PermissionError("request outside the read-only ranking allowlist")
-        why = policy_denial(request.full_url, method, getattr(request, "data", None) is not None,
-                            getattr(request, "fragment", None))
-        if not why and origin_set is not None and tampered(request):
-            why = "request host/selector/headers differ from the validated url"
-        if why:
-            raise PermissionError(why)
         failure = None
         with _FENCE_LOCK:
+            if strict_requests:
+                # Validate and send a private clone INSIDE the lock: nothing the caller does to its own Request
+                # object (host/selector/_tunnel_host/headers, before or after this point) can change what is sent.
+                outgoing, why = _private_request(request, origin_set)
+                if why:
+                    raise FenceRefusal(why)
+            else:
+                outgoing = request
+            path, method = urlparse(outgoing.full_url).path, outgoing.get_method()
+            if (path, method) not in allowed:
+                raise FenceRefusal("request outside the read-only ranking allowlist")
+            if not strict_requests:
+                why = policy_denial(outgoing.full_url, method, getattr(outgoing, "data", None) is not None,
+                                    getattr(outgoing, "fragment", None))
+                if why:
+                    raise FenceRefusal(why)
             why = room(path)
             if why:
-                raise PermissionError(why)
+                raise FenceRefusal(why)
             counts["total"] += 1
             counts["paths"][path] = counts["paths"].get(path, 0) + 1
             try:
-                return send(request)
+                return send(outgoing)
             except Exception as exc:
-                if not sanitize_errors or not (hasattr(exc, "status_code") and hasattr(exc, "error_code")):
-                    raise                       # fence refusals and unrelated errors carry no provider text
-                code = exc.error_code if isinstance(exc.error_code, str) and _SAFE_ERROR_CODE.fullmatch(exc.error_code) else None
-                failure = (type(exc), exc.status_code, code)
-        # Raised outside the except block on purpose: no __cause__/__context__, so the provider text, URL and
-        # headers of the original exception are unreachable. This is the single send boundary: token requests,
-        # `_json_request` and `_authorized_json_request` all pass through it, so every entry point is covered.
-        # Status and slug code are kept, so the client's own 429/401 handling keeps working.
-        error_class, status, code = failure
-        raise error_class(f"Toss request failed (status={status}, code={code})", status_code=status, error_code=code)
+                if not sanitize_errors:
+                    raise
+                failure = _scrub(exc)
+        # Raised outside the except block on purpose (no __cause__/__context__). This is the single send
+        # boundary; the status and slug code survive, so the client's own 429/401 handling keeps working.
+        raise failure
 
     client._json_request_once = fenced
 
+    entry = getattr(client, "_authorized_json_request", None)
     if preflight:
-        original_authorized = client._authorized_json_request
+        original_authorized = entry
 
         def checked(url, *, headers=None, method="GET", body=None):
             why = policy_denial(url, method, body is not None, None, bool(headers))
@@ -406,10 +482,20 @@ def guard_toss_client(client, *, max_requests: int = 6, also_allow=(), rankings:
                             "request cap would be reached before the data request"
                             if counts["total"] + 2 > max_requests else None)
             if why:
-                raise PermissionError(why)
+                raise FenceRefusal(why)
             return original_authorized(url, headers=headers, method=method, body=body)
 
-        client._authorized_json_request = checked
+        entry = checked
+    if sanitize_errors:
+        # Response-derived failures can also surface OUTSIDE the send boundary (JSON shape errors, token
+        # parsing in access_token), so every public entry point scrubs what leaves it.
+        for name in ("_json_request", "access_token"):
+            if hasattr(client, name):
+                setattr(client, name, _scrubbing(getattr(client, name)))
+        if entry is not None:
+            entry = _scrubbing(entry)
+    if entry is not None and (preflight or sanitize_errors):
+        client._authorized_json_request = entry
     return counts
 
 

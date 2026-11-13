@@ -189,6 +189,11 @@ class _Handler(BaseHTTPRequestHandler):
             server.hits.append((self.command, self.path, "Authorization" in self.headers))
         parts = urlsplit(self.path)
         if parts.path == "/oauth2/token":
+            if server.mode == "token-bad-expires":
+                echo = f"Bearer DUMMY-TOKEN-xyz dummy-secret http://127.0.0.1:{server.server_port}{self.path}"
+                return self._send(200, {"access_token": "DUMMY-TOKEN-xyz", "expires_in": echo})
+            if server.mode == "token-array":
+                return self._send(200, ["Bearer DUMMY-TOKEN-xyz dummy-secret"])
             if server.mode == "token-400":
                 echo = f"Bearer DUMMY-TOKEN-xyz dummy-secret client_secret=dummy-secret http://127.0.0.1:{server.server_port}{self.path}"
                 return self._send(400, {"error": {"code": "invalid-client", "message": echo}})
@@ -200,6 +205,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send(429, {"error": {"code": "rate-limit-exceeded", "message": "slow"}}, {"Retry-After": "0"})
             if mode == "401":
                 return self._send(401, {"error": {"code": "invalid-token", "message": "bad"}})
+            if mode == "400-array":
+                return self._send(400, [f"Bearer DUMMY-TOKEN-xyz dummy-secret http://127.0.0.1:{server.server_port}{self.path}"])
             if mode == "302":
                 return self._send(302, {}, {"Location": "/api/v1/accounts"})
             if mode == "400-echo" or (mode == "bad-symbol" and symbol == "000000"):
@@ -343,7 +350,7 @@ class FenceTests(unittest.TestCase):
             try:
                 client._authorized_json_request(f"{self.base}/api/v1/orderbook?symbol=005930")
             except Exception as exc:
-                outcomes.append(type(exc).__name__)
+                outcomes.append("PermissionError" if isinstance(exc, PermissionError) else type(exc).__name__)
         self.assertLessEqual(counts["paths"].get("/oauth2/token", 0), 2)
         self.assertLessEqual(counts["paths"].get("/api/v1/orderbook", 0), 4)
         self.assertLessEqual(counts["total"], 6)
@@ -386,7 +393,7 @@ class FenceTests(unittest.TestCase):
             thread.start()
         for thread in threads:
             thread.join()
-        self.assertEqual(sorted(set(errors)), ["PermissionError"])
+        self.assertEqual(sorted(set(errors)), ["FenceRefusal"])
         self.assertEqual(len(errors), 12)
         self.assertEqual(self.paths().count(("GET", "/api/v1/orderbook")), 4)
         self.assertEqual(self.paths().count(("POST", "/oauth2/token")), 1)
@@ -427,7 +434,43 @@ class FenceTests(unittest.TestCase):
         self.assertEqual([line["kind"] for line in lines], ["orderbook_result"] * 2)
         self.assertEqual((lines[0]["status"], lines[1]["reasons"]), (OK, ["FETCH_FAILED"]))
 
-    def test_request_object_tampering_cannot_redirect_a_validated_url(self):
+    def test_request_object_tampering_cannot_change_what_is_sent(self):
+        other = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+        other.lock, other.hits, other.mode, other.error_code = threading.Lock(), [], "ok", "x"
+        threading.Thread(target=other.serve_forever, daemon=True).start()
+        self.addCleanup(other.server_close)
+        self.addCleanup(other.shutdown)
+        from urllib.request import Request
+        client, counts = self.fenced(max_requests=20, max_orderbook=20)
+        url = f"{self.base}/api/v1/orderbook?symbol=005930"
+        auth = {"Authorization": "Bearer DUMMY", "Accept": "application/json"}
+        other_host = f"127.0.0.1:{other.server_port}"
+
+        def tampered(**attrs):
+            request = Request(url, headers=auth)
+            for name, value in attrs.items():
+                setattr(request, name, value)
+            return request
+
+        sendable = [tampered(host=other_host, selector="/api/v1/accounts"), tampered(selector="/api/v1/accounts"),
+                    tampered(host=other_host), tampered(type="https"), tampered(_tunnel_host=other_host)]
+        proxied = tampered()
+        proxied.set_proxy(other_host, "http")
+        sendable.append(proxied)
+        for request in sendable:
+            client._json_request(request)                    # a private clone of the validated URL is what goes out
+        refused = [Request(url, headers={**auth, "Host": "evil.example"}), Request(url, headers={**auth, "host": "x"}),
+                   Request(url, headers={**auth, "X-Forwarded-For": "1"}), Request(url, headers={"Authorization": "Basic abc"}),
+                   Request(url, headers={**auth, "Authorization": "Bearer a\r\nX: y"}), Request(url, data=b"x", headers=auth),
+                   Request(url, headers=auth, method="POST")]
+        for request in refused:
+            with self.assertRaises(PermissionError):
+                client._json_request(request)
+        self.assertEqual(other.hits, [])                                                      # nothing reached host B
+        self.assertEqual({p.split("?")[0] for _, p, _ in self.server.hits}, {"/api/v1/orderbook"})
+        self.assertNotIn("Host: evil.example", str(self.server.hits))
+
+    def test_tampering_between_validation_and_send_is_harmless(self):
         other = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
         other.lock, other.hits, other.mode, other.error_code = threading.Lock(), [], "ok", "x"
         threading.Thread(target=other.serve_forever, daemon=True).start()
@@ -435,18 +478,16 @@ class FenceTests(unittest.TestCase):
         self.addCleanup(other.shutdown)
         from urllib.request import Request
         client, counts = self.fenced()
-        url = f"{self.base}/api/v1/orderbook?symbol=005930"
-        variants = []
-        r = Request(url); r.host = f"127.0.0.1:{other.server_port}"; r.selector = "/api/v1/accounts"; variants.append(r)
-        r = Request(url); r.selector = "/api/v1/accounts"; variants.append(r)
-        r = Request(url); r.host = f"127.0.0.1:{other.server_port}"; variants.append(r)
-        r = Request(url); r.type = "https"; variants.append(r)
-        r = Request(url); r.set_proxy(f"127.0.0.1:{other.server_port}", "http"); variants.append(r)
-        r = Request(url, headers={"Host": "evil.example"}); variants.append(r)
-        for request in variants:
-            with self.assertRaises(PermissionError):
-                client._json_request(request)
-        self.assertEqual((other.hits, self.server.hits, counts["total"]), ([], [], 0))
+        request = Request(f"{self.base}/api/v1/orderbook?symbol=005930",
+                          headers={"Authorization": "Bearer DUMMY", "Accept": "application/json"})
+        src._FENCE_LOCK.acquire()                              # another caller is "inside" the fence
+        worker = threading.Thread(target=lambda: client._json_request(request))
+        worker.start()
+        request.host, request.selector = f"127.0.0.1:{other.server_port}", "/api/v1/accounts"   # mutate while it waits
+        src._FENCE_LOCK.release()
+        worker.join()
+        self.assertEqual(other.hits, [])
+        self.assertEqual([p for _, p, _ in self.server.hits], ["/api/v1/orderbook?symbol=005930"])
 
     def test_every_entry_point_is_sanitized_and_exceptions_carry_no_context(self):
         from urllib.request import Request
@@ -476,12 +517,27 @@ class FenceTests(unittest.TestCase):
             client._json_request(Request(f"{self.base}/api/v1/orderbook?symbol=005930", method="GET"))   # transport entry point
         for secret in secrets:
             self.assertNotIn(secret, reachable(raised.exception))
+        for mode, call in (("token-bad-expires", lambda c: c.access_token()), ("token-array", lambda c: c.access_token()),
+                           ("token-bad-expires", lambda c: c._authorized_json_request(f"{self.base}/api/v1/orderbook?symbol=005930")),
+                           ("400-array", lambda c: c._authorized_json_request(f"{self.base}/api/v1/orderbook?symbol=005930"))):
+            self.server.mode = mode                                             # failures raised OUTSIDE the send boundary
+            client, _ = self.fenced()
+            if mode == "400-array":
+                client._access_token, client._token_expires_at = "x", datetime.now(timezone.utc) + timedelta(hours=1)
+            with self.assertRaises(Exception) as raised:
+                call(client)
+            for secret in secrets:
+                self.assertNotIn(secret, reachable(raised.exception))
+            self.assertIsNone(raised.exception.__context__)
+            self.assertIsNone(raised.exception.__cause__)
         self.server.mode = "401"                                              # re-authorization refused by the auth cap
         client, counts = self.fenced(max_auth=1)
         with self.assertRaises(PermissionError) as raised:
             client._authorized_json_request(f"{self.base}/api/v1/orderbook?symbol=005930")
         for secret in secrets:
             self.assertNotIn(secret, reachable(raised.exception))
+        self.assertIsNone(raised.exception.__context__)                       # not even the sanitized predecessor
+        self.assertIsNone(raised.exception.__cause__)
         self.assertEqual(counts["paths"]["/oauth2/token"], 1)
 
     def test_a_200_response_with_secret_looking_text_is_not_written_to_the_log(self):
@@ -520,7 +576,7 @@ class ScoutUnchangedTests(unittest.TestCase):
         helper = ScoutEndToEndTests("test_without_an_order_book_scout_still_excludes_everyone_and_nothing_is_fully_eligible")
         snap = snapshot(("005930",))
         _, inputs = helper.inputs(bars("005930"), snap)
-        facts = tuple(with_spread(f, result) for f in inputs.liquidity)
+        facts = tuple(with_spread(f, result, as_of=AS_OF) for f in inputs.liquidity)
         return helper, snap, replace(inputs, liquidity=facts)
 
     def result(self, payload):
@@ -552,21 +608,65 @@ class ScoutUnchangedTests(unittest.TestCase):
     def test_with_spread_rules(self):
         helper, snap, inputs = self.liquidity_with(self.result(book(timestamp=self.stamp())))
         fact = inputs.liquidity[0]
+        good = self.result(book(timestamp=self.stamp()))
         self.assertIsNotNone(fact.spread_pct)
         unknown = self.result({})
-        self.assertIsNone(with_spread(fact, unknown).spread_pct)                                # UNKNOWN overrides
-        self.assertEqual((with_spread(fact, unknown).turnover, with_spread(fact, unknown).volume), (fact.turnover, fact.volume))
+        self.assertIsNone(with_spread(fact, unknown, as_of=AS_OF).spread_pct)                    # UNKNOWN overrides
+        same = with_spread(fact, unknown, as_of=AS_OF)
+        self.assertEqual((same.turnover, same.volume), (fact.turnover, fact.volume))
         with self.assertRaises(ValueError):
-            with_spread(fact, replace(unknown, symbol="000660"))
-        self.assertEqual(with_spread(fact, self.result(book(timestamp=self.stamp()))).observed_at,
-                         max(fact.observed_at, self.result(book(timestamp=self.stamp())).received_at))   # never back-dated
-        late = parse_orderbook("005930", book(timestamp=self.stamp(-1)), received_at=(AS_OF + timedelta(seconds=1)).astimezone(timezone.utc))
-        combined = with_spread(fact, late)
-        self.assertEqual(combined.observed_at, late.received_at)                               # later stamp, not as_of - 30 s
-        self.assertGreater(combined.observed_at, AS_OF)                                        # so Scout cannot use it at AS_OF
-        old = replace(fact, observed_at=late.received_at - timedelta(seconds=61))
-        self.assertIsNone(with_spread(old, late).spread_pct)                                   # stamps too far apart
-        self.assertIsNotNone(with_spread(old, late, max_skew_seconds=120).spread_pct)
+            with_spread(fact, replace(unknown, symbol="000660"), as_of=AS_OF)
+        with self.assertRaises(ValueError):
+            with_spread(fact, good, as_of=datetime(2026, 11, 13, 9, 20))                        # naive as_of
+        base = replace(fact, spread_pct=None)
+        self.assertEqual(with_spread(base, good, as_of=AS_OF).observed_at, min(base.observed_at, good.received_at))
+        # a book received AFTER the decision time did not exist for that decision (no back-dating, no leak)
+        late = parse_orderbook("005930", book(timestamp=self.stamp(-1)),
+                               received_at=(AS_OF + timedelta(seconds=1)).astimezone(timezone.utc))
+        self.assertEqual(late.status, OK)
+        self.assertIsNone(with_spread(base, late, as_of=AS_OF).spread_pct)
+        self.assertIsNotNone(with_spread(base, late, as_of=AS_OF + timedelta(seconds=1)).spread_pct)
+        # the book must still be fresh AT the decision time (provider time), not only when it was received
+        self.assertIsNotNone(with_spread(base, good, as_of=AS_OF + timedelta(seconds=5)).spread_pct)     # 10.0 s
+        self.assertIsNone(with_spread(base, good, as_of=AS_OF + timedelta(seconds=6)).spread_pct)        # 11.0 s
+        self.assertIsNotNone(with_spread(base, good, as_of=AS_OF + timedelta(seconds=6), max_age_seconds=20).spread_pct)
+        self.assertIsNone(with_spread(replace(base, observed_at=AS_OF + timedelta(seconds=1)), good, as_of=AS_OF).spread_pct)
+
+    def test_an_old_ranking_does_not_become_fresh_by_merging_a_new_book(self):
+        helper, snap, inputs = self.liquidity_with(self.result(book(timestamp=self.stamp())))
+        good = self.result(book(timestamp=self.stamp()))
+        max_age = sc.ScoutConfig().max_fact_age
+        for age, stale in ((max_age - timedelta(seconds=1), False), (max_age, True)):          # exclusive boundary
+            old = replace(inputs.liquidity[0], spread_pct=None, observed_at=(AS_OF - age).astimezone(timezone.utc))
+            merged = with_spread(old, good, as_of=AS_OF)
+            self.assertEqual(merged.observed_at, old.observed_at)                                # earlier stamp is kept
+            scouted = helper.scout(replace(inputs, liquidity=(merged,)), snap)
+            reasons = [r for e in scouted.exclusions for r in e.reasons]
+            self.assertEqual("LIQUIDITY_STALE" in reasons, stale)
+            if stale:
+                self.assertEqual(scouted.candidates, ())
+
+    def test_ambient_decimal_context_cannot_change_or_abort_conversion(self):
+        import decimal
+        expected = parse(book())
+        with decimal.localcontext() as ambient:
+            ambient.prec = 3
+            ambient.traps[decimal.Inexact] = True
+            ambient.traps[decimal.Rounded] = True
+            r = parse(book(asks=(("70100", "1"), ("70100", "0.000000001")), bids=(("70000", "1500"),)))
+            self.assertEqual(r.status, OK)
+            self.assertEqual(r.ask_volume, D("1.000000001"))                  # exact sum, no Inexact abort
+            self.assertEqual(parse(book()).spread_pct, expected.spread_pct)
+            self.assertEqual(parse(book()).age_seconds, D("5.000"))
+            self.assertIsNotNone(ob._safe_raw(book()))
+            late = with_spread(replace(LiquidityFactsStub.fact(), spread_pct=None), parse(book()), as_of=NOW)
+            self.assertEqual(late.spread_pct, expected.spread_pct)
+
+
+class LiquidityFactsStub:
+    @staticmethod
+    def fact():
+        return sc.LiquidityFacts("005930", NOW - timedelta(seconds=1), turnover="20000000000", volume="100000")
 
 
 class BoundaryTests(unittest.TestCase):
