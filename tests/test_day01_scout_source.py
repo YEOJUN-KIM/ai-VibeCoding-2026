@@ -12,7 +12,8 @@ from auto_trader import day01_scout as sc
 from auto_trader import day01_scout_link as link
 from auto_trader import day01_scout_source as src
 from auto_trader.day01_scout import ScoutState, ingest_fetch, refresh
-from auto_trader.day01_scout_source import RankingFetcher, ResearchLog, toss_ranking_source
+from auto_trader.day01_scout_source import (
+    ClockRegression, RankingFetcher, ResearchLog, guard_toss_client, toss_ranking_source)
 from auto_trader.ml.day01 import Config, KST, replay
 from tests.test_day01_scout_link import breakout, buys, scout_result
 
@@ -111,6 +112,97 @@ class ReceiptTimeTests(unittest.TestCase):
         self.assertEqual(before.candidates, ())
 
 
+class ClockAndIdentityTests(unittest.TestCase):
+    def test_wall_clock_regression_fails_closed(self):
+        # Real receipt ~10:00:20 but the wall clock fell back to 10:00:05 after an earlier stamp.
+        payloads = iter([payload(), payload(data=rows(61))])
+        wall = Clock(T0, T0 - timedelta(seconds=15))
+        mono = Clock(*[0.0, 1.0])
+        fetcher = RankingFetcher(lambda: next(payloads), clock=wall, monotonic=lambda: mono())
+        fetcher()
+        with self.assertRaises(ClockRegression):
+            fetcher()
+        state, out = ingest_fetch(ScoutState.empty(), RankingFetcher(
+            lambda: payload(), clock=lambda: datetime(2026, 11, 13, 0, 10, 0)), clock=Clock(T0))
+        self.assertEqual((out.status, out.reason), ("FETCH_FAILED", "ClockRegression"))
+        self.assertEqual(state.snapshots, ())
+
+    def test_wall_clock_lagging_the_monotonic_clock_is_rejected(self):
+        payloads = iter([payload(), payload(data=rows(61))])
+        wall = Clock(T0, T0 + timedelta(seconds=1))                 # wall +1 s ...
+        mono = Clock(*[0.0, 60.0])                                  # ... while monotonic +60 s
+        fetcher = RankingFetcher(lambda: next(payloads), clock=wall, monotonic=lambda: mono())
+        fetcher()
+        with self.assertRaises(ClockRegression):
+            fetcher()
+
+    def test_object_returning_after_another_is_not_restamped(self):
+        a, b = payload(), payload(data=rows(61))
+        sequence = iter([a, b, a])
+        clock = Clock(T0, T0 + timedelta(seconds=40), T0 + timedelta(seconds=80))
+        fetcher = RankingFetcher(lambda: next(sequence), clock=clock)
+        first, _, third = fetcher(), fetcher(), fetcher()
+        self.assertEqual(third.received_at, first.received_at)
+        self.assertEqual(clock.calls, 2)
+
+    def test_log_failure_before_commit_is_not_remembered_and_raw_rows_are_written_on_retry(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = Path(tmp.name) / "log.jsonl"
+        log = ResearchLog(path, clock=Clock(T0))
+        real_append, calls = log.append, []
+
+        def flaky(kind, **fields):
+            calls.append(kind)
+            if len(calls) == 1:
+                raise OSError("disk full")
+            return real_append(kind, **fields)
+
+        log.append = flaky
+        cached = payload()
+        fetcher = RankingFetcher(lambda: cached, clock=Clock(T0, T0 + timedelta(seconds=5)), log=log)
+        with self.assertRaises(OSError):
+            fetcher()
+        result = fetcher()
+        kinds = [json.loads(x)["kind"] for x in path.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(kinds, ["fetch_ok"])                       # raw rows recorded, not just a cache hit
+        self.assertEqual(result.received_at, T0 + timedelta(seconds=5))   # later stamp is only conservative
+
+
+class GuardTests(unittest.TestCase):
+    class Request:
+        def __init__(self, url, method="GET"):
+            self.full_url, self._method = url, method
+
+        def get_method(self):
+            return self._method
+
+    class Client:
+        def __init__(self):
+            self.sent = []
+
+        def _json_request_once(self, request):
+            self.sent.append(request.full_url)
+            return {"ok": True}
+
+    def test_only_token_and_ranking_requests_pass_and_cap_applies(self):
+        client = self.Client()
+        counts = guard_toss_client(client, max_requests=3)
+        R = self.Request
+        client._json_request_once(R("https://x/oauth2/token", "POST"))
+        client._json_request_once(R("https://x/api/v1/rankings?type=A"))
+        for bad in (R("https://x/api/v1/orders", "POST"), R("https://x/api/v1/accounts"), R("https://x/api/v1/holdings"),
+                    R("https://x/api/v1/rankings", "POST"), R("https://x/oauth2/token", "GET"),
+                    R("https://x/api/v1/stocks/all")):
+            with self.assertRaises(PermissionError):
+                client._json_request_once(bad)
+        client._json_request_once(R("https://x/api/v1/rankings"))
+        with self.assertRaises(PermissionError):                      # cap reached
+            client._json_request_once(R("https://x/api/v1/rankings"))
+        self.assertEqual(counts, {"total": 3, "paths": {"/oauth2/token": 1, "/api/v1/rankings": 2}})
+        self.assertEqual(len(client.sent), 3)                         # blocked requests never reached the transport
+
+
 class FailureAndLogTests(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
@@ -187,10 +279,23 @@ class FailureAndLogTests(unittest.TestCase):
         self.assertNotIn("Bearer xyz", text)
         self.assertIn("[REDACTED]", text)
         base = Path(self.dir.name)
-        for bad in ("relative.jsonl", base / "x.txt", base / ".env" / "a.jsonl", base / ".backups" / "a.jsonl",
+        for bad in (base / ".BACKUPS" / "a.jsonl", base / ".Paper-History" / "a.jsonl", base / "x.JSON", "relative.jsonl", base / "x.txt", base / ".env" / "a.jsonl", base / ".backups" / "a.jsonl",
                     base / ".paper-history" / "a.jsonl", base / ".local-secrets" / "a.jsonl", base / ".env.jsonl"):
             with self.assertRaises(ValueError, msg=str(bad)):
                 ResearchLog(bad, clock=Clock(T0))
+
+    def test_link_into_protected_directory_is_rejected_at_creation_and_on_append(self):
+        base = Path(self.dir.name)
+        protected = base / ".backups"
+        protected.mkdir()
+        link_dir = base / "innocent"
+        try:
+            link_dir.symlink_to(protected, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlink creation not permitted here")
+        with self.assertRaises(ValueError):
+            ResearchLog(link_dir / "a.jsonl", clock=Clock(T0))
+        self.assertEqual(list(protected.iterdir()), [])
 
     def test_scout_result_record_serializes(self):
         result = scout_result(datetime(2026, 11, 13, 9, 19, 50, tzinfo=KST), ["AAA"])
@@ -314,8 +419,8 @@ class SourceBoundaryTests(unittest.TestCase):
                 names.update(a.name.split(".")[0] for a in node.names)
             elif isinstance(node, ast.ImportFrom):
                 names.add(("." * node.level) + (node.module or ""))
-        allowed = {"__future__", "hashlib", "json", "os", "re", "datetime", "pathlib", "typing",
-                   ".day01_scout", ".brokers.toss.request_budget"}
+        allowed = {"__future__", "hashlib", "json", "os", "re", "datetime", "pathlib", "typing", "threading",
+                   "time", "collections", "urllib.parse", ".day01_scout", ".brokers.toss.request_budget"}
         self.assertEqual(names - allowed, set())
 
 

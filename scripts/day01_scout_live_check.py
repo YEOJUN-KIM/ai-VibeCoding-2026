@@ -1,8 +1,9 @@
 """One-shot, READ-ONLY check of the real Toss domestic trading-amount ranking against DAY01 Scout.
 
 NOT a worker, scheduler or trading tool. It performs a OAuth token request (existing client
-path) and at most TWO ranking GETs (the second one 31 s later, so the first re-read is a cache
-hit), then feeds the result to Scout together with CLEARLY LABELED SYNTHETIC instrument,
+path) and INTENDS two ranking GETs (a re-read inside 30 s is a cache hit; the next real GET is
+31 s later). The client may retry a 429/401 itself, so a hard fence (`guard_toss_client`) allows
+only the token and ranking endpoints and at most 6 requests in total, then feeds the result to Scout together with CLEARLY LABELED SYNTHETIC instrument,
 liquidity, readiness and portfolio facts. It never calls account, order, holdings or any
 write endpoint, never opens a database, and never prints credentials.
 
@@ -27,7 +28,8 @@ sys.path.insert(0, str(ROOT))
 
 from auto_trader import day01_scout as sc  # noqa: E402
 from auto_trader import day01_scout_link as link  # noqa: E402
-from auto_trader.day01_scout_source import RankingFetcher, ResearchLog, toss_ranking_source  # noqa: E402
+from auto_trader.day01_scout_source import (  # noqa: E402
+    RankingFetcher, ResearchLog, guard_toss_client, toss_ranking_source)
 from auto_trader.ml.day01 import Config  # noqa: E402
 
 
@@ -64,9 +66,10 @@ def main() -> int:
         print(json.dumps({"status": "BLOCKED", "reason": "credentials not available to the existing loader"}))
         return 2
 
+    request_counts = guard_toss_client(client, max_requests=6)     # only /oauth2/token + /api/v1/rankings
     fetcher = RankingFetcher(toss_ranking_source(client, budget_seconds=15), clock=now, log=log)
     state = sc.ScoutState.empty()
-    summary = {"log": str(log.path), "fetches": []}
+    summary = {"log": str(log.path), "fetches": [], "requests": request_counts}
     for index in range(3):
         if index == 2:
             time.sleep(31)                                          # let the 30 s client cache expire
@@ -103,7 +106,7 @@ def main() -> int:
     # Scout: ranking is REAL; every other fact is SYNTHETIC "eligible" (labeled in the log).
     as_of = now()
     obs = as_of
-    symbols = sorted({r.symbol for r in first.rows})
+    symbols = sorted({r.symbol for s in snaps for r in s.rows})   # facts cover every snapshot's symbols
     for label, day01 in (("day01_default_qty10", Config()),
                          ("sensitivity_qty1", Config(order_quantity=1))):
         cfg = link.scout_config_for(day01, target_count=10)
