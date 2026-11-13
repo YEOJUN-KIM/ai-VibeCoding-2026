@@ -40,7 +40,9 @@ DAY-01 변경은 `replay`의 선택 인자 `entry_allowed=None` 하나다. None�
 - `/api/v1/stocks`의 종목 상태와 호가·유동성·스프레드, 1분봉 준비도는 순위 응답에 없다. 별도 어댑터가 필요하다.
 - Scout 사양 §2의 요청 설명에는 `excludeInvestmentCaution`이 빠져 있다. 코드(`SOURCE`)는 포함하므로 문서 표현만 어긋난다(범위 밖).
 
-## 5. 실제 수집 연결을 위한 어댑터·기록 계약 (구현하지 않음)
+## 5. 실제 수집 연결을 위한 어댑터·기록 계약
+
+순위 fetch와 기록은 [DAY01_SCOUT_LIVE_SOURCE.md](DAY01_SCOUT_LIVE_SOURCE.md)에서 구현·검증했다. 아래 2~4번은 여전히 미구현이다.
 
 어댑터 4종(각각 별도 작업·승인·격리 환경 필요):
 
