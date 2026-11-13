@@ -300,8 +300,10 @@ def guard_toss_client(client, *, max_requests: int = 6, also_allow=(), rankings:
     (retries and re-authorizations count; a request that is reserved counts even if it then fails);
     `strict_requests` applies `_strict_denial` (exact token POST, exact `GET /api/v1/orderbook?symbol=XXXXXX`);
     `preflight` also validates BEFORE `_authorized_json_request` asks for a token, so a request that
-    would be refused never costs an authentication; `sanitize_errors` re-raises `TossApiError` with only
-    status and a slug-shaped code (provider text, URLs and headers are dropped, cause not chained).
+    would be refused never costs an authentication; `sanitize_errors` re-raises, at the single send boundary
+    (so also for direct `access_token()`/`_json_request` calls), any `TossApiError`-shaped failure with only
+    status and a slug-shaped code (provider text, URLs and headers dropped; no cause or context).
+    With `origins` the Request's real host/type/selector/Host header must also match the validated URL.
     """
     from urllib.parse import urlparse, urlsplit
     original = client._json_request_once
@@ -333,61 +335,79 @@ def guard_toss_client(client, *, max_requests: int = 6, also_allow=(), rankings:
             return "path request cap reached"
         return None
 
+    def tampered(request) -> bool:
+        """urllib connects to `request.host`/`request.type` and sends `request.selector` (and any Host header),
+        not to `full_url`. Those attributes are mutable (and `set_proxy` rewrites them), so they must agree
+        with the URL that was validated, or a validated URL could be sent to another host/path."""
+        parts = urlsplit(request.full_url)
+        selector = parts.path + ("?" + parts.query if parts.query else "")
+        return (getattr(request, "type", None) != parts.scheme or getattr(request, "host", None) != parts.netloc
+                or getattr(request, "selector", None) != selector
+                or request.get_header("Host") not in (None, parts.netloc))   # urllib itself adds Host on first send
+
+    def send(request):
+        namespace = getattr(type(client)._json_request_once, "__globals__", None)
+        if namespace is None or "urlopen" not in namespace:
+            return original(request)
+        saved = namespace["urlopen"]
+        namespace["urlopen"] = open_without_redirect
+        try:
+            return original(request)
+        finally:
+            namespace["urlopen"] = saved
+
     def fenced(request):
         path, method = urlparse(request.full_url).path, request.get_method()
         if (path, method) not in allowed:
             raise PermissionError("request outside the read-only ranking allowlist")
         why = policy_denial(request.full_url, method, getattr(request, "data", None) is not None,
                             getattr(request, "fragment", None))
+        if not why and origin_set is not None and tampered(request):
+            why = "request host/selector/headers differ from the validated url"
         if why:
             raise PermissionError(why)
+        failure = None
         with _FENCE_LOCK:
             why = room(path)
             if why:
                 raise PermissionError(why)
             counts["total"] += 1
             counts["paths"][path] = counts["paths"].get(path, 0) + 1
-            namespace = getattr(type(client)._json_request_once, "__globals__", None)
-            if namespace is None or "urlopen" not in namespace:
-                return original(request)
-            saved = namespace["urlopen"]
-            namespace["urlopen"] = open_without_redirect
             try:
-                return original(request)
-            finally:
-                namespace["urlopen"] = saved
+                return send(request)
+            except Exception as exc:
+                if not sanitize_errors or not (hasattr(exc, "status_code") and hasattr(exc, "error_code")):
+                    raise                       # fence refusals and unrelated errors carry no provider text
+                code = exc.error_code if isinstance(exc.error_code, str) and _SAFE_ERROR_CODE.fullmatch(exc.error_code) else None
+                failure = (type(exc), exc.status_code, code)
+        # Raised outside the except block on purpose: no __cause__/__context__, so the provider text, URL and
+        # headers of the original exception are unreachable. This is the single send boundary: token requests,
+        # `_json_request` and `_authorized_json_request` all pass through it, so every entry point is covered.
+        # Status and slug code are kept, so the client's own 429/401 handling keeps working.
+        error_class, status, code = failure
+        raise error_class(f"Toss request failed (status={status}, code={code})", status_code=status, error_code=code)
 
     client._json_request_once = fenced
 
-    if preflight or sanitize_errors:
+    if preflight:
         original_authorized = client._authorized_json_request
 
         def checked(url, *, headers=None, method="GET", body=None):
-            if preflight:
-                why = policy_denial(url, method, body is not None, None, bool(headers))
-                if not why and (urlparse(url).path, method) not in allowed:
-                    why = "request outside the allowlist"
-                if not why:
-                    path = urlparse(url).path
-                    with _FENCE_LOCK:
-                        why = room(path)
-                        if not why and getattr(client, "_access_token", None) is None:
-                            # a token request would be needed first: both it and the data request must fit
-                            why = room(TOKEN_PATH) or (
-                                "request cap would be reached before the data request"
-                                if counts["total"] + 2 > max_requests else None)
-                if why:
-                    raise PermissionError(why)
-            try:
-                return original_authorized(url, headers=headers, method=method, body=body)
-            except Exception as exc:
-                if not sanitize_errors or not (hasattr(exc, "status_code") and hasattr(exc, "error_code")):
-                    raise                       # fence refusals (PermissionError) and unknown errors pass through
-                error_class, status = type(exc), exc.status_code
-                code = exc.error_code if isinstance(exc.error_code, str) and _SAFE_ERROR_CODE.fullmatch(exc.error_code) else None
-            # Raised outside the except block on purpose: no __cause__ and no __context__, so the provider text,
-            # URL and headers of the original exception are not reachable from the one we raise.
-            raise error_class(f"Toss request failed (status={status}, code={code})", status_code=status, error_code=code)
+            why = policy_denial(url, method, body is not None, None, bool(headers))
+            if not why and (urlparse(url).path, method) not in allowed:
+                why = "request outside the allowlist"
+            if not why:
+                path = urlparse(url).path
+                with _FENCE_LOCK:
+                    why = room(path)
+                    if not why and getattr(client, "_access_token", None) is None:
+                        # a token request would be needed first: both it and the data request must fit
+                        why = room(TOKEN_PATH) or (
+                            "request cap would be reached before the data request"
+                            if counts["total"] + 2 > max_requests else None)
+            if why:
+                raise PermissionError(why)
+            return original_authorized(url, headers=headers, method=method, body=body)
 
         client._authorized_json_request = checked
     return counts

@@ -22,7 +22,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, DecimalException, InvalidOperation, localcontext
+from fractions import Fraction
 from typing import Any, Callable, Mapping
 from urllib.parse import urlencode
 
@@ -31,15 +32,20 @@ from .day01_scout_source import ORDERBOOK_PATH
 
 DEFAULT_MAX_AGE_SECONDS = Decimal(10)      # research starting value, NOT a confirmed operating policy
 ANOMALY_SPREAD_PCT = Decimal(50)           # strictly greater than this is an anomaly, not a usable spread
-FUTURE_TOLERANCE = timedelta(seconds=2)    # provider clock may lead ours slightly
+# A provider time later than our receipt time is never accepted (no tolerance): data stamped after we received
+# it cannot be trusted as 'already known'. A tolerance for clock skew would need an explicit policy decision.
+MAX_ABS_EXPONENT_HIGH, MAX_ABS_EXPONENT_LOW, MAX_DIGITS = 15, -9, 30   # accepted magnitude: 1e-9 .. <1e16
+DEFAULT_MAX_SKEW_SECONDS = Decimal(60)     # max gap between the ranking stamp and the book stamp in with_spread
 MAX_SYMBOLS = 4                            # matches the 4-request orderbook cap of the fence
 _SYMBOL = re.compile(r"[0-9A-Z]{6}")
+_NUMERIC = re.compile(r"[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?")   # ASCII only: Decimal() also takes "1_0" and Arabic digits
 
 OK, UNKNOWN, ANOMALY = "OK", "UNKNOWN", "ANOMALY"
 
 __all__ = ["OrderbookResult", "parse_orderbook", "with_spread", "fetch_orderbook_results", "valid_symbol",
            "validate_symbols", "DEFAULT_MAX_AGE_SECONDS", "ANOMALY_SPREAD_PCT", "MAX_SYMBOLS", "OK", "UNKNOWN",
-           "ANOMALY"]
+           "ANOMALY",
+           "DEFAULT_MAX_SKEW_SECONDS"]
 
 
 @dataclass(frozen=True)
@@ -77,7 +83,9 @@ def validate_symbols(symbols: Any, *, max_symbols: int = MAX_SYMBOLS) -> tuple:
 
 
 def _number(value: Any) -> Decimal | None:
-    """Finite Decimal or None. bool and unsupported types are invalid; float goes through its repr."""
+    """Finite Decimal of bounded size, or None. bool/unsupported types, NaN/Infinity, absurd magnitudes
+    (adjusted exponent outside [-9, 15]) and more than 30 digits are invalid, so later arithmetic can
+    neither overflow nor lose precision. float goes through its shortest repr."""
     if value is None or isinstance(value, bool):
         return None
     try:
@@ -86,14 +94,20 @@ def _number(value: Any) -> Decimal | None:
         elif isinstance(value, Decimal):
             number = value
         elif isinstance(value, int):
+            if value.bit_length() > 200:
+                return None
             number = Decimal(value)
-        elif isinstance(value, str) and value == value.strip() and value:
+        elif isinstance(value, str) and len(value) <= 64 and _NUMERIC.fullmatch(value):
             number = Decimal(value)
         else:
             return None
-    except InvalidOperation:
+        if not number.is_finite() or len(number.as_tuple().digits) > MAX_DIGITS:
+            return None
+        if number != 0 and not MAX_ABS_EXPONENT_LOW <= number.adjusted() <= MAX_ABS_EXPONENT_HIGH:
+            return None
+    except (InvalidOperation, ValueError, OverflowError):
         return None
-    return number if number.is_finite() else None
+    return number
 
 
 def _best(levels: Any, *, pick_max: bool):
@@ -120,15 +134,15 @@ def _best(levels: Any, *, pick_max: bool):
 def _provider_time(value: Any):
     if value is None:
         return None, "TIMESTAMP_MISSING"
-    if not isinstance(value, str):
+    if not isinstance(value, str) or len(value) > 64:
         return None, "TIMESTAMP_INVALID"
     try:
         moment = datetime.fromisoformat(value)
-    except ValueError:
+        if moment.tzinfo is None or moment.utcoffset() is None:
+            return None, "TIMESTAMP_NO_TIMEZONE"
+        return moment.astimezone(timezone.utc), None
+    except (ValueError, OverflowError):                  # includes year-1 / year-9999 offset overflow
         return None, "TIMESTAMP_INVALID"
-    if moment.tzinfo is None or moment.utcoffset() is None:
-        return None, "TIMESTAMP_NO_TIMEZONE"
-    return moment.astimezone(timezone.utc), None
 
 
 def parse_orderbook(symbol: str, payload: Any, *, received_at: datetime,
@@ -140,8 +154,8 @@ def parse_orderbook(symbol: str, payload: Any, *, received_at: datetime,
     if not isinstance(received_at, datetime) or received_at.tzinfo is None or received_at.utcoffset() is None:
         raise ValueError("received_at must be timezone-aware")
     max_age = max_age_seconds if isinstance(max_age_seconds, Decimal) else Decimal(str(max_age_seconds))
-    if not max_age.is_finite() or max_age <= 0:
-        raise ValueError("max_age_seconds must be positive")
+    if not max_age.is_finite() or not 0 < max_age <= 10**6:
+        raise ValueError("max_age_seconds must be positive and at most 1,000,000")
     received = received_at.astimezone(timezone.utc)
 
     result = payload.get("result") if isinstance(payload, Mapping) else None
@@ -154,10 +168,11 @@ def parse_orderbook(symbol: str, payload: Any, *, received_at: datetime,
     if why:
         reasons.append(why)
     else:
-        age = Decimal((received - moment).total_seconds()).quantize(Decimal("0.001"))
-        if received - moment < -FUTURE_TOLERANCE:
+        delta = received - moment                          # exact timedelta; rounding below is for display only
+        age = (Decimal(delta // timedelta(microseconds=1)) / Decimal(1_000_000)).quantize(Decimal("0.001"))
+        if delta < timedelta(0):
             reasons.append("TIMESTAMP_IN_FUTURE")
-        elif age > max_age:
+        elif delta > timedelta(microseconds=int(max_age * 1_000_000)):
             reasons.append("STALE_ORDERBOOK")
 
     if result.get("currency") != "KRW":
@@ -178,34 +193,46 @@ def parse_orderbook(symbol: str, payload: Any, *, received_at: datetime,
     if bid_skipped:
         notes.append(f"BID_LEVELS_SKIPPED={bid_skipped}")
 
-    spread = None
+    spread = exact = None
     if ask is not None and bid is not None:
         if bid > ask:
             reasons.append("CROSSED_BOOK")
         elif bid == ask:
             reasons.append("LOCKED_BOOK")
         else:
-            spread = (ask - bid) / ((ask + bid) / 2) * 100
+            exact = (Fraction(ask) - Fraction(bid)) * 200 / (Fraction(ask) + Fraction(bid))   # exact percent
+            try:
+                with localcontext() as context:
+                    context.prec = 40
+                    spread = Decimal(exact.numerator) / Decimal(exact.denominator)
+            except (DecimalException, ArithmeticError):
+                reasons.append("NUMERIC_ERROR")
 
     common = dict(best_bid=bid, best_ask=ask, bid_volume=bid_vol, ask_volume=ask_vol, provider_time=moment,
                   received_at=received, age_seconds=age, notes=tuple(notes))
     if reasons:
         return OrderbookResult(symbol, UNKNOWN, None, tuple(reasons), **common)
-    if spread > ANOMALY_SPREAD_PCT:
+    if exact > ANOMALY_SPREAD_PCT:                       # compared exactly, not after rounding
         return OrderbookResult(symbol, ANOMALY, None, ("ANOMALOUS_SPREAD",), observed_spread_pct=spread, **common)
     return OrderbookResult(symbol, OK, spread, (), **common)
 
 
-def with_spread(liquidity: LiquidityFacts, result: OrderbookResult) -> LiquidityFacts:
+def with_spread(liquidity: LiquidityFacts, result: OrderbookResult, *,
+                max_skew_seconds: Any = DEFAULT_MAX_SKEW_SECONDS) -> LiquidityFacts:
     """Copy of a `LiquidityFacts` with the spread filled from an OK result. Not OK -> spread None (UNKNOWN),
-    even if one was present. `observed_at` becomes the earlier of the two stamps (conservative). Turnover and
-    volume are untouched; Scout's thresholds are not read or changed here."""
+    even if one was present. The combined fact is available only when its LATEST component was received, so
+    `observed_at` becomes the later of the two stamps (never back-dated). To stop a fresh book from making an
+    old ranking look fresh (or the reverse), the two stamps must be within `max_skew_seconds`; otherwise the
+    spread stays None. Turnover and volume are untouched; Scout's thresholds are not read or changed."""
     if liquidity.symbol != result.symbol:
         raise ValueError("symbol mismatch")
     if result.status != OK:
         return replace(liquidity, spread_pct=None)
+    skew = abs(result.received_at - liquidity.observed_at)
+    if skew > timedelta(microseconds=int(Decimal(str(max_skew_seconds)) * 1_000_000)):
+        return replace(liquidity, spread_pct=None)
     return replace(liquidity, spread_pct=result.spread_pct,
-                   observed_at=min(liquidity.observed_at, result.received_at))
+                   observed_at=max(liquidity.observed_at, result.received_at))
 
 
 class _Stop(Exception):
@@ -269,6 +296,41 @@ def fetch_orderbook_results(client, symbols, *, clock: Callable[[], datetime],
     return results, stopped
 
 
+_ISO_LIKE = re.compile(r"[0-9T:.+Zz-]{1,40}")
+_CURRENCY = re.compile(r"[A-Z]{3}")
+MAX_LOGGED_LEVELS = 50
+
+
+def _safe_raw(payload: Any):
+    """Diagnostic copy limited to the documented fields in a validated shape: timestamp text of date characters
+    only, a 3-letter currency, and price/volume as parsed numbers. Any other key or free text in the response
+    (messages, ids, echoed secrets or URLs) is dropped, because key-based redaction cannot see secrets in values."""
+    result = payload.get("result") if isinstance(payload, Mapping) else None
+    if not isinstance(result, Mapping):
+        return None
+    timestamp, currency = result.get("timestamp"), result.get("currency")
+
+    def levels(name):
+        rows = result.get(name)
+        if not isinstance(rows, list):
+            return None
+        out = []
+        for row in rows[:MAX_LOGGED_LEVELS]:
+            row = row if isinstance(row, Mapping) else {}
+            price, volume = _number(row.get("price")), _number(row.get("volume"))
+            out.append({"price": None if price is None else str(price),
+                        "volume": None if volume is None else str(volume)})
+        return out
+
+    return {"timestamp": timestamp if isinstance(timestamp, str) and _ISO_LIKE.fullmatch(timestamp) else
+            (None if timestamp is None else "<invalid>"),
+            "currency": currency if isinstance(currency, str) and _CURRENCY.fullmatch(currency) else
+            (None if currency is None else "<invalid>"),
+            "asks": levels("asks"), "bids": levels("bids"),
+            "levels_truncated": any(isinstance(result.get(k), list) and len(result[k]) > MAX_LOGGED_LEVELS
+                                    for k in ("asks", "bids"))}
+
+
 def _log(log, result: OrderbookResult, raw) -> None:
     log.append("orderbook_result", symbol=result.symbol, status=result.status, reasons=list(result.reasons),
                notes=list(result.notes), spread_pct=str(result.spread_pct) if result.spread_pct is not None else None,
@@ -276,4 +338,5 @@ def _log(log, result: OrderbookResult, raw) -> None:
                best_bid=str(result.best_bid) if result.best_bid is not None else None,
                best_ask=str(result.best_ask) if result.best_ask is not None else None,
                provider_time=result.provider_time, received_at=result.received_at,
-               age_seconds=str(result.age_seconds) if result.age_seconds is not None else None, raw=raw)
+               age_seconds=str(result.age_seconds) if result.age_seconds is not None else None,
+               raw=_safe_raw(raw))

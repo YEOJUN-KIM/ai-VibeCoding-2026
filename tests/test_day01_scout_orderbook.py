@@ -47,7 +47,8 @@ class ConversionTests(unittest.TestCase):
         self.assertEqual((r.status, r.reasons), (OK, ()))
         self.assertEqual((r.best_ask, r.best_bid, r.ask_volume, r.bid_volume),
                          (D("70100"), D("70000"), D("1200"), D("1500")))
-        self.assertEqual(r.spread_pct, D("100") / (D("140100") / 2) * 100)         # (ask-bid)/mid*100, percent
+        expected = D("100") / (D("140100") / 2) * 100                                  # (ask-bid)/mid*100, percent
+        self.assertEqual(r.spread_pct.quantize(D("1e-20")), expected.quantize(D("1e-20")))
         self.assertEqual(r.provider_time, datetime(2026, 11, 13, 1, 11, 0, tzinfo=timezone.utc))
         self.assertEqual(r.received_at, NOW)                                          # our stamp, not the provider's
         self.assertEqual(r.age_seconds, D("5.000"))
@@ -108,12 +109,19 @@ class ConversionTests(unittest.TestCase):
         self.assertEqual(parse(book(timestamp="2026-11-13T10:10:54+09:00")).reasons, ("STALE_ORDERBOOK",))
         self.assertEqual(parse(book(timestamp="2026-11-13T10:10:54+09:00"), max_age_seconds=20).status, OK)
         self.assertEqual(parse(book(timestamp="2026-11-13T01:11:00Z")).status, OK)                # UTC 'Z' form
-        self.assertEqual(parse(book(timestamp="2026-11-13T10:11:06+09:00")).status, OK)           # 1 s ahead: tolerated
-        self.assertEqual(parse(book(timestamp="2026-11-13T10:11:09+09:00")).reasons, ("TIMESTAMP_IN_FUTURE",))
+        self.assertEqual(parse(book(timestamp="2026-11-13T10:11:05+09:00")).status, OK)           # exactly the receipt time
+        for ahead in ("2026-11-13T10:11:05.000001+09:00", "2026-11-13T10:11:06+09:00", "2026-11-13T10:11:09+09:00"):
+            self.assertEqual(parse(book(timestamp=ahead)).reasons, ("TIMESTAMP_IN_FUTURE",))   # no tolerance at all
+        self.assertEqual(parse(book(timestamp="2026-11-13T10:10:55.000000+09:00")).status, OK)    # exactly 10.000000 s
+        self.assertEqual(parse(book(timestamp="2026-11-13T10:10:54.999600+09:00")).reasons, ("STALE_ORDERBOOK",))  # 10.0004 s
+        for extreme in ("0001-01-01T00:00:00+09:00", "9999-12-31T23:59:59-23:59", "2026-13-45T99:99:99+09:00", "x" * 100):
+            self.assertIn("TIMESTAMP_INVALID", parse(book(timestamp=extreme)).reasons)
         with self.assertRaises(ValueError):
             parse_orderbook("005930", book(), received_at=datetime(2026, 11, 13, 10, 11, 5))     # naive receipt time
         with self.assertRaises(ValueError):
             parse(book(), max_age_seconds=0)
+        with self.assertRaises(ValueError):
+            parse(book(), max_age_seconds=10**7)
 
     def test_anomalous_spread_is_separate_from_unknown_and_not_passed_on(self):
         exactly = parse(book(asks=(("5", "1"),), bids=(("3", "1"),)))               # 2*(2)/(8) = 50 % exactly
@@ -121,6 +129,32 @@ class ConversionTests(unittest.TestCase):
         wide = parse(book(asks=(("5.01", "1"),), bids=(("3", "1"),)))
         self.assertEqual((wide.status, wide.spread_pct, wide.reasons), (ANOMALY, None, ("ANOMALOUS_SPREAD",)))
         self.assertGreater(wide.observed_spread_pct, 50)
+
+    def test_extreme_numbers_are_invalid_levels_and_never_raise_or_misclassify(self):
+        extreme = (("1e1000000", "9e999999"), ("2e-1000027", "1e-1000027"), ("2e-1000026", "1e-1000026"),
+                   ("1" * 31, "1"), ("1e16", "1"), ("1e-10", "1"), ("0x10", "1"), ("1_0", "1"), ("\u0661\u0662", "1"),
+                   ("-0", "1"), ("1E+400", "1"))
+        for ask, bid in extreme:
+            with self.subTest((ask, bid)):
+                r = parse(book(asks=((ask, "5"),), bids=((bid, "5"),)))
+                self.assertEqual((r.status, r.spread_pct), (UNKNOWN, None))
+        wide = parse(book(asks=(("2e-9", "5"),), bids=(("1e-9", "5"),)))                   # real 66.7 % at the smallest scale
+        self.assertEqual((wide.status, wide.reasons), (ANOMALY, ("ANOMALOUS_SPREAD",)))
+        big = parse(book(asks=(("9.99999999999999e15", "1"),), bids=(("9.99999999999998e15", "1"),)))
+        self.assertEqual(big.status, OK)
+        self.assertEqual(parse(book(asks=((10**300, "5"),))).reasons.count("NO_VALID_ASK"), 1)
+
+    def test_safe_log_copy_keeps_only_documented_fields(self):
+        echo = "Bearer DUMMY-TOKEN-xyz dummy-secret http://127.0.0.1:1/api/v1/orderbook?symbol=005930"
+        payload = {"message": echo, "result": {"timestamp": echo, "currency": echo, "requestId": echo,
+                                               "asks": [{"price": "70100", "volume": "5", "note": echo}, echo, {"price": echo}],
+                                               "bids": [{"price": 70000, "volume": 1.5, echo: echo}]}}
+        raw = json.dumps(ob._safe_raw(payload))
+        for secret in ("DUMMY", "Bearer", "dummy-secret", "127.0.0.1", "orderbook", "requestId", "note"):
+            self.assertNotIn(secret, raw)
+        self.assertEqual(ob._safe_raw(payload)["asks"][0], {"price": "70100", "volume": "5"})
+        self.assertEqual(ob._safe_raw({"result": {"timestamp": STAMP, "currency": "KRW", "asks": [], "bids": []}})["timestamp"], STAMP)
+        self.assertIsNone(ob._safe_raw("x"))
 
     def test_symbol_validation(self):
         self.assertEqual(validate_symbols(["005930", "0101N0"]), ("005930", "0101N0"))
@@ -155,6 +189,9 @@ class _Handler(BaseHTTPRequestHandler):
             server.hits.append((self.command, self.path, "Authorization" in self.headers))
         parts = urlsplit(self.path)
         if parts.path == "/oauth2/token":
+            if server.mode == "token-400":
+                echo = f"Bearer DUMMY-TOKEN-xyz dummy-secret client_secret=dummy-secret http://127.0.0.1:{server.server_port}{self.path}"
+                return self._send(400, {"error": {"code": "invalid-client", "message": echo}})
             return self._send(200, {"access_token": "DUMMY-TOKEN-xyz", "expires_in": 3600})
         if parts.path == "/api/v1/orderbook":
             symbol = (parse_qs(parts.query).get("symbol") or [""])[0]
@@ -168,7 +205,13 @@ class _Handler(BaseHTTPRequestHandler):
             if mode == "400-echo" or (mode == "bad-symbol" and symbol == "000000"):
                 echo = f"Bearer DUMMY-TOKEN-xyz dummy-secret http://127.0.0.1:{server.server_port}{self.path}"
                 return self._send(400, {"error": {"code": server.error_code, "message": echo}})
-            return self._send(200, book(timestamp=datetime.now(timezone.utc).isoformat()))
+            body = book(timestamp=datetime.now(timezone.utc).isoformat())
+            if mode == "200-echo":
+                echo = f"Bearer DUMMY-TOKEN-xyz dummy-secret http://127.0.0.1:{server.server_port}{self.path}"
+                body["message"] = echo
+                body["result"]["requestId"] = echo
+                body["result"]["asks"][0]["note"] = echo
+            return self._send(200, body)
         return self._send(200, {"result": "MUST-NOT-BE-REACHED"})
 
     do_GET = do_POST = do_PUT = do_DELETE = handle_any
@@ -384,11 +427,80 @@ class FenceTests(unittest.TestCase):
         self.assertEqual([line["kind"] for line in lines], ["orderbook_result"] * 2)
         self.assertEqual((lines[0]["status"], lines[1]["reasons"]), (OK, ["FETCH_FAILED"]))
 
+    def test_request_object_tampering_cannot_redirect_a_validated_url(self):
+        other = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+        other.lock, other.hits, other.mode, other.error_code = threading.Lock(), [], "ok", "x"
+        threading.Thread(target=other.serve_forever, daemon=True).start()
+        self.addCleanup(other.server_close)
+        self.addCleanup(other.shutdown)
+        from urllib.request import Request
+        client, counts = self.fenced()
+        url = f"{self.base}/api/v1/orderbook?symbol=005930"
+        variants = []
+        r = Request(url); r.host = f"127.0.0.1:{other.server_port}"; r.selector = "/api/v1/accounts"; variants.append(r)
+        r = Request(url); r.selector = "/api/v1/accounts"; variants.append(r)
+        r = Request(url); r.host = f"127.0.0.1:{other.server_port}"; variants.append(r)
+        r = Request(url); r.type = "https"; variants.append(r)
+        r = Request(url); r.set_proxy(f"127.0.0.1:{other.server_port}", "http"); variants.append(r)
+        r = Request(url, headers={"Host": "evil.example"}); variants.append(r)
+        for request in variants:
+            with self.assertRaises(PermissionError):
+                client._json_request(request)
+        self.assertEqual((other.hits, self.server.hits, counts["total"]), ([], [], 0))
+
+    def test_every_entry_point_is_sanitized_and_exceptions_carry_no_context(self):
+        from urllib.request import Request
+
+        def reachable(exc):
+            seen, stack = [], [exc]
+            while stack:
+                e = stack.pop()
+                if e is None or e in seen:
+                    continue
+                seen.append(e)
+                stack += [e.__cause__, e.__context__]
+            return " ".join(f"{e!s} {e!r} {getattr(e, '__notes__', '')}" for e in seen)
+
+        secrets = ("DUMMY", "Bearer", "dummy-secret", "dummy-id", "127.0.0.1", "echo", "client_secret", "orderbook", "oauth2")
+        self.server.mode = "token-400"
+        client, _ = self.fenced()
+        with self.assertRaises(Exception) as raised:
+            client.access_token()                                             # direct token entry point
+        for secret in secrets:
+            self.assertNotIn(secret, reachable(raised.exception))
+        self.assertEqual(raised.exception.error_code, "invalid-client")
+        self.server.mode = "400-echo"
+        client, _ = self.fenced()
+        client._access_token, client._token_expires_at = "x", datetime.now(timezone.utc) + timedelta(hours=1)
+        with self.assertRaises(Exception) as raised:
+            client._json_request(Request(f"{self.base}/api/v1/orderbook?symbol=005930", method="GET"))   # transport entry point
+        for secret in secrets:
+            self.assertNotIn(secret, reachable(raised.exception))
+        self.server.mode = "401"                                              # re-authorization refused by the auth cap
+        client, counts = self.fenced(max_auth=1)
+        with self.assertRaises(PermissionError) as raised:
+            client._authorized_json_request(f"{self.base}/api/v1/orderbook?symbol=005930")
+        for secret in secrets:
+            self.assertNotIn(secret, reachable(raised.exception))
+        self.assertEqual(counts["paths"]["/oauth2/token"], 1)
+
+    def test_a_200_response_with_secret_looking_text_is_not_written_to_the_log(self):
+        self.server.mode = "200-echo"
+        client, _ = self.fenced()
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "ob" / "log.jsonl"
+            results, _ = fetch_orderbook_results(client, ["005930"], clock=self.clock, log=ResearchLog(path, clock=self.clock))
+            text = path.read_text(encoding="utf-8")
+        self.assertEqual(results[0].status, OK)
+        for secret in ("DUMMY", "Bearer", "dummy-secret", "127.0.0.1", "requestId", '"note"', '"message"'):
+            self.assertNotIn(secret, text)
+        self.assertIn('"price":"70100"', text)
+
     def test_clock_regression_stops_the_run(self):
         client, _ = self.fenced()
         stamps = iter([NOW, NOW - timedelta(seconds=1)])
         results, stopped = fetch_orderbook_results(client, ["005930", "000660", "035420"],
-                                                   clock=lambda: next(stamps), max_age_seconds=10**9)
+                                                   clock=lambda: next(stamps), max_age_seconds=10**6)
         self.assertEqual(stopped, "CLOCK_REGRESSION")
         self.assertEqual([r.reasons for r in results][1:], [("CLOCK_REGRESSION",), ("NOT_FETCHED",)])
 
@@ -446,7 +558,15 @@ class ScoutUnchangedTests(unittest.TestCase):
         self.assertEqual((with_spread(fact, unknown).turnover, with_spread(fact, unknown).volume), (fact.turnover, fact.volume))
         with self.assertRaises(ValueError):
             with_spread(fact, replace(unknown, symbol="000660"))
-        self.assertLessEqual(fact.observed_at, snap.received_at)                               # earlier of the two stamps
+        self.assertEqual(with_spread(fact, self.result(book(timestamp=self.stamp()))).observed_at,
+                         max(fact.observed_at, self.result(book(timestamp=self.stamp())).received_at))   # never back-dated
+        late = parse_orderbook("005930", book(timestamp=self.stamp(-1)), received_at=(AS_OF + timedelta(seconds=1)).astimezone(timezone.utc))
+        combined = with_spread(fact, late)
+        self.assertEqual(combined.observed_at, late.received_at)                               # later stamp, not as_of - 30 s
+        self.assertGreater(combined.observed_at, AS_OF)                                        # so Scout cannot use it at AS_OF
+        old = replace(fact, observed_at=late.received_at - timedelta(seconds=61))
+        self.assertIsNone(with_spread(old, late).spread_pct)                                   # stamps too far apart
+        self.assertIsNotNone(with_spread(old, late, max_skew_seconds=120).spread_pct)
 
 
 class BoundaryTests(unittest.TestCase):
@@ -458,7 +578,7 @@ class BoundaryTests(unittest.TestCase):
                 names.update(a.name.split(".")[0] for a in node.names)
             elif isinstance(node, ast.ImportFrom):
                 names.add(("." * node.level) + (node.module or ""))
-        allowed = {"__future__", "re", "dataclasses", "datetime", "decimal", "typing", "urllib.parse",
+        allowed = {"__future__", "re", "dataclasses", "datetime", "decimal", "fractions", "typing", "urllib.parse",
                    ".day01_scout", ".day01_scout_source", ".brokers.toss.request_budget"}
         self.assertEqual(names - allowed, set())
 
