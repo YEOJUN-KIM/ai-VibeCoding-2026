@@ -89,6 +89,8 @@ to_dict(obj)   # JSON 직렬화(Decimal=str, datetime=ISO UTC), 파일/DB 저장
 - 스냅샷 id가 같고 내용이 같으면 멱등(무시), 같은 id에 다른 내용이면 `SNAPSHOT_ID_CONFLICT`로 새 것을 거부.
 - 입력 순서가 뒤바뀐 스냅샷은 저장되지만 선택은 §5의 최신 규칙에 따라 단조(monotonic).
 - 같은 내용이 다시 오면(같은 id든 다른 id든, 캐시된 rankedAt이든) **가장 이른 원래 수신 시각을 유지**한다(`snapshot_changed`는 내용 digest 기준). 분쟁 내용은 거부·삭제하지 않고 나란히 저장한 채 선택 시점에 fail-closed로 판정한다(도착 순서 무관).
+- **분쟁 증거(claims)**: 병합 시 모든 스냅샷의 (id, 제공자 기준 `rankedAt`) 사용 기록을 `SnapshotClaim`(provider, kind, key, digest, 가장 이른 수신)으로 **중복 제거·가지치기 이전에** 기록하고 `ScoutState.claims`에 유지한다. 같은 내용의 id 별칭도 claim으로 남으므로 내용 합치기나 `max_history` 절단이 분쟁을 숨길 수 없다(D-S8/D-S9). 선택 시 `received_at <= as_of`인 claim만 사용하며(미래 충돌은 과거 결과를 바꾸지 않음), 같은 id 또는 기준에 digest가 둘 이상이면 해당 모든 내용이 분쟁이고 latest가 분쟁이면 `INVALID_SNAPSHOT`(오래된 스냅샷으로 대체 없음). `select_watchlist(..., claims=(), quarantined=False)`로 외부 증거를 받을 수 있으며 claim이 없으면 입력 스냅샷에서 직접 도출한다.
+- **증거 상한**: claim은 `MAX_CLAIMS`(4096)까지 보관하고 KST 날짜가 바뀌면 이전 날짜 claim을 정리한다. 알려진 claim이 상한을 넘으면 증거를 잊지 않고 **격리(quarantine)** 상태(`claims_overflow_day`)로 전환해 같은 KST 날짜가 끝날 때까지 신규 후보 0개(`CLAIMS_OVERFLOW_QUARANTINE`)로 둔다. 보유 모니터는 영향받지 않는다. 미래 스냅샷의 claim은 보관된 미래 버퍼에 있는 것만 유지한다.
 - 상태 저장·가지치기는 `as_of` 이전에 수신된 스냅샷만 `max_history`에 포함한다. 아직 수신되지 않은(미래) 스냅샷은 별도 버퍼(최대 `max_history`, 가장 이른 것 우선)에만 두며 알려진 이력을 밀어내거나 결과에 영향을 주지 않는다.
 - 보존: 날짜가 지난 스냅샷은 정리(`DAY_ROLLOVER`), 상태 크기 상한 `max_history`(기본 8).
 - `RefreshReport`: `added`/`removed`/`unchanged` symbol 튜플, 선택된 snapshot_id 변경 여부(`snapshot_changed`), 거부 목록, 새 `ScoutResult`.
