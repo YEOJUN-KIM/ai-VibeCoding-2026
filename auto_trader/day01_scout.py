@@ -243,6 +243,28 @@ class RankingSnapshot:
             raise ValueError("content_digest does not match snapshot content")
 
 
+MAX_CLAIMS = 4096  # bound on retained dispute evidence; overflow quarantines until KST rollover
+
+
+@dataclass(frozen=True)
+class SnapshotClaim:
+    """Compact, lossless-enough evidence that `digest` content used a snapshot id or provider
+    basis. Kept after snapshots are deduplicated or pruned so a dispute can never be forgotten."""
+    provider: str
+    kind: str  # "ID" or "BASIS"
+    key: str   # snapshot_id, or ISO provider_ranked_at
+    digest: str
+    received_at: datetime  # earliest receipt of that content under this key
+
+
+def _claims_of(snap: "RankingSnapshot") -> tuple:
+    claims = [SnapshotClaim(snap.provider, "ID", snap.snapshot_id, snap.content_digest, snap.received_at)]
+    if snap.provider_ranked_at is not None:
+        claims.append(SnapshotClaim(snap.provider, "BASIS", snap.provider_ranked_at.isoformat(),
+                                    snap.content_digest, snap.received_at))
+    return tuple(claims)
+
+
 @dataclass(frozen=True)
 class FetchResult:
     """Fetch return carrying the ORIGINAL receipt time (required for cached payloads)."""
@@ -614,43 +636,54 @@ def _evidence(kind: str, fact, as_of: datetime, max_age: timedelta) -> Evidence:
                     int(age.total_seconds()))
 
 
-def _canonical_snapshots(as_of: datetime, snapshots, config: ScoutConfig):
-    """Causal, order-independent view of the snapshots known at as_of.
+def _canonical_snapshots(as_of: datetime, snapshots, claims, config: ScoutConfig):
+    """Causal, order-independent view of the snapshots and dispute evidence known at as_of.
 
-    1. Snapshots received after as_of are dropped FIRST (prefix invariance).
+    1. Snapshots and claims received after as_of are dropped FIRST (prefix invariance).
     2. Other providers are rejected explicitly.
     3. Identical content (same provider+digest, whatever the id) collapses to ONE snapshot with
        the EARLIEST receipt, so a repeated cached rankedAt can never renew its age.
-    Different content that shares a snapshot_id or a provider basis (rankedAt) is a dispute;
-    nothing wins by input order. Returns (snapshots, disputed ids+digests, rejections).
+    Disputes are computed from claims on EVERY known id alias and provider basis (taken from the
+    pre-dedup snapshots plus retained claims), so deduplication or history truncation cannot hide
+    a conflict. Different content under one id or one basis disputes all its contents.
+    Returns (snapshots, disputed digests, rejections).
     """
     groups: dict[str, RankingSnapshot] = {}
     rejections = set()
+    known_claims: dict[tuple, datetime] = {}
+
+    def add(claim):
+        if claim.provider != config.provider or claim.received_at > as_of:
+            return
+        key = (claim.kind, claim.key, claim.digest)
+        if key not in known_claims or claim.received_at < known_claims[key]:
+            known_claims[key] = claim.received_at
+
+    for claim in claims:
+        add(claim)
     for snap in snapshots:
         if snap.received_at > as_of:
             continue
         if snap.provider != config.provider:
             rejections.add((snap.snapshot_id, "PROVIDER_MISMATCH"))
             continue
+        for claim in _claims_of(snap):
+            add(claim)
         cur = groups.get(snap.content_digest)
         if cur is None or (snap.received_at, snap.snapshot_id) < (cur.received_at, cur.snapshot_id):
             groups[snap.content_digest] = snap
-    usable = list(groups.values())
-    by_id: dict[str, set] = {}
-    by_basis: dict[datetime, set] = {}
-    for snap in usable:
-        by_id.setdefault(snap.snapshot_id, set()).add(snap.content_digest)
-        if snap.provider_ranked_at is not None:
-            by_basis.setdefault(snap.provider_ranked_at, set()).add(snap.content_digest)
-    disputed = {snap.content_digest for snap in usable
-                if len(by_id[snap.snapshot_id]) > 1
-                or (snap.provider_ranked_at is not None and len(by_basis[snap.provider_ranked_at]) > 1)}
-    return usable, disputed, tuple(sorted(rejections))
+    digests_by_key: dict[tuple, set] = {}
+    for (kind, key, digest) in known_claims:
+        digests_by_key.setdefault((kind, key), set()).add(digest)
+    disputed = {digest for (kind, key, digest) in known_claims if len(digests_by_key[(kind, key)]) > 1}
+    return list(groups.values()), disputed, tuple(sorted(rejections))
 
 
-def _select_snapshot(as_of: datetime, snapshots, config: ScoutConfig):
+def _select_snapshot(as_of: datetime, snapshots, claims, quarantined: bool, config: ScoutConfig):
     """Return (status, snapshot|None, rejections)."""
-    usable, disputed, rejections = _canonical_snapshots(as_of, snapshots, config)
+    usable, disputed, rejections = _canonical_snapshots(as_of, snapshots, claims, config)
+    if quarantined:  # dispute evidence overflowed: conservative invalid state until rollover
+        return INVALID_SNAPSHOT, None, rejections + (("", "CLAIMS_OVERFLOW_QUARANTINE"),)
     if not usable:
         return NO_SNAPSHOT, None, rejections
     # Latest by actual receipt, then provider time (None sorts first), then digest/id.
@@ -889,12 +922,12 @@ def _next_kst_midnight(as_of: datetime) -> datetime:
 
 def select_watchlist(as_of: Any, snapshots, *, instruments=(), liquidity=(), dayone=(),
                      portfolio: Portfolio | None = None, config: ScoutConfig | None = None,
-                     risk_config=None) -> ScoutResult:
+                     risk_config=None, claims=(), quarantined: bool = False) -> ScoutResult:
     """Pure, deterministic selection as of `as_of`. Output is 0..target_count WATCH candidates
     (shortages are reported, never padded) plus an independent held-position monitor."""
     config = config or ScoutConfig()
     as_of = _as_of(as_of)
-    status, snap, rejections = _select_snapshot(as_of, tuple(snapshots), config)
+    status, snap, rejections = _select_snapshot(as_of, tuple(snapshots), tuple(claims), quarantined, config)
     portfolio, port_state = _resolve_portfolio(as_of, portfolio, config)
     held = _monitor(as_of, portfolio, port_state, snap, status, config)
     held_symbols = {h.symbol for h in held}
@@ -1068,6 +1101,8 @@ class ScoutState:
     last_snapshot_id: str | None = None
     max_history: int = 8
     last_snapshot_digest: str | None = None
+    claims: tuple = ()  # SnapshotClaim dispute evidence, kept beyond snapshot pruning
+    claims_overflow_day: str | None = None  # KST date (ISO) of an evidence overflow => quarantine
 
     def __post_init__(self):
         if type(self.max_history) is not int or self.max_history < 1:
@@ -1076,6 +1111,10 @@ class ScoutState:
         if not all(isinstance(x, RankingSnapshot) for x in snapshots):
             raise ValueError("snapshots must be RankingSnapshot objects")
         object.__setattr__(self, "snapshots", snapshots)
+        claims = tuple(self.claims)
+        if not all(isinstance(c, SnapshotClaim) for c in claims):
+            raise ValueError("claims must be SnapshotClaim objects")
+        object.__setattr__(self, "claims", claims)
         object.__setattr__(self, "last_candidates", tuple(self.last_candidates))
         if self.last_as_of is not None:
             object.__setattr__(self, "last_as_of", _wrap("last_as_of", _utc, self.last_as_of))
@@ -1104,17 +1143,31 @@ class FetchOutcome:
     reason: str | None = None
 
 
-def _merge(snapshots: tuple, incoming, as_of: datetime, max_history: int):
+def _merge(snapshots: tuple, claims: tuple, incoming, as_of: datetime, max_history: int):
     """Store snapshots without ever choosing a winner between disputed contents.
 
-    Identical content collapses to the earliest receipt (never renewed). Conflicting content
-    (same id, or same provider basis) is stored side by side and disputed at selection, so the
-    outcome does not depend on arrival order or on history-versus-batch. Pruning counts only
-    snapshots known at as_of; later-received ones are kept separately (bounded) and cannot
-    evict known history.
+    Identical content collapses to the earliest receipt (never renewed). Dispute evidence is
+    recorded as claims BEFORE any dedup or pruning and survives them, so conflicting content
+    is detected at selection regardless of arrival order, history-versus-batch, or truncation.
+    Pruning counts only snapshots known at as_of; later-received ones live in a separate bounded
+    buffer and cannot evict known history. Known evidence beyond MAX_CLAIMS sets `overflow`
+    (quarantine until KST rollover) rather than forgetting a basis or id.
+    Returns (snapshots, claims, ingested, rejected, overflow).
     """
     by_key: dict[tuple, RankingSnapshot] = {}
+    claim_map: dict[tuple, SnapshotClaim] = {}
+
+    def note(claim):
+        key = (claim.provider, claim.kind, claim.key, claim.digest)
+        cur = claim_map.get(key)
+        if cur is None or claim.received_at < cur.received_at:
+            claim_map[key] = claim
+
+    for claim in claims:
+        note(claim)
     for old in snapshots:
+        for claim in _claims_of(old):
+            note(claim)
         key = (old.provider, old.content_digest)
         cur = by_key.get(key)
         if cur is None or (old.received_at, old.snapshot_id) < (cur.received_at, cur.snapshot_id):
@@ -1124,6 +1177,8 @@ def _merge(snapshots: tuple, incoming, as_of: datetime, max_history: int):
         if not isinstance(snap, RankingSnapshot):
             rejected.append((None, "NOT_A_SNAPSHOT"))
             continue
+        for claim in _claims_of(snap):
+            note(claim)
         key = (snap.provider, snap.content_digest)
         cur = by_key.get(key)
         if cur is None or (snap.received_at, snap.snapshot_id) < (cur.received_at, cur.snapshot_id):
@@ -1132,7 +1187,14 @@ def _merge(snapshots: tuple, incoming, as_of: datetime, max_history: int):
     ordered = sorted(by_key.values(), key=lambda x: (x.received_at, x.snapshot_id, x.content_digest))
     known = [x for x in ordered if x.received_at <= as_of]
     later = [x for x in ordered if x.received_at > as_of]
-    return tuple(known[-max_history:] + later[:max_history]), tuple(ingested), tuple(rejected)
+    kept = tuple(known[-max_history:] + later[:max_history])
+    kept_future = {x.content_digest for x in later[:max_history]}
+    ordered_claims = sorted(claim_map.values(), key=lambda c: (c.received_at, c.provider, c.kind, c.key, c.digest))
+    known_claims = [c for c in ordered_claims if c.received_at <= as_of]
+    future_claims = [c for c in ordered_claims if c.received_at > as_of and c.digest in kept_future][:MAX_CLAIMS]
+    overflow = len(known_claims) > MAX_CLAIMS
+    return (kept, tuple(known_claims[:MAX_CLAIMS] + future_claims), tuple(ingested), tuple(rejected),
+            overflow)
 
 
 def refresh(state: ScoutState, as_of: Any, *, new_snapshots=(), instruments=(), liquidity=(),
@@ -1143,16 +1205,22 @@ def refresh(state: ScoutState, as_of: Any, *, new_snapshots=(), instruments=(), 
     as_of = _as_of(as_of)
     if state.last_as_of is not None and as_of < state.last_as_of:
         return state, RefreshReport("AS_OF_REGRESSION", (), (), (), False, (), (), None)
-    merged, ingested, rejected = _merge(state.snapshots, tuple(new_snapshots), as_of, state.max_history)
+    merged, claims, ingested, rejected, overflow = _merge(
+        state.snapshots, state.claims, tuple(new_snapshots), as_of, state.max_history)
     today = _kst_date(as_of)
-    # Day rollover: drop snapshots received on an earlier KST day (never future-received ones).
+    # Day rollover: drop snapshots and evidence received on an earlier KST day (never future ones).
     merged = tuple(s for s in merged if s.received_at > as_of or _kst_date(s.received_at) >= today)
+    claims = tuple(c for c in claims if c.received_at > as_of or _kst_date(c.received_at) >= today)
+    overflow_day = today.isoformat() if overflow else (
+        state.claims_overflow_day if state.claims_overflow_day == today.isoformat() else None)
     result = select_watchlist(as_of, merged, instruments=instruments, liquidity=liquidity,
-                              dayone=dayone, portfolio=portfolio, config=config, risk_config=risk_config)
+                              dayone=dayone, portfolio=portfolio, config=config, risk_config=risk_config,
+                              claims=claims, quarantined=overflow_day == today.isoformat())
     now_symbols = tuple(c.symbol for c in result.candidates)
     previous = state.last_candidates
     new_state = dataclasses.replace(
         state, last_as_of=as_of, snapshots=merged, last_candidates=now_symbols,
+        claims=claims, claims_overflow_day=overflow_day,
         last_snapshot_id=result.snapshot.snapshot_id if result.snapshot and result.status == OK else None,
         last_snapshot_digest=result.snapshot.content_digest if result.snapshot and result.status == OK else None)
     report = RefreshReport(
@@ -1186,9 +1254,13 @@ def ingest_fetch(state: ScoutState, fetch: Callable[[], Any], *, clock: Callable
                                      requested_count=requested_count)
     except Exception as exc:  # fail closed; type name only, messages may carry sensitive text
         return state, FetchOutcome("FETCH_FAILED", None, type(exc).__name__)
-    merged, ingested, _ = _merge(state.snapshots, (snap,), _utc(clock()), state.max_history)
+    now = _utc(clock())
+    merged, claims, ingested, _, overflow = _merge(state.snapshots, state.claims, (snap,), now,
+                                                   state.max_history)
     status = "INGESTED" if ingested else "DUPLICATE"
-    return dataclasses.replace(state, snapshots=merged), FetchOutcome(status, snap.snapshot_id)
+    overflow_day = _kst_date(now).isoformat() if overflow else state.claims_overflow_day
+    return (dataclasses.replace(state, snapshots=merged, claims=claims, claims_overflow_day=overflow_day),
+            FetchOutcome(status, snap.snapshot_id))
 
 
 # --------------------------------------------------------------------------- serialization

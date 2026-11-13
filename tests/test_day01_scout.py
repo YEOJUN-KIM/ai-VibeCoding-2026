@@ -852,6 +852,112 @@ class ReviewDefectRegressionTests(unittest.TestCase):
         self.assertTrue(all(c.fully_eligible and not c.verification_gaps for c in run().candidates))
 
 
+class DisputeEvidenceRetentionTests(unittest.TestCase):
+    """D-S8/D-S9: dispute evidence must outlive deduplication and history truncation."""
+
+    def go(self, state, new=(), as_of=AS_OF, portfolio_=None):
+        return refresh(state, as_of, new_snapshots=new, instruments=instruments(), liquidity=liquidity(),
+                       dayone=dayone(), portfolio=portfolio_ or portfolio(), risk_config=RISK)
+
+    def pair(self):
+        a = snap(raw_rows(60, price=100), sid="collision", received=RECEIVED - timedelta(seconds=1))
+        b = snap(raw_rows(60, price=999), sid="collision", received=RECEIVED)
+        return a, b
+
+    def test_d_s8_conflict_survives_history_truncation_in_one_batch(self):
+        a, b = self.pair()
+        for batch in ([a, b], [b, a]):
+            for history in (1, 2, 8):
+                _, report = self.go(ScoutState.empty(max_history=history), batch)
+                self.assertEqual((report.result.status, report.result.candidates), (sc.INVALID_SNAPSHOT, ()),
+                                 history)
+
+    def test_d_s8_conflict_survives_pruning_across_refreshes_and_pressure(self):
+        a, b = self.pair()
+        state, _ = self.go(ScoutState.empty(max_history=1), [a], as_of=RECEIVED)
+        filler = [snap(raw_rows(60, price=200 + i), sid=f"fill{i}",
+                       ranked=RECEIVED - timedelta(seconds=1) + timedelta(milliseconds=50 * i),
+                       received=RECEIVED - timedelta(seconds=1) + timedelta(milliseconds=50 * (i + 1)))
+                  for i in range(12)]
+        state, _ = self.go(state, filler, as_of=RECEIVED)           # pushes A out of history
+        self.assertNotIn(a.content_digest, [x.content_digest for x in state.snapshots])
+        _, report = self.go(state, [b], as_of=RECEIVED)
+        self.assertEqual(report.result.status, sc.INVALID_SNAPSHOT)
+        self.assertEqual(report.rejected[-1], ("collision", "SNAPSHOT_CONFLICT"))
+
+    def test_d_s9_id_alias_collision_survives_content_deduplication(self):
+        original = snap(raw_rows(60), sid="original", received=RECEIVED - timedelta(seconds=1))
+        alias = snap(raw_rows(60), sid="collision", received=RECEIVED)           # same content C1
+        other = snap(raw_rows(60, price=555), sid="collision", ranked=RANKED - timedelta(seconds=1),
+                     received=RECEIVED)                                           # content C2
+        for order in ([original, alias, other], [other, alias, original], [alias, other, original]):
+            result = run(order, as_of=RECEIVED + timedelta(seconds=1))
+            self.assertEqual((result.status, result.candidates), (sc.INVALID_SNAPSHOT, ()))
+        # Same through refresh state (alias id is remembered although content collapsed).
+        state, _ = self.go(ScoutState.empty(), [original, alias], as_of=RECEIVED)
+        self.assertEqual(len(state.snapshots), 1)
+        _, report = self.go(state, [other], as_of=RECEIVED)
+        self.assertEqual(report.result.status, sc.INVALID_SNAPSHOT)
+
+    def test_known_dispute_never_falls_back_but_future_conflict_does_not_alter_past(self):
+        a, b = self.pair()
+        before = to_dict(run([a]), )
+        self.assertEqual(to_dict(run([a, b], as_of=RECEIVED - timedelta(seconds=1) + timedelta(milliseconds=500))),
+                         to_dict(run([a], as_of=RECEIVED - timedelta(seconds=1) + timedelta(milliseconds=500))))
+        self.assertEqual(before, to_dict(run([a])))
+        # In state: a conflict that is only received later cannot alter the earlier as_of result.
+        state, early = self.go(ScoutState.empty(), [a, b], as_of=RECEIVED - timedelta(milliseconds=500))
+        _, baseline = self.go(ScoutState.empty(), [a], as_of=RECEIVED - timedelta(milliseconds=500))
+        self.assertEqual(early.result, baseline.result)
+        _, later = self.go(state, as_of=RECEIVED + timedelta(seconds=1))
+        self.assertEqual(later.result.status, sc.INVALID_SNAPSHOT)
+        # An older valid snapshot never takes over from a disputed latest.
+        older = snap(raw_rows(60, price=50), sid="older", ranked=RANKED - timedelta(seconds=3),
+                     received=RECEIVED - timedelta(seconds=3))
+        self.assertEqual(run([older, a, b], as_of=RECEIVED + timedelta(seconds=1)).status, sc.INVALID_SNAPSHOT)
+
+    def test_evidence_overflow_quarantines_until_rollover_and_keeps_held(self):
+        original_limit = sc.MAX_CLAIMS
+        sc.MAX_CLAIMS = 3
+        try:
+            many = [snap(raw_rows(60, price=100 + i), sid=f"s{i}", ranked=RANKED - timedelta(seconds=i),
+                         received=RECEIVED - timedelta(seconds=i)) for i in range(4)]
+            held = Position("H001", 2)
+            state, report = self.go(ScoutState.empty(), many, as_of=RECEIVED,
+                                    portfolio_=portfolio(observed_at=RECEIVED - timedelta(seconds=1),
+                                                         positions=[held]))
+            self.assertEqual((report.result.status, report.result.candidates), (sc.INVALID_SNAPSHOT, ()))
+            self.assertEqual([h.symbol for h in report.result.held], ["H001"])
+            self.assertEqual(len(state.claims), 3)
+            # Still quarantined later the same KST day even with no new evidence overflowing.
+            fresh = snap(raw_rows(60), sid="fresh", ranked=RANKED + timedelta(seconds=30),
+                         received=RECEIVED + timedelta(seconds=30))
+            later = AS_OF + timedelta(seconds=30)
+            _, quarantined = self.go(state, [fresh], as_of=later, portfolio_=portfolio(observed_at=later))
+            self.assertEqual(quarantined.result.status, sc.INVALID_SNAPSHOT)
+            self.assertEqual(sc.ScoutState(claims_overflow_day=None).claims, ())
+        finally:
+            sc.MAX_CLAIMS = original_limit
+        # After KST rollover the quarantine and old evidence are gone.
+        next_day = RECEIVED + timedelta(days=1)
+        fresh = snap(raw_rows(60), sid="n", ranked=next_day - timedelta(seconds=10),
+                     received=next_day - timedelta(seconds=5))
+        rolled_state, rolled = self.go(state, [fresh], as_of=next_day,
+                                       portfolio_=portfolio(observed_at=next_day))
+        self.assertEqual(rolled.result.status, sc.OK)
+        self.assertIsNone(rolled_state.claims_overflow_day) if rolled_state.claims_overflow_day !=             sc._kst_date(next_day).isoformat() else None
+        self.assertTrue(all(sc._kst_date(c.received_at) >= sc._kst_date(next_day) for c in rolled_state.claims))
+
+    def test_claims_are_bounded_and_serializable(self):
+        a, b = self.pair()
+        state, _ = self.go(ScoutState.empty(), [a, b])
+        self.assertTrue(all(isinstance(c, sc.SnapshotClaim) for c in state.claims))
+        self.assertLessEqual(len(state.claims), sc.MAX_CLAIMS)
+        json.dumps(to_dict(state))
+        with self.assertRaises(ValueError):
+            ScoutState(claims=[object()])
+
+
 class ConfigValidationTests(unittest.TestCase):
     def test_strict_config(self):
         for kw in (dict(target_count=9), dict(target_count=16), dict(target_count=True),
