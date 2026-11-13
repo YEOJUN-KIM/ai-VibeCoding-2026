@@ -1,6 +1,6 @@
 # DAY01-SCOUT 독립 검증
 
-상태: 2026-11-13 독립 재검증 수행, **수정 필요 / 통합 불가**. D-S1~D-S7의 기존 40개 독립 테스트는 통과했으나 추가 일반화 검증에서 D-S8/D-S9가 재현됐다. 실제 동작·사용자 확인·운영 적용 완료가 아니다.
+상태: 2026-11-13 독립 재검증 수행, **수정 필요 / 통합 불가**. D-S1~D-S9의 기존 45개 독립 테스트는 통과했으나 새 증거 상한 로직의 세션 전환에서 D-S10이 재현됐다. 실제 동작·사용자 확인·운영 적용 완료가 아니다.
 작업 기록: [20261113-Codex-DAY01-scout-review](../plans/ai-tasks/20261113-Codex-DAY01-scout-review.md).
 
 ## 기존 재사용 계약 조사
@@ -56,7 +56,7 @@ Claude의 커밋 및 공개 API를 받은 뒤 정적 import 감사를 먼저 한
 
 위 결함은 조정자에게 재현과 함께 전달했고 Claude가 구현 수정을 담당했다. Codex는 소스를 수정하지 않았다. 승인된 Claude 수정 `a82dfb257559c436bcb74380831869bcdae10a08`의 실제 diff와 소유 4파일 경로를 검토하고 `561692e`로 exact cherry-pick했다. 원본 독립 테스트 40개는 전부 통과했으며 Claude 기본 72개와 기존 chart 3개를 포함한 최초 재검증 115개가 통과했다. 이는 아래 추가 일반화 검증 이전 결과이다.
 
-## 추가 일반화 검증의 미해결 결함
+## 2차 일반화 검증과 수정 이력
 
 수정 diff에서 인과적 미래 입력 분리·캐시 최초 수신 선택·충돌 포트폴리오의 UNKNOWN 병합·공개 생성자 검증·opt-out 갭 표시를 확인했다. 특히 `_merge`의 이력 절단과 `_canonical_snapshots`의 내용 중복 통합이 충돌 증거를 지우는지 새 회귀 5개로 확인했다. 미래 버퍼의 receipt 도달 시 활성화, 미래 충돌의 과거 prefix 불변, 알려진 최신 unknown basis의 차단은 통과했다. 다음 두 사례는 실패했다.
 
@@ -67,15 +67,29 @@ Claude의 커밋 및 공개 API를 받은 뒤 정적 import 감사를 먼저 한
 
 검증 파일은 구현자 복사본이 아닌 이 브랜치 원본이며 공개 생성자의 유효한 list rows 입력에 대해 실제 불변성 검사를 강화했다(정확한 기존 digest를 유지하도록 입력을 구성). expectedFailure·실패 skip 없음. 조정자에게 두 실제 재현을 전달했고 소스 수정은 하지 않았다.
 
+승인된 Claude 수정 `d6a2a661d13a2f49c4a1f466ab981e36d1529d06`의 실제 4파일 diff를 읽고 `63ce8db`로 exact cherry-pick했다. ID alias 및 공급자 기준시각 증거를 중복 통합·history 절단 전에 보존하도록 바뀌었으며, 원본 독립 45개·Claude 기본 78개·chart 3개인 126개가 전부 통과했다. 다음 신규 경계 검증 전의 결과이다.
+
+## 3차 경계 검증의 미해결 결함 D-S10
+
+증거 상한 도입에 맞춰 최소 4개 검증을 추가했다. 미래 claim 대량 입력의 과거 prefix 불변과 같은 세션에서 overflow 격리 유지·보유 감시 독립은 통과했다. **KST 날짜 전환은 refresh와 ingest_fetch 양쪽 경로에서 실패했다.**
+
+`MAX_CLAIMS=3`으로 축소한 동일 로직에서 전날 두 스냅샷의 4개 claim으로 격리된 상태(3개 보존)에 다음 날 신선한 스냅샷의 2개 claim을 추가한다. `_merge`가 전날 자료를 purge하기 전에 3+2>3을 판정하고, refresh가 그 후 전날 자료를 제거해도 `claims_overflow_day`를 새 날짜로 찍어 다시 격리한다. 실제 4096 상한에서도 전날 4096개 + 다음 날 2개로 같은 문제가 생긴다. 구현자 테스트는 rollover 직전에 상한을 3에서 4096으로 되돌려 이 조건을 놓쳤다.
+
+- `test_expired_day_claims_must_not_requarantine_next_session`: 새 날짜 overflow 표식이 None이 아니라 `2026-11-14`로 남음.
+- `test_fetch_ingestion_also_purges_expired_claims_before_overflow`: ingest_fetch를 먼저 거치면 이후 refresh도 INVALID_SNAPSHOT으로 남음.
+- 조정자에게 재현을 전달했다. 만료 claim·snapshot 정리는 상한 계산·절단 전에 수행해야 하며 두 공개 경로의 의미가 일치해야 한다. 보유 감시나 주문 경로는 변경할 필요가 없다.
+
+현재 기능은 순수 WATCH 모듈로 구현됐으나 자동 테스트 미해결 실패가 있어 통합 서명은 불가하다. 이는 실제 API 연결이 검증됐다는 의미가 아니며 실제 수집기는 여전히 미연결이다.
+
 | 검증 범위 | 정확한 모듈 | 현재 결과 |
 |---|---|---|
-| Claude 기본 | `tests.test_day01_scout` | 72개 통과 |
-| Codex 독립 | `tests.test_day01_scout_review` | 45개 중 43 통과 / 2 실패 |
+| Claude 기본 | `tests.test_day01_scout` | 78개 통과 |
+| Codex 독립 | `tests.test_day01_scout_review` | 49개 중 47 통과 / 2 실패(D-S10 두 경로) |
 | 기존 최소 회귀 | `tests.test_chart_candles` | 3개 통과 |
-| 위 세 모듈 합동 | `python -B -m unittest tests.test_day01_scout tests.test_day01_scout_review tests.test_chart_candles` | **120개 중 118 통과 / 2 실패**, exit 1 |
+| 위 세 모듈 합동 | `python -B -m unittest tests.test_day01_scout tests.test_day01_scout_review tests.test_chart_candles` | **130개 중 128 통과 / 2 실패**, exit 1 |
 | 기존 DAY01 보존 | 아래 네 exact 모듈 | 별도 승인 실행 259개 통과; 이번 Scout 수정 후 반복하지 않음 |
 
-이전 109개는 당시 Claude 66 + Codex 40 + chart 3이었다. 현재 120개 및 별도 259개와 누적·중복 합산하지 않는다. 이번 합동 상세 stdout/stderr는 chat scratch `scout-round2-tests.log`에 기록했다.
+이전 109개는 66+40+3, 120개는 72+45+3, D-S8/D-S9 수정 직후 126개는 78+45+3이었다. 현재 130개 및 별도 259개와 누적·중복 합산하지 않는다. 이번 합동 상세 stdout/stderr는 chat scratch `scout-round3-tests.log`에 기록했다. 계정·provider 사용량을 조회하지 않았고 토큰·비용 실측값은 제공되지 않았다; 호출 횟수는 조정자가 관리한다.
 
 ## 기존 DAY01 보존 검증
 
@@ -88,11 +102,11 @@ Claude의 커밋 및 공개 API를 받은 뒤 정적 import 감사를 먼저 한
 
 ## 검증 범위와 다음 인계
 
-- 독립 테스트 작성/자동 테스트: D-S1~D-S7 수정 후 기존 40개 모두 통과; 추가 5개 중 D-S8/D-S9 2개 실패로 수정 필요.
+- 독립 테스트 작성/자동 테스트: D-S1~D-S9 수정 후 기존 45개 모두 통과; 추가 4개 중 D-S10 두 경로가 실패하여 수정 필요.
 - 실제 API·실계좌·장중·UI·운영 적용: 미실행 및 승인 범위 밖.
 - API·DB 계약: 기존 계약 변경 없음. scout 신규 순수 인터페이스를 검토했고 위 미해결 사항이 있다.
 - 기존 기능 영향: Claude 신규 순수 scout 모듈은 실제 경로에 연결되지 않았다. Codex 변경은 신규 테스트와 검토 문서·작업 기록뿐이다.
 - GPT 검토 사항: 시각 출처와 캐시 보존, 모든 사실의 이용 가능 시각, 개별 affordability와 watchlist 전체 예산 의미, 실제 수집기 연결 이전 한계.
 - 학습 개념: point-in-time 검증은 가격 외 모든 판단 사실의 이용 가능 시각에도 적용된다. 후보 집합과 주문·보유 감시 집합은 서로 다른 책임을 갖는다.
 
-직접 확인: 위 합동 명령은 합성 검증만 수행하며 현재 예상 결과는 120개 중 2개 실패이다. Claude 수정 후 동일 명령을 다시 실행하여 실패 0개를 확인해야 통합 검토 후보가 된다. 실제 수집기의 최초 수신시각 보존과 모든 사실의 이용 가능 시각 저장은 별도 작업이며 실환경 검증·main 병합·배포는 사용자 승인이 필요하다. 저장소는 https://github.com/YEOJUN-KIM/ai-VibeCoding-2026 이고 작업 브랜치는 `YEOJUN-KIM/day01-scout-codex-review-20261113`; push/PR은 지시에 따라 수행하지 않는다. 다른 AI와 파일 충돌을 피하도록 구현 파일은 Claude 소유로 유지한다.
+직접 확인: 위 합동 명령은 합성 검증만 수행하며 현재 예상 결과는 130개 중 2개 실패이다. Claude 수정 후 동일 명령을 다시 실행하여 실패 0개를 확인해야 통합 검토 후보가 된다. 실제 수집기의 최초 수신시각 보존, 상태·유동성·모든 메타데이터의 이용 가능 시각, snapshot/claim 영속 저장은 별도 작업이며 실환경 검증·main 병합·배포는 사용자 승인이 필요하다. 저장소는 https://github.com/YEOJUN-KIM/ai-VibeCoding-2026 이고 작업 브랜치는 `YEOJUN-KIM/day01-scout-codex-review-20261113`; push/PR은 지시에 따라 수행하지 않는다. 다른 AI와 파일 충돌을 피하도록 구현 파일은 Claude 소유로 유지한다.

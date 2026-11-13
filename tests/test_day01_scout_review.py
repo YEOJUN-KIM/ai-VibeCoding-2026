@@ -5,6 +5,7 @@ import importlib.util
 import json
 import sys
 import unittest
+from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal as D
 from pathlib import Path
@@ -350,6 +351,47 @@ class IncrementalReview(unittest.TestCase):
         _,out=s.refresh(s.ScoutState.empty(),T,new_snapshots=(snap(),bad),**fixture())
         self.assertEqual(out.result.status,s.UNKNOWN_PROVIDER_TIME)
         self.assertFalse(out.result.candidates)
+
+    def test_future_claim_overflow_does_not_quarantine_past(self):
+        future=tuple(s.snapshot_from_rankings(T+i*SEC,rows(price=str(101+i)),
+                     received_at=T+(i+1)*SEC,snapshot_id=f'future{i}') for i in range(5))
+        with patch.object(s,'MAX_CLAIMS',3):
+            _,out=s.refresh(s.ScoutState.empty(),T,new_snapshots=(snap(),)+future,**fixture())
+        self.assertEqual(out.result,result())
+
+    def test_claim_overflow_quarantine_keeps_held_and_latches_in_session(self):
+        other=s.snapshot_from_rankings(T-SEC,rows(price='200'),received_at=T,snapshot_id='second')
+        args=fixture(); args['portfolio']=s.Portfolio(T,'10000',positions=(s.Position('HELD',1),))
+        with patch.object(s,'MAX_CLAIMS',3):
+            state,out=s.refresh(s.ScoutState.empty(),T,new_snapshots=(snap(),other),**args)
+            self.assertFalse(out.result.candidates)
+            self.assertEqual(out.result.held[0].symbol,'HELD')
+            _,later=s.refresh(state,T+SEC,**args)
+            self.assertEqual(later.result.status,s.INVALID_SNAPSHOT)
+            self.assertFalse(later.result.candidates)
+
+    def test_expired_day_claims_must_not_requarantine_next_session(self):
+        other=s.snapshot_from_rankings(T-SEC,rows(price='200'),received_at=T,snapshot_id='second')
+        tomorrow=T+timedelta(days=1)
+        fresh=s.snapshot_from_rankings(tomorrow-2*SEC,rows(),received_at=tomorrow-SEC,
+                                       snapshot_id='newday')
+        with patch.object(s,'MAX_CLAIMS',3):
+            state,_=s.refresh(s.ScoutState.empty(),T,new_snapshots=(snap(),other),**fixture())
+            self.assertIsNotNone(state.claims_overflow_day)
+            rolled,out=s.refresh(state,tomorrow,new_snapshots=(fresh,),**fixture())
+            self.assertIsNone(rolled.claims_overflow_day)
+            self.assertEqual(out.result.status,s.OK)
+
+    def test_fetch_ingestion_also_purges_expired_claims_before_overflow(self):
+        other=s.snapshot_from_rankings(T-SEC,rows(price='200'),received_at=T,snapshot_id='second')
+        tomorrow=T+timedelta(days=1)
+        with patch.object(s,'MAX_CLAIMS',3):
+            state,_=s.refresh(s.ScoutState.empty(),T,new_snapshots=(snap(),other),**fixture())
+            payload=(tomorrow-2*SEC,rows())
+            state,fetch=s.ingest_fetch(state,lambda:s.FetchResult(payload,tomorrow-SEC),clock=lambda:tomorrow)
+            self.assertEqual(fetch.status,'INGESTED')
+            _,out=s.refresh(state,tomorrow,**fixture())
+            self.assertEqual(out.result.status,s.OK)
 
 
 class CompatibilityReview(unittest.TestCase):
