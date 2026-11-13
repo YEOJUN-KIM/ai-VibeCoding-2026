@@ -256,8 +256,13 @@ def execution_costs(reference: D, quantity: int, side: str, config: Config) -> d
 
 
 def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Iterable[str],
-           open_quotes: Iterable[OpenQuote] = ()) -> dict:
-    """Deterministic availability-clock simulation; returns Decimal/datetime values."""
+           open_quotes: Iterable[OpenQuote] = (), entry_allowed=None) -> dict:
+    """Deterministic availability-clock simulation; returns Decimal/datetime values.
+
+    `entry_allowed(symbol, at) -> bool` (default None = no gate, behavior unchanged) may only veto
+    NEW entry signals at decision time `at`. Exits, marks, stops and liquidation of held symbols
+    never consult it, so a symbol leaving a rotating watchlist stays monitored.
+    """
     config.validate()
     symbols = select_universe(universe)
     # Unselected observations cannot influence clocks, validation, equity or selection.
@@ -697,6 +702,9 @@ def replay(rows: Iterable[Candle], config: Config = Config(), *, universe: Itera
                 reason(at, symbol, decision.reason, vwap=decision.vwap, previous_vwap=decision.previous_vwap,
                        range_high=decision.range_high)
                 if not decision.enter:
+                    continue
+                if entry_allowed is not None and not entry_allowed(symbol, at):
+                    reason(at, symbol, 'SCOUT_NOT_WATCHED', phase='SIGNAL')
                     continue
                 if any(p['unresolved'] for p in positions.values()):
                     reason(at, symbol, 'UNRESOLVED_EXPOSURE', phase='SIGNAL')
