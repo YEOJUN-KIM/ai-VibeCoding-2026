@@ -172,8 +172,8 @@ class RankAndQualityReview(unittest.TestCase):
         self.assertFalse(out.candidates)
 
     def test_direct_snapshot_owns_immutable_rows(self):
-        mutable=[s.RankedRow(1,'X001',price=D(100))]
         original=snap()
+        mutable=list(original.rows)
         try:
             direct=s.RankingSnapshot(original.snapshot_id,original.provider,original.source,
                                      original.received_at,original.provider_ranked_at,100,
@@ -308,6 +308,47 @@ class IncrementalReview(unittest.TestCase):
     def test_different_ids_conflicting_same_provider_basis_fail_closed(self):
         a=snap(snapshot_id='first'); b=snap(rows(price='999'),snapshot_id='second')
         _,out=s.refresh(s.ScoutState.empty(),T,new_snapshots=(a,b),**fixture())
+        self.assertFalse(out.result.candidates)
+
+    def test_conflict_must_not_disappear_when_history_is_truncated(self):
+        a=snap(snapshot_id='collision')
+        b=snap(rows(price='999'),snapshot_id='collision',received_at=T)
+        state,out=s.refresh(s.ScoutState.empty(max_history=1),T,
+                            new_snapshots=(a,b),**fixture())
+        self.assertFalse(out.result.candidates)
+        _,again=s.refresh(state,T,**fixture())
+        self.assertFalse(again.result.candidates)
+
+    def test_snapshot_alias_collision_survives_content_deduplication(self):
+        a=snap(snapshot_id='original')
+        alias=snap(snapshot_id='collision',received_at=T)
+        conflicting=s.snapshot_from_rankings(T-SEC,rows(price='999'),
+                    received_at=T,snapshot_id='collision')
+        out=result((a,alias,conflicting))
+        self.assertEqual(out.status,s.INVALID_SNAPSHOT)
+        self.assertFalse(out.candidates)
+
+    def test_future_buffer_activates_only_when_receipt_becomes_available(self):
+        future=s.snapshot_from_rankings(T,rows(price='150'),received_at=T+SEC,
+                                        snapshot_id='later')
+        state,now=s.refresh(s.ScoutState.empty(),T,new_snapshots=(snap(),future),**fixture())
+        self.assertEqual(now.result,result())
+        _,later=s.refresh(state,T+SEC,**fixture())
+        self.assertEqual(later.result.snapshot.snapshot_id,'later')
+        self.assertEqual(later.result.candidates[0].price,D(150))
+
+    def test_future_dispute_must_not_poison_present_result(self):
+        future=s.snapshot_from_rankings(T,rows(price='150'),received_at=T+SEC,
+                                        snapshot_id='base')
+        state,now=s.refresh(s.ScoutState.empty(),T,new_snapshots=(snap(),future),**fixture())
+        self.assertEqual(now.result,result())
+        _,later=s.refresh(state,T+SEC,**fixture())
+        self.assertFalse(later.result.candidates)
+
+    def test_latest_known_invalid_basis_remains_blocked_after_refresh(self):
+        bad=s.snapshot_from_rankings(None,rows(),received_at=T,snapshot_id='unknown')
+        _,out=s.refresh(s.ScoutState.empty(),T,new_snapshots=(snap(),bad),**fixture())
+        self.assertEqual(out.result.status,s.UNKNOWN_PROVIDER_TIME)
         self.assertFalse(out.result.candidates)
 
 
