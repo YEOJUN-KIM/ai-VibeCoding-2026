@@ -618,8 +618,10 @@ class RefreshTests(unittest.TestCase):
         self.assertEqual((r2.ingested, r2.rejected), ((), ()))
         self.assertEqual(len(s2.snapshots), 1)
         s3, r3 = self.go(s2, new=[snap(raw_rows(3), sid="a")])
-        self.assertEqual(r3.rejected, (("a", "SNAPSHOT_ID_CONFLICT"),))
-        self.assertEqual(s3.snapshots, s2.snapshots)
+        # Disputed content is stored side by side and fails closed at selection; no first-wins.
+        self.assertEqual(r3.rejected, (("a", "SNAPSHOT_CONFLICT"),))
+        self.assertEqual((r3.result.status, r3.result.candidates), (sc.INVALID_SNAPSHOT, ()))
+        self.assertEqual(len(s3.snapshots), 2)
 
     def test_as_of_regression_is_rejected_and_state_unchanged(self):
         s1, _ = self.go(ScoutState.empty(), new=[snap()])
@@ -651,7 +653,8 @@ class RefreshTests(unittest.TestCase):
     def test_same_rankedat_with_different_content_is_rejected(self):
         s1, _ = self.go(ScoutState.empty(), new=[snap(sid="a")])
         _, r2 = self.go(s1, new=[snap(raw_rows(7), sid="b", received=RECEIVED + timedelta(seconds=2))])
-        self.assertEqual(r2.rejected, (("b", "SAME_RANKED_AT_DIFFERENT_CONTENT"),))
+        self.assertEqual(r2.rejected, (("b", "SNAPSHOT_CONFLICT"),))
+        self.assertEqual(r2.result.status, sc.INVALID_SNAPSHOT)
 
     def test_stale_state_never_masquerades_as_fresh_and_held_survives(self):
         pos = Position(sym(60), 1, "100", OBSERVED, "100", OBSERVED)
@@ -716,6 +719,137 @@ class IngestFetchTests(unittest.TestCase):
                                   clock=lambda: RECEIVED)
         self.assertEqual((out.status, out.reason), ("REJECTED", "RECEIPT_IN_FUTURE"))
         self.assertEqual(state.snapshots, ())
+
+
+class ReviewDefectRegressionTests(unittest.TestCase):
+    """Own regressions for independent-review defects D-S2..D-S7 (generalized, not one-offs)."""
+
+    def go(self, state, new=(), as_of=AS_OF):
+        return refresh(state, as_of, new_snapshots=new, instruments=instruments(), liquidity=liquidity(),
+                       dayone=dayone(), portfolio=portfolio(), risk_config=RISK)
+
+    def test_d_s2_future_snapshots_never_evict_or_change_known_history(self):
+        future = tuple(snap(raw_rows(5, price=101 + i), sid=f"f{i}", ranked=AS_OF + timedelta(seconds=i),
+                            received=AS_OF + timedelta(seconds=i + 1)) for i in range(8))
+        base_state, base = self.go(ScoutState.empty(max_history=2), [snap()])
+        for batch in (future, tuple(reversed(future))):
+            state, appended = self.go(ScoutState.empty(max_history=2), (snap(),) + batch)
+            self.assertEqual(base.result, appended.result)
+            self.assertEqual([x.snapshot_id for x in state.snapshots if x.received_at <= AS_OF],
+                             [x.snapshot_id for x in base_state.snapshots])
+            self.assertLessEqual(len(state.snapshots), 4)
+        # Fed across refreshes, known history is still intact and future ones become known later.
+        state, _ = self.go(ScoutState.empty(max_history=2), (snap(),) + future)
+        # (The not-yet-known buffer is bounded by max_history, earliest first.)
+        state, later = self.go(state, as_of=AS_OF + timedelta(seconds=2))
+        self.assertEqual(later.result.snapshot.snapshot_id, "f1")
+
+    def test_d_s3_conflicting_content_never_first_wins(self):
+        a = snap(sid="x")
+        b = snap(raw_rows(60, price=999), sid="x")
+        c = snap(raw_rows(60, price=777), sid="y")   # other id, same provider basis
+        for batch in ([a, b], [b, a], [a, c], [c, a]):
+            _, report = self.go(ScoutState.empty(), batch)
+            self.assertEqual(report.result.status, sc.INVALID_SNAPSHOT)
+            self.assertEqual(report.result.candidates, ())
+        r1 = self.go(ScoutState.empty(), [a, b])[1].result
+        r2 = self.go(ScoutState.empty(), [b, a])[1].result
+        self.assertEqual(r1, r2)
+        # History versus new batch is symmetric as well.
+        s_a, _ = self.go(ScoutState.empty(), [a])
+        s_b, _ = self.go(ScoutState.empty(), [b])
+        self.assertEqual(self.go(s_a, [b])[1].result, self.go(s_b, [a])[1].result)
+        self.assertEqual(self.go(s_a, [b])[1].result.status, sc.INVALID_SNAPSHOT)
+        # Held positions stay monitored through a disputed ranking.
+        pos = Position("H001", 2)
+        held = refresh(ScoutState.empty(), AS_OF, new_snapshots=[a, b], instruments=instruments(),
+                       liquidity=liquidity(), dayone=dayone(), portfolio=portfolio(positions=[pos]),
+                       risk_config=RISK)[1].result.held
+        self.assertEqual([h.symbol for h in held], ["H001"])
+
+    def test_d_s4_earliest_receipt_wins_in_state_and_direct_selection(self):
+        early = snap(sid="same", received=RECEIVED)
+        late = snap(sid="same", received=RECEIVED + timedelta(seconds=40))
+        for batch in ([early, late], [late, early]):
+            state, _ = self.go(ScoutState.empty(), batch)
+            self.assertEqual([x.received_at for x in state.snapshots], [RECEIVED])
+        # History already holding the LATE copy is corrected by the earlier original.
+        s_late, _ = self.go(ScoutState.empty(), [late])
+        s_fixed, _ = self.go(s_late, [early])
+        self.assertEqual(s_fixed.snapshots[0].received_at, RECEIVED)
+        # Direct selection: same content under different ids, earliest receipt survives.
+        other = snap(sid="other", received=RECEIVED + timedelta(seconds=40))
+        for order in ([early, other], [other, early]):
+            self.assertEqual(run(order, as_of=RECEIVED + timedelta(seconds=45)).snapshot.received_at, RECEIVED)
+        # A later re-delivery never freshens it: stale by the ORIGINAL receipt.
+        stale_at = RECEIVED + ScoutConfig().max_snapshot_age
+        self.assertEqual(run([early, other], as_of=stale_at).status, sc.STALE)
+        # Future copies are dropped before canonicalization.
+        future_copy = snap(sid="fc", received=AS_OF + timedelta(seconds=5))
+        self.assertEqual(to_dict(run([early])), to_dict(run([future_copy, early])))
+
+    def test_d_s5_conflicting_portfolio_fields_are_unknown_not_input_order(self):
+        def pf(price, value):
+            return portfolio(positions=[Position("OLD", 1, value, OBSERVED, price, OBSERVED)])
+        a, b = pf("100", "100"), pf("200", "200")
+        for order in ([a, b], [b, a]):
+            result = run(pf=order)
+            held = result.held[0]
+            self.assertEqual((held.price, held.price_status), (None, "UNKNOWN"))
+            self.assertIn("PRICE_CONFLICT", held.flags)
+            self.assertIn("MARKET_VALUE_CONFLICT", held.flags)
+            self.assertEqual(result.candidates, ())
+        self.assertEqual(run(pf=[a, b]), run(pf=[b, a]))
+        # Quantity conflicts keep the larger quantity and say so; agreeing fields survive.
+        q1 = portfolio(positions=[Position("OLD", 1, "5", OBSERVED, "9", OBSERVED)])
+        q2 = portfolio(positions=[Position("OLD", 4, "5", OBSERVED, "9", OBSERVED)])
+        merged = run(pf=[q1, q2]).held[0]
+        self.assertEqual((merged.quantity, merged.price), (4, Decimal(9)))
+        self.assertIn("QUANTITY_CONFLICT", merged.flags)
+        self.assertEqual(run(pf=[q1, q2]), run(pf=[q2, q1]))
+
+    def test_d_s6_public_constructors_are_strict_and_immutable(self):
+        for bad_rank in (True, False, 0, -1, 1.0, "1"):
+            with self.assertRaises(ValueError):
+                sc.RankedRow(bad_rank, "X001", price=Decimal(100))
+        for bad in (dict(price=1.5), dict(price=True), dict(price=Decimal("NaN")), dict(turnover=-1),
+                    dict(symbol=" ")):
+            with self.assertRaises(ValueError):
+                sc.RankedRow(**{"rank": 1, "symbol": "X001", **bad})
+        self.assertEqual(sc.RankedRow(1, "X001", change_rate="-1.5").change_rate, Decimal("-1.5"))
+        base = snap(raw_rows(3))
+        with self.assertRaises(ValueError):
+            dataclasses.replace(base, rows=(sc.RankedRow(True, "X001"),))
+        with self.assertRaises(ValueError):
+            dataclasses.replace(base, rows=(sc.RankedRow(1, "X001", price=Decimal(5)),))   # digest mismatch
+        mutable = list(base.rows)
+        direct = sc.RankingSnapshot(base.snapshot_id, base.provider, base.source, base.received_at,
+                                    base.provider_ranked_at, base.requested_count, mutable, [],
+                                    base.content_digest)
+        mutable.clear()
+        self.assertIsInstance(direct.rows, tuple)
+        self.assertEqual(direct.rows, base.rows)
+        self.assertIsInstance(direct.defects, tuple)
+        with self.assertRaises(ValueError):
+            sc.RankingSnapshot("", "toss", sc.SOURCE, RECEIVED, RANKED, 100, (), (), "d")
+        with self.assertRaises(ValueError):
+            sc.RankingSnapshot("i", "toss", sc.SOURCE, datetime(2026, 1, 1), RANKED, 100, (), (), "d")
+        with self.assertRaises(ValueError):
+            ScoutState(snapshots=[object()])
+        listy = ScoutState(snapshots=[base], last_candidates=["A"])
+        self.assertEqual((type(listy.snapshots), type(listy.last_candidates)), (tuple, tuple))
+
+    def test_d_s7_opt_out_is_never_fully_eligible_even_with_present_facts(self):
+        for flag in ("require_liquidity", "require_dayone_readiness", "require_capital_check"):
+            kwargs = {flag: False}
+            if flag == "require_liquidity":
+                kwargs.update(min_turnover=None, min_volume=None, max_spread_pct=None)
+            result = run(config=ScoutConfig(**kwargs))       # all facts and portfolio present
+            self.assertTrue(result.candidates, flag)
+            for cand in result.candidates:
+                self.assertFalse(cand.fully_eligible, flag)
+                self.assertEqual(len(cand.verification_gaps), 1, flag)
+        self.assertTrue(all(c.fully_eligible and not c.verification_gaps for c in run().candidates))
 
 
 class ConfigValidationTests(unittest.TestCase):

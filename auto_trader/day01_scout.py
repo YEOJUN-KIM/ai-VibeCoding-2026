@@ -193,6 +193,18 @@ class RankedRow:
     price: Decimal | None = None
     change_rate: Decimal | None = None
 
+    def __post_init__(self):
+        _wrap("rank", _pos_int, self.rank, minimum=1)
+        object.__setattr__(self, "symbol", _wrap("symbol", _sym, self.symbol))
+        for name in ("turnover", "volume", "price"):
+            object.__setattr__(self, name, _wrap(name, _dec, getattr(self, name), optional=True))
+        object.__setattr__(self, "change_rate",
+                           _wrap("change_rate", _dec, self.change_rate, nonneg=False, optional=True))
+
+
+def _row_key(r: "RankedRow"):
+    return (r.rank, r.symbol, str(r.price), str(r.turnover), str(r.volume), str(r.change_rate))
+
 
 @dataclass(frozen=True)
 class RankingSnapshot:
@@ -205,6 +217,30 @@ class RankingSnapshot:
     rows: tuple
     defects: tuple
     content_digest: str  # independent of snapshot_id and received_at
+
+    def __post_init__(self):
+        """Every construction path validates; rows are copied into a canonical tuple and the
+        digest must match the content, so a mutable or inconsistent snapshot cannot exist."""
+        for name in ("snapshot_id", "provider", "source", "content_digest"):
+            if not isinstance(getattr(self, name), str) or not getattr(self, name):
+                raise ValueError(f"{name} must be a non-empty str")
+        object.__setattr__(self, "received_at", _wrap("received_at", _utc, self.received_at))
+        object.__setattr__(self, "provider_ranked_at",
+                           _wrap("provider_ranked_at", _utc, self.provider_ranked_at, optional=True))
+        if type(self.requested_count) is not int or self.requested_count < 1:
+            raise ValueError("requested_count must be an int >= 1")
+        rows = tuple(self.rows)
+        if not all(isinstance(r, RankedRow) for r in rows):
+            raise ValueError("rows must be RankedRow objects")
+        rows = tuple(sorted(rows, key=_row_key))
+        defects = tuple(self.defects)
+        if not all(isinstance(d, str) for d in defects):
+            raise ValueError("defects must be strings")
+        object.__setattr__(self, "rows", rows)
+        object.__setattr__(self, "defects", defects)
+        expected = _digest(self.provider, self.source, self.provider_ranked_at, self.requested_count, rows)
+        if self.content_digest != expected:
+            raise ValueError("content_digest does not match snapshot content")
 
 
 @dataclass(frozen=True)
@@ -224,7 +260,8 @@ def _digest(provider: str, source: str, ranked_at, requested_count: int, rows: t
         "ranked_at": ranked_at.isoformat() if ranked_at else None,
         "requested_count": requested_count,
         "rows": [[r.rank, r.symbol, *(None if v is None else str(v) for v in
-                                      (r.turnover, r.volume, r.price, r.change_rate))] for r in rows],
+                                      (r.turnover, r.volume, r.price, r.change_rate))]
+                 for r in sorted(rows, key=_row_key)],
     }
     return hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
@@ -279,8 +316,7 @@ def snapshot_from_rankings(ranked_at: Any, rankings: Any, *, received_at: Any,
                 defects.append(_row_defect(index, f"BAD_{name.upper()}"))
         rows.append(RankedRow(rank=rank, symbol=symbol, **values))
     # Canonical order (by rank, symbol, values) so content identity ignores provider row order.
-    rows_t = tuple(sorted(rows, key=lambda r: (r.rank, r.symbol, str(r.price), str(r.turnover),
-                                               str(r.volume), str(r.change_rate))))
+    rows_t = tuple(sorted(rows, key=_row_key))
     digest = _digest(provider, SOURCE, ranked, requested_count, rows_t)
     return RankingSnapshot(
         snapshot_id=snapshot_id or f"snap-{digest[:16]}", provider=provider, source=SOURCE,
@@ -578,27 +614,52 @@ def _evidence(kind: str, fact, as_of: datetime, max_age: timedelta) -> Evidence:
                     int(age.total_seconds()))
 
 
-def _select_snapshot(as_of: datetime, snapshots, config: ScoutConfig):
-    """Return (status, snapshot|None, rejections). Snapshots received after as_of are ignored
-    entirely, so appending future snapshots never changes the result (prefix invariance)."""
-    rejections = []
-    usable = []
+def _canonical_snapshots(as_of: datetime, snapshots, config: ScoutConfig):
+    """Causal, order-independent view of the snapshots known at as_of.
+
+    1. Snapshots received after as_of are dropped FIRST (prefix invariance).
+    2. Other providers are rejected explicitly.
+    3. Identical content (same provider+digest, whatever the id) collapses to ONE snapshot with
+       the EARLIEST receipt, so a repeated cached rankedAt can never renew its age.
+    Different content that shares a snapshot_id or a provider basis (rankedAt) is a dispute;
+    nothing wins by input order. Returns (snapshots, disputed ids+digests, rejections).
+    """
+    groups: dict[str, RankingSnapshot] = {}
+    rejections = set()
     for snap in snapshots:
         if snap.received_at > as_of:
             continue
         if snap.provider != config.provider:
-            rejections.append((snap.snapshot_id, "PROVIDER_MISMATCH"))
+            rejections.add((snap.snapshot_id, "PROVIDER_MISMATCH"))
             continue
-        usable.append(snap)
+        cur = groups.get(snap.content_digest)
+        if cur is None or (snap.received_at, snap.snapshot_id) < (cur.received_at, cur.snapshot_id):
+            groups[snap.content_digest] = snap
+    usable = list(groups.values())
+    by_id: dict[str, set] = {}
+    by_basis: dict[datetime, set] = {}
+    for snap in usable:
+        by_id.setdefault(snap.snapshot_id, set()).add(snap.content_digest)
+        if snap.provider_ranked_at is not None:
+            by_basis.setdefault(snap.provider_ranked_at, set()).add(snap.content_digest)
+    disputed = {snap.content_digest for snap in usable
+                if len(by_id[snap.snapshot_id]) > 1
+                or (snap.provider_ranked_at is not None and len(by_basis[snap.provider_ranked_at]) > 1)}
+    return usable, disputed, tuple(sorted(rejections))
+
+
+def _select_snapshot(as_of: datetime, snapshots, config: ScoutConfig):
+    """Return (status, snapshot|None, rejections)."""
+    usable, disputed, rejections = _canonical_snapshots(as_of, snapshots, config)
     if not usable:
-        return NO_SNAPSHOT, None, tuple(rejections)
+        return NO_SNAPSHOT, None, rejections
     # Latest by actual receipt, then provider time (None sorts first), then digest/id.
-    # An invalid latest blocks; it is never prefiltered so that an older snapshot takes over.
+    # An invalid or disputed latest blocks; an older snapshot never takes over.
     latest = max(usable, key=lambda s: (s.received_at, s.provider_ranked_at or datetime.min.replace(tzinfo=timezone.utc),
                                         s.content_digest, s.snapshot_id))
-    if any(s.snapshot_id == latest.snapshot_id and s.content_digest != latest.content_digest
-           for s in usable):
-        return INVALID_SNAPSHOT, latest, tuple(rejections + [(latest.snapshot_id, "SNAPSHOT_ID_CONFLICT")])
+    if latest.content_digest in disputed:
+        return INVALID_SNAPSHOT, latest, rejections + ((latest.snapshot_id, "SNAPSHOT_CONFLICT"),)
+    rejections = tuple(rejections)
     ranked = latest.provider_ranked_at
     if ranked is None:
         return UNKNOWN_PROVIDER_TIME, latest, tuple(rejections)
@@ -608,7 +669,7 @@ def _select_snapshot(as_of: datetime, snapshots, config: ScoutConfig):
         return DAY_ROLLOVER, latest, tuple(rejections)
     if latest.received_at - ranked >= config.max_receive_lag:
         # A fresh receipt cannot revive an old provider basis.
-        return STALE, latest, tuple(rejections + [(latest.snapshot_id, "PROVIDER_BASIS_STALE")])
+        return STALE, latest, rejections + ((latest.snapshot_id, "PROVIDER_BASIS_STALE"),)
     if as_of - latest.received_at >= config.max_snapshot_age:
         return STALE, latest, tuple(rejections)
     return OK, latest, tuple(rejections)
@@ -630,6 +691,33 @@ def _usable_rows(snap: RankingSnapshot, depth: int):
         else:
             good.append(row)
     return good, conflicts
+
+
+def _conflict_position(variants: list) -> Position:
+    """Union of one symbol across conflicting portfolios: quantity is the largest (conservative
+    for monitoring); any field the variants disagree on becomes UNKNOWN and is flagged, so the
+    input order never chooses a price or valuation."""
+    first = variants[0]
+    defects = {d for v in variants for d in v.defects}
+    values = {}
+    for name in ("market_value", "market_value_observed_at", "price", "price_observed_at"):
+        distinct = {getattr(v, name) for v in variants}
+        if len(distinct) == 1:
+            values[name] = distinct.pop()
+        else:
+            values[name] = None
+            defects.add(f"{name.upper()}_CONFLICT")
+    quantity = max(v.quantity for v in variants)
+    if len({v.quantity for v in variants}) > 1:
+        defects.add("QUANTITY_CONFLICT")
+    return Position(first.symbol, quantity, defects=tuple(sorted(defects)), **values)
+
+
+def _conflict_portfolio(latest: datetime, top: list) -> Portfolio:
+    symbols = sorted({pos.symbol for p in top for pos in p.positions})
+    positions = tuple(_conflict_position([pos for p in top for pos in p.positions if pos.symbol == sym])
+                      for sym in symbols)
+    return Portfolio(observed_at=latest, cash=min(p.cash for p in top), positions=positions)
 
 
 def _resolve_portfolio(as_of: datetime, portfolio, config: ScoutConfig):
@@ -655,14 +743,7 @@ def _resolve_portfolio(as_of: datetime, portfolio, config: ScoutConfig):
         if p.observed_at == latest and p not in top:
             top.append(p)
     if len(top) > 1:
-        merged: dict[str, Position] = {}
-        for p in top:
-            for pos in p.positions:
-                if pos.symbol not in merged or pos.quantity > merged[pos.symbol].quantity:
-                    merged[pos.symbol] = pos
-        monitor_only = Portfolio(observed_at=latest, cash=top[0].cash,
-                                 positions=tuple(merged[k] for k in sorted(merged)))
-        return monitor_only, "CONFLICT"
+        return _conflict_portfolio(latest, top), "CONFLICT"
     p = top[0]
     return p, ("STALE" if as_of - p.observed_at >= config.max_portfolio_age else "FRESH")
 
@@ -867,12 +948,12 @@ def select_watchlist(as_of: Any, snapshots, *, instruments=(), liquidity=(), day
                     if not ok:
                         reasons.append(why)
 
+            if not config.require_liquidity:
+                gaps.append("LIQUIDITY_UNVERIFIED")  # explicit opt-out is never fully eligible
             liq, state = fact_of("LIQUIDITY", liquidity, "")
             if liq is None:
                 if config.require_liquidity:
                     reasons.append(f"LIQUIDITY_{state}")
-                else:
-                    gaps.append("LIQUIDITY_UNVERIFIED")
             else:
                 limits = ((liq.turnover, config.min_turnover, "TURNOVER"),
                           (liq.volume, config.min_volume, "VOLUME"))
@@ -891,18 +972,16 @@ def select_watchlist(as_of: Any, snapshots, *, instruments=(), liquidity=(), day
 
             day, state = fact_of("DAY01_READINESS", dayone, "")
             bars_pts = or_pts = vwap_pts = Decimal(0)
+            if not config.require_dayone_readiness:
+                gaps.append("DAY01_READINESS_UNVERIFIED")
             if day is None:
                 if config.require_dayone_readiness:
                     reasons.append(f"DAY01_READINESS_{state}")
-                else:
-                    gaps.append("DAY01_READINESS_UNVERIFIED")
             else:
                 bars = day.completed_1m_bars
                 if bars is None or day.opening_range_ready is None or day.vwap_ready is None:
                     if config.require_dayone_readiness:
                         reasons.append("DAY01_READINESS_UNKNOWN")
-                    else:
-                        gaps.append("DAY01_READINESS_UNVERIFIED")
                 else:
                     if config.require_dayone_readiness:
                         if bars < config.min_completed_1m_bars:
@@ -924,7 +1003,7 @@ def select_watchlist(as_of: Any, snapshots, *, instruments=(), liquidity=(), day
                                for c in checks if not c.passed)
             elif config.require_capital_check:
                 reasons.append(f"PORTFOLIO_{port_state}")
-            else:
+            if not config.require_capital_check:
                 gaps.append("CAPITAL_UNVERIFIED")
             evidence.append(Evidence("PORTFOLIO", "FRESH" if port_state == "FRESH" else port_state,
                                      portfolio.observed_at if portfolio else None,
@@ -981,16 +1060,28 @@ def select_watchlist(as_of: Any, snapshots, *, instruments=(), liquidity=(), day
 
 @dataclass(frozen=True)
 class ScoutState:
+    """Snapshot history. Holds snapshots known at the last refresh plus (bounded) snapshots
+    received after it; the latter never count toward, evict, or influence anything known."""
     last_as_of: datetime | None = None
     snapshots: tuple = ()
     last_candidates: tuple = ()
     last_snapshot_id: str | None = None
     max_history: int = 8
+    last_snapshot_digest: str | None = None
+
+    def __post_init__(self):
+        if type(self.max_history) is not int or self.max_history < 1:
+            raise ValueError("max_history must be an int >= 1")
+        snapshots = tuple(self.snapshots)
+        if not all(isinstance(x, RankingSnapshot) for x in snapshots):
+            raise ValueError("snapshots must be RankingSnapshot objects")
+        object.__setattr__(self, "snapshots", snapshots)
+        object.__setattr__(self, "last_candidates", tuple(self.last_candidates))
+        if self.last_as_of is not None:
+            object.__setattr__(self, "last_as_of", _wrap("last_as_of", _utc, self.last_as_of))
 
     @staticmethod
     def empty(max_history: int = 8) -> "ScoutState":
-        if type(max_history) is not int or max_history < 1:
-            raise ValueError("max_history must be an int >= 1")
         return ScoutState(max_history=max_history)
 
 
@@ -1013,34 +1104,35 @@ class FetchOutcome:
     reason: str | None = None
 
 
-def _merge(snapshots: tuple, incoming, max_history: int):
-    stored = list(snapshots)
+def _merge(snapshots: tuple, incoming, as_of: datetime, max_history: int):
+    """Store snapshots without ever choosing a winner between disputed contents.
+
+    Identical content collapses to the earliest receipt (never renewed). Conflicting content
+    (same id, or same provider basis) is stored side by side and disputed at selection, so the
+    outcome does not depend on arrival order or on history-versus-batch. Pruning counts only
+    snapshots known at as_of; later-received ones are kept separately (bounded) and cannot
+    evict known history.
+    """
+    by_key: dict[tuple, RankingSnapshot] = {}
+    for old in snapshots:
+        key = (old.provider, old.content_digest)
+        cur = by_key.get(key)
+        if cur is None or (old.received_at, old.snapshot_id) < (cur.received_at, cur.snapshot_id):
+            by_key[key] = old
     ingested, rejected = [], []
     for snap in incoming:
         if not isinstance(snap, RankingSnapshot):
             rejected.append((None, "NOT_A_SNAPSHOT"))
             continue
-        same_id = next((s for s in stored if s.snapshot_id == snap.snapshot_id), None)
-        if same_id is not None:
-            if same_id.content_digest != snap.content_digest:
-                rejected.append((snap.snapshot_id, "SNAPSHOT_ID_CONFLICT"))
-            continue  # idempotent
-        twin = next((s for s in stored if s.provider == snap.provider
-                     and s.content_digest == snap.content_digest), None)
-        if twin is not None:  # same provider content again: keep the ORIGINAL (earliest) receipt
-            if snap.received_at < twin.received_at:
-                stored[stored.index(twin)] = snap
-                ingested.append(snap.snapshot_id)
-            continue
-        if snap.provider_ranked_at is not None and any(
-                s.provider == snap.provider and s.provider_ranked_at == snap.provider_ranked_at
-                for s in stored):
-            rejected.append((snap.snapshot_id, "SAME_RANKED_AT_DIFFERENT_CONTENT"))
-            continue
-        stored.append(snap)
-        ingested.append(snap.snapshot_id)
-    stored.sort(key=lambda s: (s.received_at, s.snapshot_id))
-    return tuple(stored[-max_history:]), tuple(ingested), tuple(rejected)
+        key = (snap.provider, snap.content_digest)
+        cur = by_key.get(key)
+        if cur is None or (snap.received_at, snap.snapshot_id) < (cur.received_at, cur.snapshot_id):
+            by_key[key] = snap
+            ingested.append(snap.snapshot_id)
+    ordered = sorted(by_key.values(), key=lambda x: (x.received_at, x.snapshot_id, x.content_digest))
+    known = [x for x in ordered if x.received_at <= as_of]
+    later = [x for x in ordered if x.received_at > as_of]
+    return tuple(known[-max_history:] + later[:max_history]), tuple(ingested), tuple(rejected)
 
 
 def refresh(state: ScoutState, as_of: Any, *, new_snapshots=(), instruments=(), liquidity=(),
@@ -1051,7 +1143,7 @@ def refresh(state: ScoutState, as_of: Any, *, new_snapshots=(), instruments=(), 
     as_of = _as_of(as_of)
     if state.last_as_of is not None and as_of < state.last_as_of:
         return state, RefreshReport("AS_OF_REGRESSION", (), (), (), False, (), (), None)
-    merged, ingested, rejected = _merge(state.snapshots, tuple(new_snapshots), state.max_history)
+    merged, ingested, rejected = _merge(state.snapshots, tuple(new_snapshots), as_of, state.max_history)
     today = _kst_date(as_of)
     # Day rollover: drop snapshots received on an earlier KST day (never future-received ones).
     merged = tuple(s for s in merged if s.received_at > as_of or _kst_date(s.received_at) >= today)
@@ -1061,13 +1153,14 @@ def refresh(state: ScoutState, as_of: Any, *, new_snapshots=(), instruments=(), 
     previous = state.last_candidates
     new_state = dataclasses.replace(
         state, last_as_of=as_of, snapshots=merged, last_candidates=now_symbols,
-        last_snapshot_id=result.snapshot.snapshot_id if result.snapshot and result.status == OK else None)
+        last_snapshot_id=result.snapshot.snapshot_id if result.snapshot and result.status == OK else None,
+        last_snapshot_digest=result.snapshot.content_digest if result.snapshot and result.status == OK else None)
     report = RefreshReport(
         status="REFRESHED",
         added=tuple(s for s in now_symbols if s not in previous),
         removed=tuple(s for s in previous if s not in now_symbols),
         unchanged=tuple(s for s in now_symbols if s in previous),
-        snapshot_changed=new_state.last_snapshot_id != state.last_snapshot_id,
+        snapshot_changed=new_state.last_snapshot_digest != state.last_snapshot_digest,
         ingested=ingested, rejected=rejected + result.snapshot_rejections, result=result)
     return new_state, report
 
@@ -1093,9 +1186,7 @@ def ingest_fetch(state: ScoutState, fetch: Callable[[], Any], *, clock: Callable
                                      requested_count=requested_count)
     except Exception as exc:  # fail closed; type name only, messages may carry sensitive text
         return state, FetchOutcome("FETCH_FAILED", None, type(exc).__name__)
-    merged, ingested, rejected = _merge(state.snapshots, (snap,), state.max_history)
-    if rejected:
-        return state, FetchOutcome("REJECTED", snap.snapshot_id, rejected[0][1])
+    merged, ingested, _ = _merge(state.snapshots, (snap,), _utc(clock()), state.max_history)
     status = "INGESTED" if ingested else "DUPLICATE"
     return dataclasses.replace(state, snapshots=merged), FetchOutcome(status, snap.snapshot_id)
 
