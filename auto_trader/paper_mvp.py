@@ -5,8 +5,9 @@ entry/exit signals, sizing, costs and fills, and `PaperBroker` + `RiskManager` s
 Nothing here can place a real order: the controller only accepts a `PaperBroker`, this module imports no
 broker/LIVE order code (checked by a test), and market data comes from an injected `MvpDataSource`.
 
-PAPER-SAFETY-01: the MVP never leaves its settings on the shared engine/risk manager. They are applied when a run
-starts and the user's previous strategy/risk settings are restored when it ends (or after a crash, via `recover`).
+PAPER-SETTINGS-01: the MVP settings are the only automatic-trading settings. Their limits live in memory on the risk
+manager (`AutoLimits`) only while a run is active, are measured against automatic holdings, and never limit manual
+orders; the persistent risk settings are never written. Engine parameters are restored when the run ends.
 
 Fail-closed rules (each tested): no data source, stale data, undeclared clock uncertainty, a Scout HOLD or a
 provider error all mean "no new entries". Held lots keep their own exit rules; they are never rewritten by a
@@ -19,7 +20,7 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from decimal import Decimal, ROUND_DOWN, ROUND_UP
+from decimal import Decimal, ROUND_DOWN
 from typing import Literal, Protocol
 
 from pydantic import BaseModel, Field
@@ -28,8 +29,9 @@ from . import day01_scout as sc
 from .day01_scout_link import portfolio_limits_for
 from .day01_scout_pipeline import PROCEED, run_scout_pipeline
 from .ml.day01 import Config as Day01Config
-from .models import RiskPreset, RiskSettings, RiskSettingsUpdate, Stock
+from .models import Stock
 from .paper import PaperBroker
+from .risk import AutoLimits
 from .trading import KST
 
 STALE_AFTER = timedelta(seconds=90)
@@ -155,34 +157,39 @@ class PaperMvp:
         cap = min(cap, Decimal(s.budget)).quantize(Decimal(1), rounding=ROUND_DOWN)
         if cap < 1:
             raise MvpError("종목당 한도가 너무 작습니다.")
-        cash_ratio = min(Decimal(100), max(Decimal(0), (100 - Decimal(s.budget) / total * 100)).quantize(Decimal("0.01"), rounding=ROUND_UP))
         loss = max(Decimal(1), (total * s.daily_loss_pct / 100).quantize(Decimal(1), rounding=ROUND_DOWN))
-        return total, cap, cash_ratio, loss
+        return total, cap, loss
+
+    def auto_limits(self, s: MvpSettings | None = None) -> AutoLimits:
+        """The automatic run's limits. Held only in memory by the risk manager while a run is active; manual orders never see them."""
+        _, cap, loss = self._limits(s or self.settings())
+        s = s or self.settings()
+        return AutoLimits(max_order_amount=cap, max_symbol_amount=cap, max_total_investment=Decimal(s.budget), daily_loss_limit=loss)
 
     def day01_config(self, s: MvpSettings | None = None) -> Day01Config:
         s = s or self.settings()
-        total, cap, cash_ratio, loss = self._limits(s)
+        total, cap, loss = self._limits(s)
         return Day01Config(
             execution="research_estimated_open", vwap_mode="exact", sizing="AFFORDABLE_UP_TO_CAP", order_quantity=1000,
             initial_cash=total, fee_rate=self.broker.fee_rate, sell_tax_rate=self.broker.sell_tax_rate,
             slippage_rate=self.broker.slippage_rate, max_order_amount=cap, max_symbol_amount=cap,
-            max_total_investment=Decimal(s.budget), max_positions=s.max_holdings, min_cash_ratio=cash_ratio,
+            max_total_investment=Decimal(s.budget), max_positions=s.max_holdings, min_cash_ratio=Decimal(0),
             daily_loss_limit=loss, daily_order_limit=s.daily_buys or 100)
 
     def apply(self, s: MvpSettings, *, activate: bool = True) -> MvpSettings:
-        """Validate and save the settings. With `activate` (start-of-run) they are also pushed to the shared engine and
-        risk manager after saving the user's current ones for `_release`; the settings page saves with activate=False so
-        it never touches a strategy the user runs outside the MVP. Existing lots keep the exit rules they were bought
-        with (the broker stores them per lot); only future buys use the new values."""
+        """Validate and save the settings. With `activate` (start-of-run) they also become the automatic run's limits and
+        engine parameters; the settings page saves with activate=False. Saved settings never touch the persistent risk
+        settings (which serve LIVE previews and legacy strategies) and never limit manual orders. Existing lots keep the
+        exit rules they were bought with (stored per lot); only future buys use the new values."""
         if self.engine.running:
             raise MvpConflict("자동매매를 일시정지한 뒤 설정을 변경하세요.")
-        total, cap, cash_ratio, loss = self._limits(s)
+        self._limits(s)                               # validation only
         self.broker.update_mvp(settings=s.model_dump(mode="json"))
         if activate:
-            self._activate(s, cap, cash_ratio, loss, total)
+            self._activate(s)
         return s
 
-    # ---- shared-settings isolation
+    # ---- run-scoped engine parameters (in memory only; restored when the run ends)
     def _capture_legacy(self) -> dict:
         e = self.engine
         return dict(
@@ -192,42 +199,36 @@ class PaperMvp:
                         trading_start=e.trading_start.strftime("%H:%M"), trading_end=e.trading_end.strftime("%H:%M"),
                         cooldown_minutes=e.cooldown_minutes, daily_order_limit=e.daily_order_limit, sizing_mode=e.sizing_mode,
                         order_amount=e.order_amount, strategy_id=e.strategy_id, strategy_name=e.strategy_name),
-            price_feed=e.price_feed, count_sells=e.count_sells_in_daily_limit, risk=self.broker.risk_manager.settings())
+            price_feed=e.price_feed, count_sells=e.count_sells_in_daily_limit)
 
-    @staticmethod
-    def _risk_update(risk: RiskSettings) -> RiskSettingsUpdate:
-        if risk.preset != RiskPreset.CUSTOM:
-            return RiskSettingsUpdate(preset=risk.preset)
-        return RiskSettingsUpdate(**risk.model_dump(exclude={"updated_at"}))
-
-    def _activate(self, s: MvpSettings, cap: Decimal, cash_ratio: Decimal, loss: Decimal, total: Decimal):
+    def _activate(self, s: MvpSettings):
         eng = self.engine
+        limits = self.auto_limits(s)
         if self._legacy is None:
             self._legacy = self._capture_legacy()
-            self.broker.update_mvp(risk_before=self._legacy["risk"].model_dump(mode="json", exclude={"updated_at"}))
         cooldowns = dict(eng._last_order_at)           # configure() clears them; a restart must not bypass the cooldown
         try:
-            self.broker.risk_manager.update(RiskSettingsUpdate(
-                preset=RiskPreset.CUSTOM, max_order_amount=cap, max_symbol_amount=cap,
-                max_total_investment=Decimal(s.budget), min_cash_ratio=cash_ratio, daily_loss_limit=loss,
-                daily_order_limit=0, profit_target=max(total, Decimal(1))))
             eng.configure(interval_seconds=eng.interval_seconds, short_period=eng.short_period, long_period=eng.long_period,
-                          order_quantity=eng.order_quantity, target_symbols=[], sizing_mode="AMOUNT", order_amount=cap,
+                          order_quantity=eng.order_quantity, target_symbols=[], sizing_mode="AMOUNT", order_amount=limits.max_order_amount,
                           take_profit_rate=s.take_pct, stop_loss_rate=s.stop_pct, max_holding_days=s.max_days,
                           daily_order_limit=s.daily_buys, strategy_name="PAPER-MVP Scout")
             eng._last_order_at.update(cooldowns)
             eng.count_sells_in_daily_limit = False      # the daily limit is a BUY limit; exits are never limited
+            self.broker.risk_manager.auto_limits = limits
             eng.run_release = self._release
         except Exception:
             self._release()
             raise
-        self._log("CONTROL", "투자 설정 적용", f"{s.profile} · 투자 {s.budget:,}원 · 종목당 {cap:,}원 · 최대 {s.max_holdings}종목 · "
-                  f"하루 손실 {loss:,}원 · 신규 매수부터 적용(기존 보유분 청산 기준 유지) · 운용이 끝나면 이전 설정으로 복원")
+        self._log("CONTROL", "투자 설정 적용", f"{s.profile} · 투자 {s.budget:,}원 · 종목당 {limits.max_order_amount:,}원 · 최대 {s.max_holdings}종목 · "
+                  f"하루 손실 {limits.daily_loss_limit:,}원 · 자동매매에만 적용(수동 주문 제외) · 신규 매수부터 적용(기존 보유분 청산 기준 유지)")
 
     def _release(self):
-        """Give the shared engine and risk manager back their pre-MVP settings (idempotent; no-op while running)."""
+        """End of an automatic run: drop its limits and give the engine back its pre-MVP parameters (idempotent; no-op while running)."""
         legacy, eng, log = self._legacy, self.engine, logging.getLogger("auto_trader.paper_mvp")
-        if legacy is None or eng.running:
+        if eng.running:
+            return
+        self.broker.risk_manager.auto_limits = None    # limits exist only while a run is active
+        if legacy is None:
             return
         cooldowns = dict(eng._last_order_at)
         try:
@@ -241,21 +242,6 @@ class PaperMvp:
             return
         eng.price_feed, eng.count_sells_in_daily_limit = legacy["price_feed"], legacy["count_sells"]
         eng.candidate_provider, eng.candidate_message, eng.run_release = None, "", None
-        try:
-            self.broker.risk_manager.update(self._risk_update(legacy["risk"]))
-            self.broker.update_mvp(risk_before=None)
-        except Exception:
-            log.exception("Could not restore the risk settings; they stay saved for recover()")
-
-    def recover(self) -> bool:
-        """After a crash the MVP risk limits can outlive the run. Restore the risk settings saved before it."""
-        saved = self.broker.mvp_state().get("risk_before")
-        if not saved or self._legacy is not None or self.engine.running:
-            return False
-        self.broker.risk_manager.update(self._risk_update(RiskSettings.model_validate(saved)))
-        self.broker.update_mvp(risk_before=None)
-        self._log("CONTROL", "이전 위험 설정 복구", "비정상 종료로 남은 모의투자 한도를 시작 전 위험 설정으로 되돌렸습니다.")
-        return True
 
     def _mine(self) -> bool:
         return bool(self.engine.running and self.engine.candidate_provider == self._candidates)
@@ -273,7 +259,6 @@ class PaperMvp:
             raise MvpConflict(reason)
         if self.broker.management_scope != "AUTO":
             raise MvpConflict("관리 범위에 수동 보유분이 포함되어 있어 시작할 수 없습니다. 관리 범위를 '자동매매 보유분'으로 바꾸세요.")
-        self.recover()
         try:
             self.apply(self.settings(), activate=True)   # always run with explicitly validated, applied settings
             self._record_equity(force=True)
@@ -325,11 +310,11 @@ class PaperMvp:
         s = self.settings()
         cfg = self.day01_config(s)
         account = self.broker.account()
-        risk = self.broker.risk_manager.status()
-        positions = tuple(sc.Position(p.symbol, p.quantity, p.market_value, data.as_of, p.current_price, data.as_of)
-                          for p in account.positions)
+        risk = self.broker.risk_manager.auto_status(self.auto_limits(s))
+        positions = tuple(sc.Position(sym, self.broker.strategy_quantity(sym), self.broker.strategy_symbol_value(sym), data.as_of,
+                                      self.engine.market.quote(sym).price, data.as_of) for sym in self.broker.strategy_symbols())
         portfolio = sc.Portfolio(data.as_of, cash=account.cash, total_asset=account.total_asset, positions=positions,
-                                 daily_loss=max(Decimal(0), -risk.daily_profit), **portfolio_limits_for(cfg))
+                                 daily_loss=max(Decimal(0), -risk["daily_profit"]), **portfolio_limits_for(cfg))
         result = run_scout_pipeline(
             as_of=data.as_of, snapshot=data.snapshot, candle_rows=data.candle_rows, orderbook_results=data.orderbooks,
             instruments=data.instruments, portfolio=portfolio, day01_config=cfg, clock_uncertainty=data.clock_uncertainty,
@@ -342,8 +327,8 @@ class PaperMvp:
         if result.decision != PROCEED:
             self._hold("SCOUT_HOLD", "Scout 판단 보류: " + ", ".join(result.hold_reasons), notes=result.hold_reasons)
             return []
-        held = self._held()
-        free = max(0, s.max_holdings - len(held))
+        held = self._held()                                       # symbols NOT to buy again: automatic and manual holdings
+        free = max(0, s.max_holdings - len(self.broker.strategy_symbols()))   # the holdings cap counts automatic holdings only
         chosen = [sym for sym in result.passed if sym not in held][:free]
         for sym in chosen:
             price = self.source.price(sym, now)
@@ -388,7 +373,7 @@ class PaperMvp:
         now = self._clock()
         account = broker.account()
         strategy = eng.status()
-        risk = broker.risk_manager.status()
+        risk = broker.risk_manager.auto_status(self.auto_limits())
         if strategy.running and not self._mine():
             state, label = "other", "다른 PAPER 전략 실행 중"
         elif strategy.running:
@@ -429,9 +414,10 @@ class PaperMvp:
                          realized_profit=str(account.realized_profit), unrealized_profit=str(account.unrealized_profit),
                          total_fees=str(account.total_fees)),
             pnl=pnl, settings=self.settings().model_dump(mode="json"),
-            risk=dict(new_buys_allowed=risk.new_buys_allowed, block_reason=risk.block_reason, daily_profit=str(risk.daily_profit),
-                      invested_amount=str(risk.invested_amount), max_total_investment=str(risk.settings.max_total_investment),
-                      max_symbol_amount=str(risk.settings.max_symbol_amount), daily_loss_limit=str(risk.settings.daily_loss_limit)),
+            risk=dict(new_buys_allowed=risk["new_buys_allowed"], block_reason=risk["block_reason"], daily_profit=str(risk["daily_profit"]),
+                      invested_amount=str(risk["invested_amount"]), max_total_investment=str(risk["max_total_investment"]),
+                      max_symbol_amount=str(risk["max_symbol_amount"]), daily_loss_limit=str(risk["daily_loss_limit"]),
+                      scope="자동매매 보유분·손익 기준(수동 주문에는 적용되지 않음)"),
             holdings=holdings, trades=trades, decisions=list(reversed(broker.mvp_state().get("decisions", []))),
             series=[[t.isoformat(), str(v)] for t, v in samples], checked_at=now.isoformat())
 
@@ -460,8 +446,4 @@ def controller_for(broker, engine, *, source=None, clock=None, bind=False) -> Pa
     key = id(engine)
     if key not in _CONTROLLERS or _CONTROLLERS[key].engine is not engine or _CONTROLLERS[key].broker is not broker:
         _CONTROLLERS[key] = PaperMvp(broker, engine, source=source, clock=clock, bind=bind)
-        try:
-            _CONTROLLERS[key].recover()
-        except Exception:
-            logging.getLogger("auto_trader.paper_mvp").exception("Could not recover pre-MVP risk settings")
     return _CONTROLLERS[key]

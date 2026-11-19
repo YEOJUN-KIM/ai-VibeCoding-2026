@@ -51,8 +51,10 @@ class SafetyRegressionTests(MvpBase):
         async def scenario():
             await self.mvp.start()
             self.assertEqual(self.engine.stop_loss_rate, Decimal(5))       # MVP values are active during the run
-            self.assertEqual(self.broker.risk_manager.settings().preset.value, "CUSTOM")
+            self.assertIsNotNone(self.broker.risk_manager.auto_limits)           # run-scoped, in memory
+            self.assertEqual(self.broker.risk_manager.settings().preset.value, "CONSERVATIVE")
             await self.mvp.stop()
+            self.assertIsNone(self.broker.risk_manager.auto_limits)
         run(scenario())
         self.assert_legacy_restored()
 
@@ -75,17 +77,6 @@ class SafetyRegressionTests(MvpBase):
             await self.mvp.stop()
             return kept
         self.assertTrue(run(scenario()))
-
-    def test_crash_leftover_risk_settings_are_recovered(self):
-        """If the app dies mid-run the CUSTOM MVP limits stay in the DB; the next controller restores the saved ones."""
-        self.legacy_setup()
-        self.mvp.apply(self.balanced())                     # activates: snapshot persisted, engine never ran
-        self.assertEqual(self.broker.risk_manager.settings().preset.value, "CUSTOM")
-        self.engine.run_release = None                      # simulate process death: no in-memory release
-        reborn = PaperMvp(self.broker, self.engine, source=self.source, clock=self.clock, bind=False)
-        reborn.recover()
-        self.assertEqual(self.broker.risk_manager.settings().preset.value, "CONSERVATIVE")
-        self.assertIsNone(self.broker.mvp_state().get("risk_before"))
 
     # --- C/D. another strategy running, ownership ---------------------------------------------
     def test_start_refused_while_another_paper_strategy_runs(self):
@@ -199,16 +190,6 @@ class SafetyRegressionTests(MvpBase):
         self.assertEqual(run(scenario()), (True, True))
         self.assertIsNone(self.mvp._legacy)
         self.assert_legacy_restored()
-
-    def test_account_load_restores_leftover_risk_limits(self):
-        from auto_trader import paper, risk
-        self.legacy_setup()
-        self.mvp.apply(self.balanced())                 # risk is now CUSTOM with MVP limits, snapshot persisted
-        reloaded = paper.PaperBroker(self.market, self.CASH, account_name="mvp-test")
-        reloaded.initialize()
-        reloaded.set_risk_manager(risk.RiskManager(self.market))
-        self.assertEqual(reloaded.risk_manager.settings().preset.value, "CONSERVATIVE")
-        self.assertIsNone(reloaded.mvp_state().get("risk_before"))
 
 
 if __name__ == "__main__":

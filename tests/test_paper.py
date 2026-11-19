@@ -167,9 +167,11 @@ class PaperMemoryTests(unittest.TestCase):
             preset=RiskPreset.CUSTOM, max_order_amount=Decimal("1"), max_symbol_amount=Decimal("1"),
             max_total_investment=Decimal("1"), min_cash_ratio=Decimal("0"),
             daily_loss_limit=Decimal("100000"), daily_order_limit=10, profit_target=Decimal("100000")))
-        order = self.buy()
+        order = self.broker.submit(OrderRequest(symbol="005930", side="BUY", quantity=1), source="STRATEGY")
         self.assertEqual(order.status.value, "REJECTED")
         self.assertIn("위험 한도", order.message)
+        # PAPER-SETTINGS-01: the saved limits belong to strategy orders; a manual order is not limited by them.
+        self.assertEqual(self.broker.submit(OrderRequest(symbol="005930", side="BUY", quantity=1)).status.value, "FILLED")
 
     def test_temporary_paper_exceptions_do_not_disable_other_limits(self):
         broker = paper.PaperBroker(
@@ -184,8 +186,8 @@ class PaperMemoryTests(unittest.TestCase):
             max_symbol_amount=Decimal("1000000"), max_total_investment=Decimal("1000000"),
             min_cash_ratio=Decimal("50"), daily_loss_limit=Decimal("1000000"),
             daily_order_limit=1, profit_target=Decimal("1000000")))
-        first = broker.submit(OrderRequest(symbol="005930", side="BUY", quantity=1))
-        second = broker.submit(OrderRequest(symbol="005930", side="BUY", quantity=1))
+        first = broker.submit(OrderRequest(symbol="005930", side="BUY", quantity=1), source="STRATEGY")
+        second = broker.submit(OrderRequest(symbol="005930", side="BUY", quantity=1), source="STRATEGY")
         self.assertEqual(first.status.value, "FILLED")
         self.assertEqual(second.status.value, "FILLED")
         manager.update(RiskSettingsUpdate(
@@ -193,7 +195,7 @@ class PaperMemoryTests(unittest.TestCase):
             max_symbol_amount=Decimal("1000000"), max_total_investment=Decimal("1000000"),
             min_cash_ratio=Decimal("50"), daily_loss_limit=Decimal("1000000"),
             daily_order_limit=100, profit_target=Decimal("1000000")))
-        rejected = broker.submit(OrderRequest(symbol="005930", side="BUY", quantity=1))
+        rejected = broker.submit(OrderRequest(symbol="005930", side="BUY", quantity=1), source="STRATEGY")
         self.assertEqual(rejected.status.value, "REJECTED")
         self.assertIn("1회 최대 주문 금액", rejected.message)
 
@@ -203,7 +205,7 @@ class PaperMemoryTests(unittest.TestCase):
             preset=RiskPreset.CUSTOM, max_order_amount=Decimal("1"), max_symbol_amount=Decimal("1"),
             max_total_investment=Decimal("1"), min_cash_ratio=Decimal("100"),
             daily_loss_limit=Decimal("1"), daily_order_limit=1, profit_target=Decimal("1")))
-        rejected = self.broker.submit(OrderRequest(symbol="005930", side="BUY", quantity=1))
+        rejected = self.broker.submit(OrderRequest(symbol="005930", side="BUY", quantity=1), source="STRATEGY")
         sold = self.broker.submit(OrderRequest(symbol="005930", side="SELL", quantity=1))
         self.assertEqual(rejected.status.value, "REJECTED")
         self.assertEqual(sold.status.value, "FILLED")

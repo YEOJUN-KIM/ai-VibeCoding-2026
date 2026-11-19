@@ -1,5 +1,6 @@
 """영구 설정과 메모리 PAPER 계좌를 결합한 위험 한도 관리."""
 
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
@@ -24,9 +25,21 @@ PRESETS = {
 }
 
 
+@dataclass(frozen=True)
+class AutoLimits:
+    """In-memory limits of ONE automatic PAPER run (PAPER-SETTINGS-01). Never persisted, never applied to manual orders;
+    they are measured against automatic holdings/results only (cash is shared with manual trading)."""
+    max_order_amount: Decimal
+    max_symbol_amount: Decimal
+    max_total_investment: Decimal
+    daily_loss_limit: Decimal
+
+
 class RiskManager:
     def __init__(self, market) -> None:
         self.market = market
+        self.auto_limits: AutoLimits | None = None
+        self._auto_open = None  # (date, unrealised automatic P/L at the first evaluation of the day)
         self.account_id = None
         self.broker = None
         self._baseline_date = date.today()
@@ -119,9 +132,43 @@ class RiskManager:
             return "일일 주문 횟수 한도에 도달했습니다."
         return None
 
+    # ---- automatic-run limits (PAPER-SETTINGS-01)
+    def auto_profit(self) -> Decimal:
+        """Today's profit of automatic trades only: realised (STRATEGY sells) + unrealised of automatic lots, minus the
+        unrealised part that already existed at the first evaluation of the day."""
+        today = date.today()
+        realized = sum((o.realized_profit or Decimal(0) for o in self.broker.orders()
+                        if o.source == "STRATEGY" and o.side.value == "SELL" and o.status.value == "FILLED"
+                        and o.created_at.date() == today), Decimal(0))
+        unrealized = self.broker.strategy_unrealized()
+        if self._auto_open is None or self._auto_open[0] != today:
+            self._auto_open = (today, unrealized)
+        return realized + unrealized - self._auto_open[1]
+
+    def auto_status(self, limits: "AutoLimits") -> dict:
+        profit, invested = self.auto_profit(), self.broker.strategy_value()
+        reason = "일일 손실 한도에 도달했습니다." if profit <= -limits.daily_loss_limit else None
+        return dict(new_buys_allowed=reason is None, block_reason=reason, daily_profit=profit, invested_amount=invested,
+                    max_total_investment=limits.max_total_investment, max_symbol_amount=limits.max_symbol_amount,
+                    daily_loss_limit=limits.daily_loss_limit)
+
+    def _check_auto_buy(self, symbol: str, amount: Decimal, fee: Decimal, limits: "AutoLimits") -> str | None:
+        status = self.auto_status(limits)
+        if status["block_reason"]:
+            return status["block_reason"]
+        if not RiskPolicy.order_amount_allowed(limits, amount, fee):
+            return "1회 최대 주문 금액을 초과했습니다."
+        if not RiskPolicy.symbol_amount_allowed(limits, self.broker.strategy_symbol_value(symbol), amount):
+            return "종목별 최대 투자 금액을 초과했습니다."
+        if not RiskPolicy.total_investment_allowed(limits, status["invested_amount"], amount):
+            return "자동매매 투자 가능 금액을 초과했습니다."
+        return None
+
     def check_buy(self, *, symbol: str, amount: Decimal, fee: Decimal,
                   ignore_min_cash_ratio: bool = False,
                   ignore_daily_order_limit: bool = False) -> str | None:
+        if self.auto_limits is not None:                # an automatic run owns its own limits; saved settings are not used
+            return self._check_auto_buy(symbol, amount, fee, self.auto_limits)
         config = self.settings()
         cash, invested, total_asset, daily_profit, orders = self._metrics()
         reason = self.global_block_reason(

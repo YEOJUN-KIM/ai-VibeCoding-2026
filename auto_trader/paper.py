@@ -47,6 +47,8 @@ def persisted(method):
 
 
 class PaperBroker:
+    manual_orders_unlimited = True  # PAPER-SETTINGS-01: investment limits apply to automatic orders only
+
     def __init__(self, market: MarketSimulator, initial_cash=Decimal("10000000"),
                  account_name="paper-default", fee_rate=Decimal("0"),
                  sell_tax_rate=Decimal("0"), ignore_min_cash_ratio=False,
@@ -186,17 +188,6 @@ class PaperBroker:
     def set_risk_manager(self, risk_manager):
         self.risk_manager = risk_manager
         risk_manager.initialize(self.account_id, self)
-        saved = self._mvp.get('risk_before')
-        if saved:  # PAPER-SAFETY-01: a crash mid-MVP-run left its CUSTOM limits in the DB; restore the user's before any trading
-            import logging
-            from .models import RiskPreset, RiskSettings, RiskSettingsUpdate
-            try:
-                old = RiskSettings.model_validate(saved)
-                risk_manager.update(RiskSettingsUpdate(preset=old.preset) if old.preset != RiskPreset.CUSTOM
-                                    else RiskSettingsUpdate(**old.model_dump(exclude={'updated_at'})))
-                self.update_mvp(risk_before=None)
-            except Exception:
-                logging.getLogger('auto_trader.paper').exception('Could not restore pre-MVP risk settings; MVP limits remain')
 
     @property
     def management_scope(self):
@@ -284,6 +275,20 @@ class PaperBroker:
         with self._lock:
             return self._strategy_positions.get(symbol, {}).get("average_price")
 
+    def strategy_symbol_value(self, symbol: str) -> Decimal:
+        with self._lock:
+            return self.market.quote(symbol).price * int(self._strategy_positions.get(symbol, {}).get("quantity", 0))
+
+    def strategy_unrealized(self) -> Decimal:
+        """Market value minus cost of the automatic (strategy-owned) holdings only."""
+        with self._lock:
+            return sum(((self.market.quote(s).price - p["average_price"]) * p["quantity"]
+                        for s, p in self._strategy_positions.items()), Decimal(0))
+
+    def strategy_symbols(self) -> list[str]:
+        with self._lock:
+            return [s for s, p in self._strategy_positions.items() if p["quantity"]]
+
     def strategy_value(self) -> Decimal:
         with self._lock:
             return sum((self.market.quote(s).price * p["quantity"]
@@ -314,10 +319,13 @@ class PaperBroker:
             tax = ((amount * self.sell_tax_rate).quantize(Decimal("1"), rounding=ROUND_DOWN)
                    if request.side == OrderSide.SELL else Decimal(0))
             status, message = OrderStatus.FILLED, "가상 체결 완료"
+            # Investment limits belong to automatic trading. A manual PAPER order only meets the basic checks below
+            # (cash, holdings, validity); replay accounts keep checking every order.
+            limited = source != "MANUAL" or not self.manual_orders_unlimited
             risk_message = (self.risk_manager.check_buy(symbol=request.symbol, amount=amount, fee=fee,
                             ignore_min_cash_ratio=self.ignore_min_cash_ratio,
                             ignore_daily_order_limit=self.ignore_daily_order_limit)
-                            if request.side == OrderSide.BUY and self.risk_manager else None)
+                            if request.side == OrderSide.BUY and self.risk_manager and limited else None)
             if risk_message:
                 status, message = OrderStatus.REJECTED, "위험 한도: " + risk_message
             elif request.side == OrderSide.BUY and amount + fee > self._cash:

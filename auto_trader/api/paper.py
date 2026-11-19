@@ -134,14 +134,9 @@ def strategy_status(_: AuthenticatedUser = Depends(require_user)) -> StrategySta
 def strategy_settings(
     payload: StrategySettingsUpdate, _: AuthenticatedUser = Depends(require_csrf)
 ) -> StrategyStatus:
-    try:
-        runtime.engine.configure(interval_seconds=payload.interval_seconds,
-                         short_period=payload.short_period,
-                         long_period=payload.long_period,
-                         order_quantity=payload.order_quantity)
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return runtime.engine.status()
+    # PAPER-SETTINGS-01: automatic-trading settings have one owner (/paper/mvp/settings). This route is kept (compatible
+    # response shape) but can no longer reconfigure the shared engine behind a running or saved automatic run.
+    raise HTTPException(status_code=409, detail="자동매매 설정은 자동매매 투자 설정 화면에서 변경합니다. 이 경로의 설정 변경은 더 이상 지원되지 않습니다.")
 
 
 @router.post("/strategy/start", response_model=StrategyStatus)

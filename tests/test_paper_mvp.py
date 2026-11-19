@@ -77,10 +77,11 @@ class MvpBase(unittest.TestCase):
 class SettingsTests(MvpBase):
     def test_save_apply_and_restore(self):
         self.mvp.apply(self.balanced())
-        limits = self.broker.risk_manager.settings()
+        limits = self.broker.risk_manager.auto_limits           # in-memory limits of the automatic run only
         self.assertEqual(limits.max_total_investment, Decimal(5000000))
         self.assertEqual(limits.max_symbol_amount, Decimal(2500000))
         self.assertEqual(limits.daily_loss_limit, Decimal(200000))
+        self.assertEqual(self.broker.risk_manager.settings().max_total_investment, Decimal(7000000))   # saved settings untouched
         self.assertEqual(self.engine.stop_loss_rate, Decimal(5))
         self.assertEqual(self.engine.take_profit_rate, Decimal(10))
         restarted = paper.PaperBroker(self.market, self.CASH, account_name="mvp-test")

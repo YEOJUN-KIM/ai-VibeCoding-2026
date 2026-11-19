@@ -71,6 +71,8 @@ class ReplayRisk(RiskManager):
 
 class ReplayBroker(PaperBroker):
     """Never initialize persisted accounts or write audit history."""
+    manual_orders_unlimited = False  # replays keep checking every order, exactly as before
+
     def initialize(self):
         raise RuntimeError('Backtest accounts must remain in memory')
 
