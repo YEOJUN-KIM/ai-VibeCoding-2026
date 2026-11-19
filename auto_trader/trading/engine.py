@@ -349,7 +349,7 @@ class TradingEngine:
         hook = getattr(self.broker.risk_manager, "checkpoint", None) if self.broker.risk_manager else None
         if hook:
             try:
-                hook()
+                hook(set(prices))        # symbols whose price was received in THIS tick
             except Exception:
                 logging.getLogger("auto_trader.strategy").exception("Could not record the end-of-tick automatic book")
 

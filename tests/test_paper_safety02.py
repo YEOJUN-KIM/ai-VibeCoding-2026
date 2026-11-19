@@ -47,6 +47,10 @@ class Safety02Base(MvpBase):
         stock = next(s for s in self.market.stocks() if s.symbol == symbol)
         self.market.upsert_stock(stock, self.market.quote(symbol).price * Decimal(factor))
 
+    def close_checkpoint(self):
+        """An engine tick that priced every held symbol (what the engine passes to RiskManager.checkpoint)."""
+        self.broker.risk_manager.checkpoint(set(self.broker.strategy_symbols()))
+
     def hold_auto_lots(self, close=True, **changes):
         """Automatic holdings at the end of day one. With `close` the day ends with the engine's end-of-tick checkpoint
         (a closing evaluation), as a continuously running app would leave it."""
@@ -57,7 +61,7 @@ class Safety02Base(MvpBase):
         self.assertTrue(self.broker.strategy_symbols(), "expected automatic holdings")
         if close:
             self.clock.now = DAY.replace(hour=15, minute=15)
-            self.broker.risk_manager.checkpoint()
+            self.close_checkpoint()
 
 
 class EngineRestoreTests(Safety02Base):                                  # --- A
@@ -184,7 +188,7 @@ class DailyBuyLimitTests(Safety02Base):                                  # --- B
         self.assertEqual(self.broker.submit(OrderRequest(symbol=PROBE, side="BUY", quantity=1), source="STRATEGY").status.value, "FILLED")
         self.assertEqual(self.broker.submit(OrderRequest(symbol=PROBE, side="BUY", quantity=1), source="STRATEGY").status.value, "REJECTED")
         self.clock.now = DAY.replace(hour=15, minute=15)
-        self.broker.risk_manager.checkpoint()                           # the day's closing evaluation
+        self.close_checkpoint()                           # the day's closing evaluation
         self.clock.now = DAY + timedelta(days=1, minutes=5)
         self.assertEqual(self.broker.submit(OrderRequest(symbol=PROBE, side="BUY", quantity=1), source="STRATEGY").status.value, "FILLED")
 
@@ -320,6 +324,35 @@ class DailyLossBaselineTests(Safety02Base):                              # --- C
         self.assertFalse(status["new_buys_allowed"])
         self.assertIn("기준", status["block_reason"])
 
+    def test_closing_record_written_by_an_older_rule_is_not_trusted(self):
+        self.hold_auto_lots(close=False)
+        self.broker.update_mvp(auto_last=dict(at=DAY.replace(hour=15, minute=15).isoformat(), unrealized="0",
+                                              holdings={s: self.broker.strategy_quantity(s) for s in self.broker.strategy_symbols()}))
+        self.next_day(10, 0)
+        self.assertFalse(self.status()["new_buys_allowed"])
+
+    def test_tick_with_a_missing_held_price_stores_no_closing_proof(self):
+        self.hold_auto_lots(close=False, daily_loss_pct=Decimal("0.5"))
+        held = sorted(self.broker.strategy_symbols())
+        self.assertGreaterEqual(len(held), 2)
+        before = self.broker.mvp_state()["auto_last"]
+        self.broker.risk_manager.checkpoint({held[0]})                  # the other held symbol had no price this tick
+        self.assertEqual(self.broker.mvp_state()["auto_last"], before)
+
+    def test_engine_tick_with_one_held_price_missing_does_not_advance_the_record(self):
+        self.hold_auto_lots(close=False)
+        held = sorted(self.broker.strategy_symbols())
+        before = self.broker.mvp_state()["auto_last"]
+        self.clock.now = DAY.replace(hour=15, minute=15)
+        real = self.source.price
+        with patch.object(self.source, "price", side_effect=lambda sym, now: None if sym == held[0] else real(sym, now)):
+            self.engine.running = True
+            run(self.engine.poll_market())
+            self.engine.running = False
+        self.assertEqual(self.broker.mvp_state()["auto_last"], before)
+        self.next_day(10, 0)
+        self.assertFalse(self.status()["new_buys_allowed"])
+
     def test_record_two_trading_days_old_is_not_used(self):
         self.hold_auto_lots(daily_loss_pct=Decimal("0.5"))
         self.clock.now = (DAY + timedelta(days=2)).replace(hour=9, minute=5)
@@ -328,7 +361,7 @@ class DailyLossBaselineTests(Safety02Base):                              # --- C
     def test_weekend_page_views_do_not_overwrite_fridays_close(self):
         self.hold_auto_lots(daily_loss_pct=Decimal("0.5"))              # DAY is a Thursday; use Friday as the closing day
         self.clock.now = (DAY + timedelta(days=1)).replace(hour=15, minute=15)
-        self.broker.risk_manager.checkpoint()
+        self.close_checkpoint()
         self.clock.now = (DAY + timedelta(days=3)).replace(hour=10, minute=0)    # Sunday: a page view only
         self.status()
         self.clock.now = (DAY + timedelta(days=4)).replace(hour=9, minute=5)     # Monday

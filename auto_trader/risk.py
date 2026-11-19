@@ -167,6 +167,8 @@ class RiskManager:
         if base is None or (isinstance(base, dict) and base.get("date") != key) or (isinstance(base, list) and base and base[0] != key):
             record = None
             try:
+                if last.get("v") != BASELINE_VERSION or last.get("source") != "tick":
+                    raise ValueError("closing record not written by an engine tick under the current rule")
                 last_at = datetime.fromisoformat(last["at"])
                 last_holdings = {str(k): int(v) for k, v in last["holdings"].items()}
                 last_unrealized = Decimal(last["unrealized"])
@@ -196,16 +198,18 @@ class RiskManager:
 
         return realized + unrealized - Decimal(record["unrealized"]), bool(record["trusted"])
 
-    def checkpoint(self) -> None:
+    def checkpoint(self, fresh_symbols) -> None:
         """Called by the engine after a tick that fetched fresh prices and stepped. The ONLY writer of `auto_last`: a status
         view or an order check says nothing about when prices were last observed, so it can never create a closing proof.
         Today's baseline is established first (it reads the previous record), then the record is advanced (at most once a
-        minute, or at once when the holdings changed). Never raises: errors surface through auto_status."""
+        minute, or at once when the holdings changed) and only if EVERY held symbol was priced this tick. Never raises: errors surface through auto_status."""
         limits = self.auto_limits
         if limits is None:
             return
         try:
             self._auto_day(limits)
+            if not set(self.broker.strategy_symbols()) <= set(fresh_symbols):
+                return          # a held symbol had no fresh price this tick: its valuation is stale, so no new proof is stored
             now = self.broker.now()
             holdings = {sym: int(self.broker.strategy_quantity(sym)) for sym in self.broker.strategy_symbols()}
             last = self.broker.mvp_state().get("auto_last")
@@ -216,7 +220,7 @@ class RiskManager:
                 due = True
             if due:
                 self.broker.update_mvp(auto_last=dict(at=now.isoformat(), unrealized=str(self.broker.strategy_unrealized()),
-                                                      holdings=holdings, source="tick"))
+                                                      holdings=holdings, source="tick", v=BASELINE_VERSION))
         except Exception:
             pass
 
