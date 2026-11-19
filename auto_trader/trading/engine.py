@@ -204,6 +204,8 @@ class TradingEngine:
                 pass
         if self._task is task:
             self._task = None
+        if not self.running:
+            self._release_run()       # a task cancelled before its first iteration never reaches its own `finally`
         if was_running:
             try:
                 self.broker._journal({"event": "STRATEGY_STOP", "run_id": self.broker.run_id,
@@ -212,6 +214,14 @@ class TradingEngine:
             except OSError:
                 logging.getLogger("auto_trader.strategy").exception("Could not write paper strategy stop event")
         return was_running
+
+    def _release_run(self) -> None:
+        release, self.run_release = self.run_release, None
+        if release is not None:
+            try:
+                release()
+            except Exception:
+                logging.getLogger("auto_trader.strategy").exception("Could not restore shared settings after the run")
 
     async def _run(self) -> None:
         try:
@@ -232,12 +242,8 @@ class TradingEngine:
             if not superseded:
                 self.running = False
                 self.candidate_provider = None  # PAPER-MVP binding lasts one run; legacy strategy runs are unaffected
-            release, self.run_release = (None, self.run_release) if superseded else (self.run_release, None)
-            if release is not None:
-                try:
-                    release()
-                except Exception:
-                    logging.getLogger("auto_trader.strategy").exception("Could not restore shared settings after the run")
+            if not superseded:
+                self._release_run()
 
     async def poll_market(self) -> None:
         if self.market_hours_provider:

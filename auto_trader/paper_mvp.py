@@ -243,6 +243,14 @@ class PaperMvp:
         eng.price_feed, eng.count_sells_in_daily_limit = legacy["price_feed"], legacy["count_sells"]
         eng.candidate_provider, eng.candidate_message, eng.run_release = None, "", None
 
+    def limit_legacy_run(self):
+        """The existing /strategy/start flow is also automatic trading: it runs under the same in-memory limits (the saved or
+        default MVP settings) instead of the persistent risk settings. Call under the paper lock, right before engine.start()."""
+        if self.engine.running:
+            raise MvpConflict("이미 자동매매가 실행 중입니다.")
+        self.broker.risk_manager.auto_limits = self.auto_limits()
+        self.engine.run_release = self._release        # clears the limits when that run ends
+
     def _mine(self) -> bool:
         return bool(self.engine.running and self.engine.candidate_provider == self._candidates)
 

@@ -179,7 +179,7 @@ class SafetyRegressionTests(MvpBase):
 
             def flaky(**kw):
                 calls.append(1)
-                if len(calls) == 1:
+                if len(calls) <= 2:          # the run-end release and stop()'s retry both fail
                     raise RuntimeError("db down")
                 return real(**kw)
             self.engine.configure = flaky

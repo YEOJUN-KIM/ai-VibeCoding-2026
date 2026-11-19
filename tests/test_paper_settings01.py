@@ -133,6 +133,57 @@ class SettingsOwnershipTests(MvpBase):
         reborn = risk.RiskManager(self.market)
         self.assertIsNone(getattr(reborn, "auto_limits", None))
 
+    # --- Codex review: legacy start runs under the same limits; the daily baseline survives a restart -------------
+    def test_legacy_strategy_start_runs_under_the_auto_limits_and_releases_them(self):
+        self.engine.candidate_provider = None                      # a legacy (non-MVP) strategy run
+        self.mvp.apply(self.small_budget(), activate=False)
+
+        async def scenario():
+            self.mvp.limit_legacy_run()
+            await self.engine.start()
+            blocked = self.broker.risk_manager.check_buy(symbol=MANUAL_SYMBOL, amount=Decimal(900000), fee=Decimal(0))
+            with_limits = self.broker.risk_manager.auto_limits is not None
+            await self.engine.stop()
+            return blocked, with_limits
+        blocked, with_limits = run(scenario())
+        self.assertTrue(with_limits)
+        self.assertIsNotNone(blocked)                               # 900,000 > the 500,000 auto cap, although saved risk allows 1,000,000/order
+        self.assertIsNone(self.broker.risk_manager.auto_limits)     # released when that run ended
+
+    def test_legacy_start_refused_while_an_auto_run_is_active(self):
+        self.engine.running = True
+        with self.assertRaises(MvpError):
+            self.mvp.limit_legacy_run()
+
+    def test_daily_loss_baseline_survives_restart(self):
+        from auto_trader import paper, risk
+        self.mvp.apply(self.small_budget(daily_loss_pct=Decimal("0.5")))        # 50,000 KRW
+        self.engine.running = True
+        self.poll(45)
+        self.engine.running = False
+        quantity = int(Decimal(200000) / self.price())
+        self.broker.begin_strategy([])                                          # make sure lots are managed
+        rm = self.broker.risk_manager
+        rm.auto_profit()                                                        # day baseline is taken and persisted
+        reloaded = paper.PaperBroker(self.market, self.CASH, account_name="mvp-test")
+        reloaded.initialize()
+        reloaded.begin_strategy([])
+        reborn = risk.RiskManager(self.market)
+        reloaded.set_risk_manager(reborn)
+        self.assertEqual(reloaded.mvp_state()["auto_open"], self.broker.mvp_state()["auto_open"])
+        self.assertEqual(reborn.auto_profit(), rm.auto_profit())               # not re-baselined to 0 after restart
+
+    def test_unestablishable_baseline_holds_new_buys(self):
+        from unittest.mock import patch
+        self.mvp.apply(self.small_budget())
+        rm = self.broker.risk_manager
+        rm._auto_open = None
+        with patch.object(self.broker, "update_mvp", side_effect=RuntimeError("db down")):
+            status = rm.auto_status(rm.auto_limits)
+            reason = rm.check_buy(symbol=MANUAL_SYMBOL, amount=Decimal(1000), fee=Decimal(0))
+        self.assertFalse(status["new_buys_allowed"])
+        self.assertIn("보류", reason)
+
 
 if __name__ == "__main__":
     unittest.main()

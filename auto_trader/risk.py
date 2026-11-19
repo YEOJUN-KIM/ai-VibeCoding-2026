@@ -1,7 +1,7 @@
 """영구 설정과 메모리 PAPER 계좌를 결합한 위험 한도 관리."""
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 from .database import connect
@@ -136,17 +136,29 @@ class RiskManager:
     def auto_profit(self) -> Decimal:
         """Today's profit of automatic trades only: realised (STRATEGY sells) + unrealised of automatic lots, minus the
         unrealised part that already existed at the first evaluation of the day."""
-        today = date.today()
+        from .trading import KST
+        today = datetime.now(KST).date()
         realized = sum((o.realized_profit or Decimal(0) for o in self.broker.orders()
                         if o.source == "STRATEGY" and o.side.value == "SELL" and o.status.value == "FILLED"
-                        and o.created_at.date() == today), Decimal(0))
+                        and o.created_at.astimezone(KST).date() == today), Decimal(0))
         unrealized = self.broker.strategy_unrealized()
-        if self._auto_open is None or self._auto_open[0] != today:
-            self._auto_open = (today, unrealized)
+        key = today.isoformat()
+        if self._auto_open is None or self._auto_open[0] != key:
+            saved = self.broker.mvp_state().get("auto_open")      # the day's baseline survives a restart
+            if saved and saved[0] == key:
+                self._auto_open = (key, Decimal(saved[1]))
+            else:
+                self.broker.update_mvp(auto_open=[key, str(unrealized)])   # raises if it cannot be saved -> buys are held
+                self._auto_open = (key, unrealized)
         return realized + unrealized - self._auto_open[1]
 
     def auto_status(self, limits: "AutoLimits") -> dict:
-        profit, invested = self.auto_profit(), self.broker.strategy_value()
+        try:
+            profit, invested = self.auto_profit(), self.broker.strategy_value()
+        except Exception:                               # cannot establish the day's baseline: hold new buys, never guess
+            return dict(new_buys_allowed=False, block_reason="자동매매 일일 손익 기준을 확인할 수 없어 신규 매수를 보류합니다.",
+                        daily_profit=Decimal(0), invested_amount=Decimal(0), max_total_investment=limits.max_total_investment,
+                        max_symbol_amount=limits.max_symbol_amount, daily_loss_limit=limits.daily_loss_limit)
         reason = "일일 손실 한도에 도달했습니다." if profit <= -limits.daily_loss_limit else None
         return dict(new_buys_allowed=reason is None, block_reason=reason, daily_profit=profit, invested_amount=invested,
                     max_total_investment=limits.max_total_investment, max_symbol_amount=limits.max_symbol_amount,

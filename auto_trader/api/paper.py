@@ -146,7 +146,18 @@ async def strategy_start(_: AuthenticatedUser = Depends(require_csrf)) -> Strate
         raise HTTPException(status_code=409, detail="먼저 현재 실제 자산을 모의계좌에 복사하세요.")
     if runtime.paper_state().selected_strategy is None:
         raise HTTPException(status_code=409, detail="검증할 저장 전략을 먼저 선택하세요.")
-    await runtime.engine.start()
+    from ..paper_mvp import MvpError, controller_for
+    state = runtime.paper_state()
+    mvp = controller_for(state.broker, state.engine)   # the same controller the MVP endpoints use
+    try:
+        mvp.limit_legacy_run()          # automatic orders always run under the one auto-trading limit set
+        if not await runtime.engine.start():
+            mvp._release()
+    except MvpError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except BaseException:
+        mvp._release()
+        raise
     return runtime.engine.status()
 
 
