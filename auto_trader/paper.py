@@ -186,6 +186,17 @@ class PaperBroker:
     def set_risk_manager(self, risk_manager):
         self.risk_manager = risk_manager
         risk_manager.initialize(self.account_id, self)
+        saved = self._mvp.get('risk_before')
+        if saved:  # PAPER-SAFETY-01: a crash mid-MVP-run left its CUSTOM limits in the DB; restore the user's before any trading
+            import logging
+            from .models import RiskPreset, RiskSettings, RiskSettingsUpdate
+            try:
+                old = RiskSettings.model_validate(saved)
+                risk_manager.update(RiskSettingsUpdate(preset=old.preset) if old.preset != RiskPreset.CUSTOM
+                                    else RiskSettingsUpdate(**old.model_dump(exclude={'updated_at'})))
+                self.update_mvp(risk_before=None)
+            except Exception:
+                logging.getLogger('auto_trader.paper').exception('Could not restore pre-MVP risk settings; MVP limits remain')
 
     @property
     def management_scope(self):

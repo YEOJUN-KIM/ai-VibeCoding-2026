@@ -229,13 +229,16 @@ class PaperMvp:
         legacy, eng, log = self._legacy, self.engine, logging.getLogger("auto_trader.paper_mvp")
         if legacy is None or eng.running:
             return
-        self._legacy = None
         cooldowns = dict(eng._last_order_at)
         try:
             eng.configure(**legacy["kwargs"])
-            eng._last_order_at.update(cooldowns)
+            self._legacy = None
         except Exception:
-            log.exception("Could not restore the engine settings")
+            log.exception("Could not restore the engine settings; the snapshot is kept for the next release")
+        finally:
+            eng._last_order_at.update(cooldowns)
+        if self._legacy is not None:
+            return
         eng.price_feed, eng.count_sells_in_daily_limit = legacy["price_feed"], legacy["count_sells"]
         eng.candidate_provider, eng.candidate_message, eng.run_release = None, "", None
         try:
@@ -263,6 +266,8 @@ class PaperMvp:
             if self._mine():
                 return False                   # duplicate click: already running
             raise MvpConflict("다른 PAPER 전략이 실행 중입니다. 해당 전략을 정지한 뒤 시작하세요.")
+        if self.engine._task is not None and not self.engine._task.done():
+            raise MvpConflict("이전 실행이 아직 정리 중입니다. 잠시 후 다시 시작하세요.")
         reason = self.start_guard() if self.start_guard else None
         if reason:
             raise MvpConflict(reason)

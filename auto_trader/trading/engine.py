@@ -195,13 +195,15 @@ class TradingEngine:
         was_running = self.running
         self.running = False
         self.emergency_stopped = emergency
-        if self._task and self._task is not asyncio.current_task():
-            self._task.cancel()
+        task = self._task
+        if task and task is not asyncio.current_task():
+            task.cancel()
             try:
-                await self._task
+                await task
             except asyncio.CancelledError:
                 pass
-        self._task = None
+        if self._task is task:
+            self._task = None
         if was_running:
             try:
                 self.broker._journal({"event": "STRATEGY_STOP", "run_id": self.broker.run_id,
@@ -225,9 +227,12 @@ class TradingEngine:
             self.data_message = "실행 오류로 중지됨: 서버 로그와 주문 기록을 확인하세요."
             logging.getLogger("auto_trader.strategy").exception("Paper strategy stopped")
         finally:
-            self.running = False
-            self.candidate_provider = None  # PAPER-MVP binding lasts one run; legacy strategy runs are unaffected
-            release, self.run_release = self.run_release, None
+            # A newer start() may already own the engine while this (cancelled) task unwinds: leave its state alone.
+            superseded = self._task is not None and self._task is not asyncio.current_task()
+            if not superseded:
+                self.running = False
+                self.candidate_provider = None  # PAPER-MVP binding lasts one run; legacy strategy runs are unaffected
+            release, self.run_release = (None, self.run_release) if superseded else (self.run_release, None)
             if release is not None:
                 try:
                     release()

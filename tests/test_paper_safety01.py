@@ -146,6 +146,70 @@ class SafetyRegressionTests(MvpBase):
         self.assertTrue(sells, "the single position must still be exited by its own rules")
         self.assertEqual(self.broker.account().positions, [])
 
+    # --- Codex review findings ------------------------------------------------------------------
+    def test_superseded_run_task_does_not_clear_the_newer_run(self):
+        """Legacy stop sets running=False and awaits the old task; a new start in that window must keep its state."""
+        async def scenario():
+            await self.mvp.start()
+            old = self.engine._task
+            self.engine.running = False                 # what stop() does before awaiting the old task
+            await self.engine.start()                   # a new run takes over (task B)
+            old.cancel()
+            try:
+                await old
+            except asyncio.CancelledError:
+                pass
+            state = (self.engine.running, self.engine.candidate_provider is not None, self.engine.run_release is not None)
+            await self.mvp.stop()
+            return state
+        self.assertEqual(run(scenario()), (True, True, True))
+        self.assertFalse(self.engine.running)
+
+    def test_start_refused_while_previous_run_task_is_unwinding(self):
+        async def scenario():
+            await self.mvp.start()
+            self.engine.running = False                 # stop requested, old task not finished yet
+            try:
+                await self.mvp.start()
+            finally:
+                self.engine.running = True
+                await self.mvp.stop()
+        with self.assertRaises(MvpError):
+            run(scenario())
+
+    def test_failed_engine_restore_keeps_snapshot_and_cooldown(self):
+        self.legacy_setup()
+
+        async def scenario():
+            await self.mvp.start()
+            self.engine._last_order_at["100001"] = self.clock()
+            real = self.engine.configure
+            calls = []
+
+            def flaky(**kw):
+                calls.append(1)
+                if len(calls) == 1:
+                    raise RuntimeError("db down")
+                return real(**kw)
+            self.engine.configure = flaky
+            await self.mvp.stop()
+            kept = (self.mvp._legacy is not None, "100001" in self.engine._last_order_at)
+            self.mvp._release()                         # next release succeeds
+            return kept
+        self.assertEqual(run(scenario()), (True, True))
+        self.assertIsNone(self.mvp._legacy)
+        self.assert_legacy_restored()
+
+    def test_account_load_restores_leftover_risk_limits(self):
+        from auto_trader import paper, risk
+        self.legacy_setup()
+        self.mvp.apply(self.balanced())                 # risk is now CUSTOM with MVP limits, snapshot persisted
+        reloaded = paper.PaperBroker(self.market, self.CASH, account_name="mvp-test")
+        reloaded.initialize()
+        reloaded.set_risk_manager(risk.RiskManager(self.market))
+        self.assertEqual(reloaded.risk_manager.settings().preset.value, "CONSERVATIVE")
+        self.assertIsNone(reloaded.mvp_state().get("risk_before"))
+
 
 if __name__ == "__main__":
     unittest.main()

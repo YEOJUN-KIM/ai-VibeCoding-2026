@@ -15,6 +15,7 @@ def _controller() -> PaperMvp:
     from .. import runtime
     state = runtime.paper_state()
     mvp = controller_for(state.broker, state.engine)
+    mvp.lock = state.lock            # same lock as the legacy /strategy/start|stop, so the two can never interleave
     mvp.start_guard = lambda: (None if state.snapshot_at is not None
                                else "먼저 모의계좌를 준비하세요(실험계좌 선택 또는 실제 자산 복사).")
     return mvp
