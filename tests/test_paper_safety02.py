@@ -47,12 +47,17 @@ class Safety02Base(MvpBase):
         stock = next(s for s in self.market.stocks() if s.symbol == symbol)
         self.market.upsert_stock(stock, self.market.quote(symbol).price * Decimal(factor))
 
-    def hold_auto_lots(self, **changes):
+    def hold_auto_lots(self, close=True, **changes):
+        """Automatic holdings at the end of day one. With `close` the day ends with the engine's end-of-tick checkpoint
+        (a closing evaluation), as a continuously running app would leave it."""
         self.mvp.apply(self.direct(**changes))
         self.engine.running = True
         self.poll(8)                                  # first entries happen near minute 31; exits come later
         self.engine.running = False
         self.assertTrue(self.broker.strategy_symbols(), "expected automatic holdings")
+        if close:
+            self.clock.now = DAY.replace(hour=15, minute=15)
+            self.broker.risk_manager.checkpoint()
 
 
 class EngineRestoreTests(Safety02Base):                                  # --- A
@@ -178,6 +183,8 @@ class DailyBuyLimitTests(Safety02Base):                                  # --- B
         self.mvp.apply(self.direct(daily_buys=1))
         self.assertEqual(self.broker.submit(OrderRequest(symbol=PROBE, side="BUY", quantity=1), source="STRATEGY").status.value, "FILLED")
         self.assertEqual(self.broker.submit(OrderRequest(symbol=PROBE, side="BUY", quantity=1), source="STRATEGY").status.value, "REJECTED")
+        self.clock.now = DAY.replace(hour=15, minute=15)
+        self.broker.risk_manager.checkpoint()                           # the day's closing evaluation
         self.clock.now = DAY + timedelta(days=1, minutes=5)
         self.assertEqual(self.broker.submit(OrderRequest(symbol=PROBE, side="BUY", quantity=1), source="STRATEGY").status.value, "FILLED")
 
@@ -297,6 +304,42 @@ class DailyLossBaselineTests(Safety02Base):                              # --- C
         broker, engine, mvp = self.reboot()
         mvp.apply(self.direct(daily_loss_pct=Decimal("0.5")))
         self.assertFalse(self.status(broker)["new_buys_allowed"], "restart must not forget the day's loss")
+
+    def test_intraday_record_cannot_prove_the_next_days_start(self):
+        """Codex: a mid-day record, app off through the close, then a drop next day must not be offset by a stale 0."""
+        self.hold_auto_lots(close=False, daily_loss_pct=Decimal("0.5"))
+        for symbol in self.broker.strategy_symbols():
+            self.set_price(symbol, "1.10")                              # a rise nobody evaluated
+        for symbol in self.broker.strategy_symbols():
+            self.set_price(symbol, "0.95")
+        self.next_day(10, 0)
+        status = self.status()
+        self.assertFalse(status["new_buys_allowed"])
+        self.assertIn("기준", status["block_reason"])
+
+    def test_record_two_trading_days_old_is_not_used(self):
+        self.hold_auto_lots(daily_loss_pct=Decimal("0.5"))
+        self.clock.now = (DAY + timedelta(days=2)).replace(hour=9, minute=5)
+        self.assertFalse(self.status()["new_buys_allowed"])
+
+    def test_weekend_page_views_do_not_overwrite_fridays_close(self):
+        self.hold_auto_lots(daily_loss_pct=Decimal("0.5"))              # DAY is a Thursday; use Friday as the closing day
+        self.clock.now = (DAY + timedelta(days=1)).replace(hour=15, minute=15)
+        self.broker.risk_manager.checkpoint()
+        self.clock.now = (DAY + timedelta(days=3)).replace(hour=10, minute=0)    # Sunday: a page view only
+        self.status()
+        self.clock.now = (DAY + timedelta(days=4)).replace(hour=9, minute=5)     # Monday
+        self.assertTrue(self.status()["new_buys_allowed"], "Monday's start is provable from Friday's close")
+        self.assertEqual(self.broker.mvp_state()["auto_open"]["source"], "previous-close")
+
+    def test_baseline_written_by_the_previous_rule_is_not_trusted(self):
+        self.hold_auto_lots()
+        self.next_day(9, 14)
+        self.broker.update_mvp(auto_open=dict(date=self.clock().astimezone(__import__("auto_trader.trading", fromlist=["KST"]).KST).date().isoformat(),
+                                              unrealized="-100000", trusted=True, at="x"))
+        status = self.status()
+        self.assertFalse(status["new_buys_allowed"])
+        self.assertIn("기준", status["block_reason"])
 
     def test_unreliable_baseline_stays_unreliable_after_restart(self):
         self.hold_auto_lots()

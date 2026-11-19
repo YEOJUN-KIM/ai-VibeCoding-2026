@@ -1,7 +1,7 @@
 """영구 설정과 메모리 PAPER 계좌를 결합한 위험 한도 관리."""
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
 from .database import connect
@@ -34,9 +34,12 @@ class AutoLimits:
     max_total_investment: Decimal
     daily_loss_limit: Decimal
     daily_buy_limit: int = 0                  # filled automatic buys per KST day; 0 = no limit (same meaning as the engine's)
+    session_close: time = time(15, 20)        # KST end of the run's trading hours (engine.trading_end)
 
 
 LAST_EVAL_WRITE_EVERY = timedelta(seconds=60)
+CLOSE_PROOF_WINDOW = timedelta(minutes=10)    # a previous-day record counts as a 'close' if taken this close to session_close
+BASELINE_VERSION = 2                             # records written by an older rule are never trusted
 
 
 class RiskManager:
@@ -136,14 +139,16 @@ class RiskManager:
         return None
 
     # ---- automatic-run limits (PAPER-SETTINGS-01)
-    def _auto_day(self, limits: "AutoLimits"):
+    def _auto_day(self, limits: "AutoLimits", *, new_day_ok: bool = False):
         """(profit today of automatic trades only, baseline_trusted). Profit = realised STRATEGY sells today + unrealised
         (net of estimated exit costs) of automatic lots - the unrealised part at the day's baseline.
 
         The baseline is read from the account's persisted state on every call (so an account reset invalidates it) and is
         trusted only when it can be proven from recorded facts, never from "whatever the first evaluation saw":
-          * previous evaluation record (`auto_last`, rewritten at most once a minute) exists, no automatic order was filled
-            since it and the holdings are identical -> that record is the day's starting point;
+          * the previous TRADING day's closing evaluation (`auto_last`: taken within CLOSE_PROOF_WINDOW of the session close,
+            on the previous weekday, so overnight price moves are counted as the new day's) exists, no automatic order was
+            filled since it and the holdings are identical -> that record is the day's starting point. An intraday or older
+            record cannot prove the price path in between and is not used;
           * or nothing is held and no automatic order was filled today -> the day starts flat at 0.
         Anything else (carried holdings with no provable start, sells before the first evaluation, unreadable records) is
         untrusted: new buys are held, exits are never touched."""
@@ -165,25 +170,35 @@ class RiskManager:
                 last_holdings = {str(k): int(v) for k, v in last["holdings"].items()}
                 last_unrealized = Decimal(last["unrealized"])
                 since = [o for o in orders if o.created_at > last_at]
-                if last_at.astimezone(KST).date() < today and not since and last_holdings == holdings:
-                    record = dict(date=key, unrealized=str(last_unrealized), trusted=True, at=now.isoformat(), source="previous-evaluation")
+                last_local = last_at.astimezone(KST)
+                gap = (today - last_local.date()).days
+                previous_trading_day = gap >= 1 and all((last_local.date() + timedelta(days=d)).weekday() >= 5 for d in range(1, gap))
+                closing = last_local.time() >= (datetime.combine(today, limits.session_close) - CLOSE_PROOF_WINDOW).time()
+                if previous_trading_day and closing and not since and last_holdings == holdings:
+                    record = dict(v=BASELINE_VERSION, date=key, unrealized=str(last_unrealized), trusted=True, at=now.isoformat(),
+                                  source="previous-close")
             except (TypeError, KeyError, ValueError, AttributeError, ArithmeticError):
                 pass                                                  # no usable previous record
             if record is None:
                 flat_start = not holdings and not any(o.created_at.astimezone(KST).date() == today for o in orders)
-                record = dict(date=key, unrealized="0" if flat_start else str(unrealized), trusted=flat_start, at=now.isoformat(),
+                record = dict(v=BASELINE_VERSION, date=key, unrealized="0" if flat_start else str(unrealized), trusted=flat_start,
+                              at=now.isoformat(),
                               source="flat-start" if flat_start else "unverifiable")
             self.broker.update_mvp(auto_open=record)                  # raises if it cannot be saved -> buys are held
         elif isinstance(base, dict):
-            record = dict(date=base["date"], unrealized=str(Decimal(base["unrealized"])), trusted=bool(base["trusted"]))
+            record = dict(date=base["date"], unrealized=str(Decimal(base["unrealized"])),
+                          trusted=bool(base["trusted"]) and base.get("v") == BASELINE_VERSION)
         elif isinstance(base, list) and len(base) == 2:               # written by an earlier version: trust level unknown
             record = dict(date=base[0], unrealized=str(Decimal(base[1])), trusted=False)
         else:
             raise ValueError("unreadable day baseline")
 
         try:
-            stale = (datetime.fromisoformat(last["at"]) + LAST_EVAL_WRITE_EVERY <= now
+            last_at = datetime.fromisoformat(last["at"])
+            stale = (last_at + LAST_EVAL_WRITE_EVERY <= now
                      or {str(k): int(v) for k, v in last["holdings"].items()} != holdings)
+            if last_at.astimezone(KST).date() != today and not new_day_ok:
+                stale = False        # only an engine tick may start a new day's record: a weekend page view must not overwrite Friday's close
         except (TypeError, KeyError, ValueError, AttributeError):
             stale = True
         if stale:                                                     # the next day's provable starting point
@@ -196,7 +211,7 @@ class RiskManager:
         if self.auto_limits is None:
             return
         try:
-            self._auto_day(self.auto_limits)
+            self._auto_day(self.auto_limits, new_day_ok=True)
         except Exception:
             pass
 

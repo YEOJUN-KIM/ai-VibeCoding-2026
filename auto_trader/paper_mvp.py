@@ -165,7 +165,7 @@ class PaperMvp:
         s = s or self.settings()
         _, cap, loss = self._limits(s)
         return AutoLimits(max_order_amount=cap, max_symbol_amount=cap, max_total_investment=Decimal(s.budget), daily_loss_limit=loss,
-                          daily_buy_limit=s.daily_buys)
+                          daily_buy_limit=s.daily_buys, session_close=self.engine.trading_end)
 
     def day01_config(self, s: MvpSettings | None = None) -> Day01Config:
         s = s or self.settings()
