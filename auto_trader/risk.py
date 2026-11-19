@@ -139,10 +139,11 @@ class RiskManager:
         return None
 
     # ---- automatic-run limits (PAPER-SETTINGS-01)
-    def _auto_day(self, limits: "AutoLimits", *, new_day_ok: bool = False):
+    def _auto_day(self, limits: "AutoLimits"):
         """(profit today of automatic trades only, baseline_trusted). Profit = realised STRATEGY sells today + unrealised
         (net of estimated exit costs) of automatic lots - the unrealised part at the day's baseline.
 
+        This function only READS the previous-day record; see checkpoint() for how it is written.
         The baseline is read from the account's persisted state on every call (so an account reset invalidates it) and is
         trusted only when it can be proven from recorded facts, never from "whatever the first evaluation saw":
           * the previous TRADING day's closing evaluation (`auto_last`: taken within CLOSE_PROOF_WINDOW of the session close,
@@ -193,25 +194,29 @@ class RiskManager:
         else:
             raise ValueError("unreadable day baseline")
 
-        try:
-            last_at = datetime.fromisoformat(last["at"])
-            stale = (last_at + LAST_EVAL_WRITE_EVERY <= now
-                     or {str(k): int(v) for k, v in last["holdings"].items()} != holdings)
-            if last_at.astimezone(KST).date() != today and not new_day_ok:
-                stale = False        # only an engine tick may start a new day's record: a weekend page view must not overwrite Friday's close
-        except (TypeError, KeyError, ValueError, AttributeError):
-            stale = True
-        if stale:                                                     # the next day's provable starting point
-            self.broker.update_mvp(auto_last=dict(at=now.isoformat(), unrealized=str(unrealized), holdings=holdings))
         return realized + unrealized - Decimal(record["unrealized"]), bool(record["trusted"])
 
     def checkpoint(self) -> None:
-        """End-of-tick record of the automatic book (holdings, unrealised), so the next day's starting point is provable even
-        if the app stops right after a fill. Never raises: errors surface through auto_status."""
-        if self.auto_limits is None:
+        """Called by the engine after a tick that fetched fresh prices and stepped. The ONLY writer of `auto_last`: a status
+        view or an order check says nothing about when prices were last observed, so it can never create a closing proof.
+        Today's baseline is established first (it reads the previous record), then the record is advanced (at most once a
+        minute, or at once when the holdings changed). Never raises: errors surface through auto_status."""
+        limits = self.auto_limits
+        if limits is None:
             return
         try:
-            self._auto_day(self.auto_limits, new_day_ok=True)
+            self._auto_day(limits)
+            now = self.broker.now()
+            holdings = {sym: int(self.broker.strategy_quantity(sym)) for sym in self.broker.strategy_symbols()}
+            last = self.broker.mvp_state().get("auto_last")
+            try:
+                due = (datetime.fromisoformat(last["at"]) + LAST_EVAL_WRITE_EVERY <= now
+                       or {str(k): int(v) for k, v in last["holdings"].items()} != holdings)
+            except (TypeError, KeyError, ValueError, AttributeError):
+                due = True
+            if due:
+                self.broker.update_mvp(auto_last=dict(at=now.isoformat(), unrealized=str(self.broker.strategy_unrealized()),
+                                                      holdings=holdings, source="tick"))
         except Exception:
             pass
 

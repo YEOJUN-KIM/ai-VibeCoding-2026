@@ -312,6 +312,9 @@ class DailyLossBaselineTests(Safety02Base):                              # --- C
             self.set_price(symbol, "1.10")                              # a rise nobody evaluated
         for symbol in self.broker.strategy_symbols():
             self.set_price(symbol, "0.95")
+        self.clock.now = DAY.replace(hour=15, minute=15)
+        self.status()                                                   # a status view at 15:15 is not a closing observation
+        self.broker.risk_manager.check_buy(symbol=PROBE, amount=Decimal(1000), fee=Decimal(0))
         self.next_day(10, 0)
         status = self.status()
         self.assertFalse(status["new_buys_allowed"])
