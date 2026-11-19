@@ -343,7 +343,7 @@ class DailyLossBaselineTests(Safety02Base):                              # --- C
         self.hold_auto_lots(close=False)
         held = sorted(self.broker.strategy_symbols())
         before = self.broker.mvp_state()["auto_last"]
-        self.clock.now = DAY.replace(hour=15, minute=15)
+        self.clock.now = DAY.replace(hour=9, minute=50)     # both synthetic prices are valid at this time
         real = self.source.price
         with patch.object(self.source, "price", side_effect=lambda sym, now: None if sym == held[0] else real(sym, now)):
             self.engine.running = True
@@ -352,6 +352,31 @@ class DailyLossBaselineTests(Safety02Base):                              # --- C
         self.assertEqual(self.broker.mvp_state()["auto_last"], before)
         self.next_day(10, 0)
         self.assertFalse(self.status()["new_buys_allowed"])
+
+    def test_engine_tick_with_an_invalid_held_price_does_not_advance_the_record(self):
+        """A held symbol answered with price 0 (or non-finite): present in the response, not a valid fresh price."""
+        for bad in (Decimal(0), Decimal("-5"), Decimal("NaN")):
+            with self.subTest(bad=bad):
+                self.hold_auto_lots(close=False)
+                held = sorted(self.broker.strategy_symbols())
+                before = self.broker.mvp_state()["auto_last"]
+                self.clock.now = DAY.replace(hour=9, minute=50)     # both synthetic prices are valid at this time
+                feed, real = self.engine.price_feed, self.engine.price_feed.read
+
+                def read(symbols, valuation, period, now, real=real, bad=bad):
+                    prices, candles = real(symbols, valuation, period, now)
+                    prices[held[0]] = bad
+                    return prices, candles
+                with patch.object(feed, "read", side_effect=read):
+                    self.engine.running = True
+                    run(self.engine.poll_market())
+                    self.engine.running = False
+                self.assertEqual(self.broker.mvp_state()["auto_last"], before)
+                self.setUp_again()
+
+    def setUp_again(self):
+        self.tearDown()
+        self.setUp()
 
     def test_record_two_trading_days_old_is_not_used(self):
         self.hold_auto_lots(daily_loss_pct=Decimal("0.5"))
