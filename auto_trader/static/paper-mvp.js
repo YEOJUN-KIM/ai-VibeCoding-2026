@@ -49,7 +49,7 @@ function render() { renderRun(); renderHome(); renderHistory(); if (tab === 'set
 // ---------------------------------------------------------------- control strip
 function renderRun() {
   const r = st.run, held = r.held_symbols.length;
-  const tone = { idle: 'muted', running: 'green', stopped: 'amber', emergency: 'up' }[r.state];
+  const tone = { idle: 'muted', running: 'green', stopped: 'amber', emergency: 'up', other: 'amber' }[r.state];
   $('#run-label').className = tone; $('#run-label').innerHTML = '<i class="dot"></i> ' + esc(r.label);
   let reason = r.message;
   if (r.state === 'idle') reason = '저장된 투자 기준으로 모의 운용을 시작할 수 있어요.';
@@ -58,7 +58,7 @@ function renderRun() {
   const src = st.data_source === 'SYNTHETIC' ? '합성(가상) 시장 데이터로 검증 중 · 실제 시장 데이터는 아직 검증되지 않았습니다.' : '검증된 시장 데이터 소스가 연결되지 않았습니다 · 신규 진입은 보류되고 보유분 감시만 합니다.';
   $('#run-next').textContent = r.running ? '실행 중 · 보유분 손절·익절 감시가 켜져 있습니다. ' + src : r.stop_note + (r.state === 'emergency' ? ' 긴급정지의 실제 보장 범위는 일시정지와 같으며 별도 검증되지 않았습니다.' : '');
   $('#start').disabled = r.running; $('#start').textContent = r.state === 'stopped' || r.state === 'emergency' ? '다시 시작' : '시작';
-  $('#pause').disabled = !r.running; $('#emergency').disabled = r.state === 'emergency';
+  $('#pause').disabled = r.state !== 'running'; $('#emergency').disabled = r.state === 'emergency';
   $('#source-badge').textContent = st.data_source === 'SYNTHETIC' ? 'PAPER · 합성 데이터' : 'PAPER · 데이터 소스 미연결';
   $('#source-badge').className = 'badge ' + (st.data_source === 'SYNTHETIC' ? 'amber' : 'neutral');
 }

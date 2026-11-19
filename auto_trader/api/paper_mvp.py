@@ -41,7 +41,7 @@ def mvp_status(period: Literal["day", "week", "month", "year", "all"] = "day", m
 async def mvp_settings(payload: MvpSettings, mvp: PaperMvp = Depends(write_controller)):
     async with mvp.lock:
         try:
-            mvp.apply(payload)
+            mvp.apply(payload, activate=False)
         except MvpError as exc:
             raise _http(exc) from exc
         return mvp.status()

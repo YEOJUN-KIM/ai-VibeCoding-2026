@@ -55,6 +55,10 @@ class TradingEngine:
         # list means "no new entries" (never "all market symbols"); holdings keep their exit monitoring.
         self.candidate_provider = candidate_provider
         self.candidate_message = ''
+        # PAPER-SAFETY-01: legacy strategies count buys AND sells against the daily order limit; the MVP counts buys only
+        # (a sell is a required exit and must never use up, or be blocked by, the buy allowance).
+        self.count_sells_in_daily_limit = True
+        self.run_release = None  # optional callable run once when the run loop ends (restores shared settings)
         self.strategy = strategy if strategy is not None else MovingAverageStrategy()
         self.market = market
         self.broker = broker
@@ -223,6 +227,12 @@ class TradingEngine:
         finally:
             self.running = False
             self.candidate_provider = None  # PAPER-MVP binding lasts one run; legacy strategy runs are unaffected
+            release, self.run_release = self.run_release, None
+            if release is not None:
+                try:
+                    release()
+                except Exception:
+                    logging.getLogger("auto_trader.strategy").exception("Could not restore shared settings after the run")
 
     async def poll_market(self) -> None:
         if self.market_hours_provider:
@@ -497,7 +507,8 @@ class TradingEngine:
             self._realized_profit += order.realized_profit or Decimal(0)
             trade_profit += order.realized_profit or Decimal(0)
             today = self._clock().astimezone(KST).date()
-            self._daily_orders[today] = self._daily_orders.get(today, 0) + 1
+            if self.count_sells_in_daily_limit:
+                self._daily_orders[today] = self._daily_orders.get(today, 0) + 1
             self._last_order_at[symbol] = self._clock()
             quantity = next((lot["quantity"] for lot in self.broker.managed_lots() if lot["id"] == lot_id), 0) if lot_id else self.broker.strategy_quantity(symbol)
             if not quantity:
