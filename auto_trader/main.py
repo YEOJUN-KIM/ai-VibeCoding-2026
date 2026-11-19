@@ -5,7 +5,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import runtime
-from .api import pages, auth, settings, ml, live, market, research, paper
+from .api import pages, auth, settings, ml, live, market, research, paper, paper_mvp
 from .lifecycle import lifespan
 from .middleware import security_headers, user_account_scope
 
@@ -24,5 +24,5 @@ app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost
 app.middleware("http")(security_headers)
 app.middleware("http")(user_account_scope)
 
-for router in (pages.router, auth.router, settings.router, ml.router, live.router, market.router, research.router, paper.router):
+for router in (pages.router, auth.router, settings.router, ml.router, live.router, market.router, research.router, paper.router, paper_mvp.router):
     app.include_router(router)

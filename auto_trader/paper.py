@@ -78,6 +78,7 @@ class PaperBroker:
         self._management_symbols = []
         self._management_external_flow = Decimal(0)
         self._pending_journal = None
+        self._mvp = {}  # PAPER-MVP-01 settings and decision log; survives restart, never touches cash/positions
         self._lock = RLock()
         self._seed_cash = self.initial_cash
         self._seed_positions: dict[str, dict[str, Decimal | int]] = {}
@@ -130,7 +131,7 @@ class PaperBroker:
                     orders=[order.model_dump(mode='json') for order in self._orders],
                     requests={key: order.id for key, order in self._requests.items()},
                     next_order_id=self._next_order_id, fees=str(self._total_fees), taxes=str(self._total_taxes),
-                    metadata=self.snapshot_metadata, management_scope=self._management_scope,
+                    mvp=self._mvp, metadata=self.snapshot_metadata, management_scope=self._management_scope,
                     auto_lots=self._auto_lots, last_strategy_selection=self._last_strategy_selection,
                     stocks={symbol: {'stock': stocks[symbol].model_dump(mode='json'),
                                      'price': str(self.market.quote(symbol).price)} for symbol in symbols})
@@ -165,6 +166,7 @@ class PaperBroker:
         self._next_order_id = state['next_order_id']
         self._total_fees, self._total_taxes = Decimal(state['fees']), Decimal(state['taxes'])
         self.snapshot_metadata = state.get('metadata', {})
+        self._mvp = state.get('mvp', {})
         self._last_strategy_selection = state.get("last_strategy_selection", {})
         # Execution remains stopped; ownership and exit rules survive restart.
         self._management_scope = state.get("management_scope", "AUTO")
@@ -422,9 +424,18 @@ class PaperBroker:
                            total_fees=self._total_fees, total_taxes=self._total_taxes,
                            fee_rate=self.fee_rate, sell_tax_rate=self.sell_tax_rate)
 
+    def mvp_state(self):
+        with self._lock:
+            return deepcopy(self._mvp)
+
+    @persisted
+    def update_mvp(self, **fields):
+        self._mvp = {**self._mvp, **deepcopy(fields)}
+
     @persisted
     def reset_practice(self):
         self._reset_memory()
+        self._mvp = {key: value for key, value in self._mvp.items() if key == 'settings'}
         if self.risk_manager:
             self.risk_manager.reset_daily_baseline()
         return self.account()

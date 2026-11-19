@@ -25,6 +25,13 @@ def paper_dashboard(request: Request) -> FileResponse | RedirectResponse:
     return FileResponse(runtime.static_dir / "index.html")
 
 
+@router.get("/paper-mvp", include_in_schema=False, response_model=None)
+def paper_mvp_page(request: Request) -> FileResponse | RedirectResponse:
+    if not session_from_request(request):
+        return RedirectResponse("/login", status_code=303)
+    return FileResponse(runtime.static_dir / "paper-mvp.html")
+
+
 @router.get("/live", include_in_schema=False, response_model=None)
 def live_dashboard(request: Request) -> FileResponse | RedirectResponse:
     if not session_from_request(request):

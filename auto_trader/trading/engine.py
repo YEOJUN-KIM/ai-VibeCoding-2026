@@ -49,7 +49,12 @@ class TradingEngine:
         candidate_recorder: Callable[[dict], None] | None = None,
         market_hours_provider: Callable[[datetime], dict] | None = None,
         strategy: TradingStrategy | None = None,
+        candidate_provider: Callable[[datetime], list[str]] | None = None,
     ) -> None:
+        # PAPER-MVP-01: when set, entries are limited to the symbols it returns for each poll. An empty
+        # list means "no new entries" (never "all market symbols"); holdings keep their exit monitoring.
+        self.candidate_provider = candidate_provider
+        self.candidate_message = ''
         self.strategy = strategy if strategy is not None else MovingAverageStrategy()
         self.market = market
         self.broker = broker
@@ -217,6 +222,7 @@ class TradingEngine:
             logging.getLogger("auto_trader.strategy").exception("Paper strategy stopped")
         finally:
             self.running = False
+            self.candidate_provider = None  # PAPER-MVP binding lasts one run; legacy strategy runs are unaffected
 
     async def poll_market(self) -> None:
         if self.market_hours_provider:
@@ -234,7 +240,18 @@ class TradingEngine:
             }.get(self._operating_state(), '운영 시간 외 대기 · 실제 시세 기반 모의매매')
             return
         now = self._clock()
-        symbols = list(dict.fromkeys((self.target_symbols or [stock.symbol for stock in self.market.stocks()]) + [lot["symbol"] for lot in self.broker.managed_lots()]))
+        if self.candidate_provider is not None:
+            try:
+                self.target_symbols = list(dict.fromkeys(self.candidate_provider(now)))
+            except Exception:
+                logging.getLogger("auto_trader.strategy").exception("Candidate provider failed; no new entries")
+                self.target_symbols = []
+        fallback = [] if self.candidate_provider is not None else [stock.symbol for stock in self.market.stocks()]
+        symbols = list(dict.fromkeys((self.target_symbols or fallback) + [lot["symbol"] for lot in self.broker.managed_lots()]))
+        if not symbols:
+            self.data_message = self.candidate_message or "신규 후보 없음 · 현금 유지"
+            self.last_decision_at = self._clock()
+            return
         valuation_symbols = [p.symbol for p in self.broker.account().positions]
         try:
             prices, candles = await asyncio.to_thread(
@@ -289,11 +306,12 @@ class TradingEngine:
         self._candidate_invocation_sequence += 1
         exited = self._manage_exits(candles)
         quotes = ([self.market.quote(symbol, move=candles is None) for symbol in self.target_symbols]
-                  if self.target_symbols else self.market.quotes(move=candles is None))
+                  if self.target_symbols or self.candidate_provider is not None
+                  else self.market.quotes(move=candles is None))
         for quote in quotes:
             if candles is not None and quote.symbol not in candles:
                 continue
-            history = self._history[quote.symbol]
+            history = self._history.setdefault(quote.symbol, deque(maxlen=self.long_period))
             new_bar = True
             previous_bar = self._last_bar_at.get(quote.symbol)
             state_reset = False
