@@ -1,7 +1,7 @@
 """영구 설정과 메모리 PAPER 계좌를 결합한 위험 한도 관리."""
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
 from .database import connect
@@ -33,6 +33,11 @@ class AutoLimits:
     max_symbol_amount: Decimal
     max_total_investment: Decimal
     daily_loss_limit: Decimal
+    daily_buy_limit: int = 0                  # filled automatic buys per KST day; 0 = no limit (same meaning as the engine's)
+    session_open: time = time(9, 0)           # KST; a day baseline taken later than open + BASELINE_GRACE is not trusted
+
+
+BASELINE_GRACE = timedelta(minutes=15)
 
 
 class RiskManager:
@@ -133,36 +138,56 @@ class RiskManager:
         return None
 
     # ---- automatic-run limits (PAPER-SETTINGS-01)
-    def auto_profit(self) -> Decimal:
-        """Today's profit of automatic trades only: realised (STRATEGY sells) + unrealised of automatic lots, minus the
-        unrealised part that already existed at the first evaluation of the day."""
+    def _auto_day(self, limits: "AutoLimits"):
+        """(profit today of automatic trades only, baseline_trusted). Profit = realised STRATEGY sells today + unrealised
+        (net of estimated exit costs) of automatic lots - the unrealised part at the day's baseline. The baseline is stored
+        with the account and survives restarts. It is trusted only if there were no automatic holdings when it was taken
+        (then all of the day's P/L comes from recorded orders) or it was taken at the session open; otherwise earlier
+        intraday moves could be missing and new buys are held."""
         from .trading import KST
-        today = datetime.now(KST).date()
+        now = self.broker.now().astimezone(KST)
+        key = now.date().isoformat()
         realized = sum((o.realized_profit or Decimal(0) for o in self.broker.orders()
                         if o.source == "STRATEGY" and o.side.value == "SELL" and o.status.value == "FILLED"
-                        and o.created_at.astimezone(KST).date() == today), Decimal(0))
+                        and o.created_at.astimezone(KST).date() == now.date()), Decimal(0))
         unrealized = self.broker.strategy_unrealized()
-        key = today.isoformat()
-        if self._auto_open is None or self._auto_open[0] != key:
-            saved = self.broker.mvp_state().get("auto_open")      # the day's baseline survives a restart
-            if saved and saved[0] == key:
-                self._auto_open = (key, Decimal(saved[1]))
+        if self._auto_open is None or self._auto_open["date"] != key:
+            saved = self.broker.mvp_state().get("auto_open")
+            if saved is None or (isinstance(saved, dict) and saved.get("date") != key) or (
+                    isinstance(saved, list) and saved and saved[0] != key):
+                opened = datetime.combine(now.date(), limits.session_open, tzinfo=KST)
+                trusted = not self.broker.strategy_symbols() or now <= opened + BASELINE_GRACE
+                record = dict(date=key, unrealized=str(unrealized), trusted=trusted, at=now.isoformat())
+                self.broker.update_mvp(auto_open=record)           # raises if it cannot be saved -> buys are held
+            elif isinstance(saved, dict):
+                record = dict(date=saved["date"], unrealized=str(Decimal(saved["unrealized"])), trusted=bool(saved["trusted"]),
+                              at=saved.get("at"))
+            elif isinstance(saved, list) and len(saved) == 2:     # written by the previous version: trust level unknown
+                record = dict(date=saved[0], unrealized=str(Decimal(saved[1])), trusted=False, at=None)
             else:
-                self.broker.update_mvp(auto_open=[key, str(unrealized)])   # raises if it cannot be saved -> buys are held
-                self._auto_open = (key, unrealized)
-        return realized + unrealized - self._auto_open[1]
+                raise ValueError("unreadable day baseline")
+            self._auto_open = record
+        return realized + unrealized - Decimal(self._auto_open["unrealized"]), bool(self._auto_open["trusted"])
+
+    def auto_profit(self, limits: "AutoLimits | None" = None) -> Decimal:
+        return self._auto_day(limits or self.auto_limits or AutoLimits(Decimal(1), Decimal(1), Decimal(1), Decimal(1)))[0]
 
     def auto_status(self, limits: "AutoLimits") -> dict:
-        try:
-            profit, invested = self.auto_profit(), self.broker.strategy_value()
-        except Exception:                               # cannot establish the day's baseline: hold new buys, never guess
-            return dict(new_buys_allowed=False, block_reason="자동매매 일일 손익 기준을 확인할 수 없어 신규 매수를 보류합니다.",
-                        daily_profit=Decimal(0), invested_amount=Decimal(0), max_total_investment=limits.max_total_investment,
-                        max_symbol_amount=limits.max_symbol_amount, daily_loss_limit=limits.daily_loss_limit)
-        reason = "일일 손실 한도에 도달했습니다." if profit <= -limits.daily_loss_limit else None
-        return dict(new_buys_allowed=reason is None, block_reason=reason, daily_profit=profit, invested_amount=invested,
-                    max_total_investment=limits.max_total_investment, max_symbol_amount=limits.max_symbol_amount,
+        base = dict(max_total_investment=limits.max_total_investment, max_symbol_amount=limits.max_symbol_amount,
                     daily_loss_limit=limits.daily_loss_limit)
+        try:
+            profit, trusted = self._auto_day(limits)
+            invested = self.broker.strategy_value()
+        except Exception:                               # cannot establish the day's figures: hold new buys, never guess
+            return dict(new_buys_allowed=False, block_reason="자동매매 일일 손익 기준을 확인할 수 없어 신규 매수를 보류합니다.",
+                        daily_profit=Decimal(0), invested_amount=Decimal(0), **base)
+        reason = None
+        if not trusted:
+            reason = ("오늘의 손익 시작 기준을 확인할 수 없어(첫 평가가 장 시작 이후이고 자동매매 보유분이 있었음) 신규 매수를 보류합니다. "
+                      "보유분의 청산 조건은 유지되며 다음 거래일 장 시작 때 기준이 새로 잡힙니다.")
+        elif profit <= -limits.daily_loss_limit:
+            reason = "일일 손실 한도에 도달했습니다."
+        return dict(new_buys_allowed=reason is None, block_reason=reason, daily_profit=profit, invested_amount=invested, **base)
 
     def _check_auto_buy(self, symbol: str, amount: Decimal, fee: Decimal, limits: "AutoLimits") -> str | None:
         status = self.auto_status(limits)
@@ -174,6 +199,14 @@ class RiskManager:
             return "종목별 최대 투자 금액을 초과했습니다."
         if not RiskPolicy.total_investment_allowed(limits, status["invested_amount"], amount):
             return "자동매매 투자 가능 금액을 초과했습니다."
+        if limits.daily_buy_limit > 0:
+            from .trading import KST
+            try:
+                used = self.broker.daily_buy_count(self.broker.now().astimezone(KST).date())
+            except Exception:
+                return "하루 매수 횟수를 확인할 수 없어 신규 매수를 보류합니다."
+            if used >= limits.daily_buy_limit:
+                return f"하루 매수 한도 {limits.daily_buy_limit}회에 도달했습니다."
         return None
 
     def check_buy(self, *, symbol: str, amount: Decimal, fee: Decimal,

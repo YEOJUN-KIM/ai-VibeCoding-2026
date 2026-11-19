@@ -174,15 +174,15 @@ class SafetyRegressionTests(MvpBase):
         async def scenario():
             await self.mvp.start()
             self.engine._last_order_at["100001"] = self.clock()
-            real = self.engine.configure
+            real = self.engine.restore_parameters
             calls = []
 
-            def flaky(**kw):
+            def flaky(snapshot):
                 calls.append(1)
                 if len(calls) <= 2:          # the run-end release and stop()'s retry both fail
                     raise RuntimeError("db down")
-                return real(**kw)
-            self.engine.configure = flaky
+                return real(snapshot)
+            self.engine.restore_parameters = flaky
             await self.mvp.stop()
             kept = (self.mvp._legacy is not None, "100001" in self.engine._last_order_at)
             self.mvp._release()                         # next release succeeds

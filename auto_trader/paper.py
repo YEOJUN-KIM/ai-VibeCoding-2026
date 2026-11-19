@@ -20,6 +20,8 @@ def persisted(method):
     @wraps(method)
     def wrapped(self, *args, **kwargs):
         with self._lock:
+            if self._pending_journal is not None:      # already inside a persisted mutation: the outer call commits or rolls back
+                return method(self, *args, **kwargs)
             before = {key: deepcopy(value) for key, value in self.__dict__.items()
                       if key.startswith('_') and key not in {'_lock', '_pending_journal'}}
             initial_cash, metadata, run_id = self.initial_cash, deepcopy(self.snapshot_metadata), self.run_id
@@ -80,6 +82,7 @@ class PaperBroker:
         self._management_symbols = []
         self._management_external_flow = Decimal(0)
         self._pending_journal = None
+        self.clock = None  # optional () -> aware datetime; order timestamps follow it (production: real time)
         self._mvp = {}  # PAPER-MVP-01 settings and decision log; survives restart, never touches cash/positions
         self._lock = RLock()
         self._seed_cash = self.initial_cash
@@ -275,6 +278,25 @@ class PaperBroker:
         with self._lock:
             return self._strategy_positions.get(symbol, {}).get("average_price")
 
+    def now(self) -> datetime:
+        return self.clock() if self.clock else datetime.now().astimezone()
+
+    def strategy_context(self) -> dict:
+        with self._lock:
+            return deepcopy(self._strategy_context)
+
+    def set_strategy_context(self, context: dict) -> None:
+        """In-memory only (like begin_strategy's context, which is not persisted by itself): the context new lots are stamped with."""
+        with self._lock:
+            self._strategy_context = deepcopy(context or {})
+
+    def daily_buy_count(self, day) -> int:
+        """Filled automatic (STRATEGY) buys on a KST calendar day, derived from the persisted order ledger.
+        Rejected orders never reach a fill; a repeated request_id returns the first order, so it is never counted twice."""
+        from .trading import KST
+        return sum(1 for o in self.orders() if o.source == "STRATEGY" and o.side == OrderSide.BUY
+                   and o.status == OrderStatus.FILLED and o.created_at.astimezone(KST).date() == day)
+
     def strategy_symbol_value(self, symbol: str) -> Decimal:
         with self._lock:
             return self.market.quote(symbol).price * int(self._strategy_positions.get(symbol, {}).get("quantity", 0))
@@ -282,7 +304,8 @@ class PaperBroker:
     def strategy_unrealized(self) -> Decimal:
         """Market value minus cost of the automatic (strategy-owned) holdings only."""
         with self._lock:
-            return sum(((self.market.quote(s).price - p["average_price"]) * p["quantity"]
+            # Net of the estimated exit costs (sell fee, tax, slippage) so the loss limit is not optimistic.
+            return sum((self.exit_proceeds(s, p["quantity"], self.market.quote(s).price) - p["average_price"] * p["quantity"]
                         for s, p in self._strategy_positions.items()), Decimal(0))
 
     def strategy_symbols(self) -> list[str]:
@@ -344,7 +367,7 @@ class PaperBroker:
                         if request.side == OrderSide.SELL and status == OrderStatus.FILLED else None)
             order = Order(id=self._next_order_id, symbol=request.symbol, side=request.side,
                           quantity=request.quantity, price=execution_price, status=status,
-                          message=message, created_at=datetime.now().astimezone(),
+                          message=message, created_at=self.now(),
                           source=source, run_id=self.run_id, reason=reason,
                           fee=fee if status == OrderStatus.FILLED else Decimal(0),
                           tax=tax if status == OrderStatus.FILLED else Decimal(0),

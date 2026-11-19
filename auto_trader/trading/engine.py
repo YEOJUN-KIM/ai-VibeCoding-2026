@@ -58,6 +58,7 @@ class TradingEngine:
         # PAPER-SAFETY-01: legacy strategies count buys AND sells against the daily order limit; the MVP counts buys only
         # (a sell is a required exit and must never use up, or be blocked by, the buy allowance).
         self.count_sells_in_daily_limit = True
+        self.start_block = None  # a reason why no new run may start (e.g. shared parameters could not be restored)
         self.run_release = None  # optional callable run once when the run loop ends (restores shared settings)
         self.strategy = strategy if strategy is not None else MovingAverageStrategy()
         self.market = market
@@ -173,8 +174,34 @@ class TradingEngine:
                 "Could not enqueue ML strategy decision for %s", snapshot.symbol
             )
 
-    async def start(self) -> bool:
+    PARAMETER_FIELDS = ("interval_seconds", "short_period", "long_period", "order_quantity", "target_symbols",
+                        "take_profit_rate", "stop_loss_rate", "max_holding_days", "trading_start", "trading_end",
+                        "cooldown_minutes", "daily_order_limit", "sizing_mode", "order_amount", "strategy_id", "strategy_name")
+
+    def capture_parameters(self) -> dict:
+        """Everything configure() sets that a later run depends on, plus the context new lots are stamped with."""
+        snapshot = {name: (list(value) if isinstance(value, list) else value)
+                    for name in self.PARAMETER_FIELDS for value in [getattr(self, name)]}
+        snapshot["_context"] = self.broker.strategy_context()
+        return snapshot
+
+    def restore_parameters(self, snapshot: dict) -> None:
+        """Put captured parameters back WITHOUT touching storage (no baseline reset, cooldowns and counters stay): it cannot
+        fail half-way on a database error, and it validates before assigning anything."""
         if self.running:
+            raise ValueError("자동매매가 실행 중에는 설정을 복원할 수 없습니다.")
+        missing = [name for name in (*self.PARAMETER_FIELDS, "_context") if name not in snapshot]
+        if missing:
+            raise ValueError(f"복원할 설정이 불완전합니다: {missing}")
+        for name in self.PARAMETER_FIELDS:
+            setattr(self, name, list(snapshot[name]) if isinstance(snapshot[name], list) else snapshot[name])
+        self.broker.set_strategy_context(snapshot["_context"])
+        self._history = {stock.symbol: deque(maxlen=self.long_period) for stock in self.market.stocks()}
+        self._previous_trend.clear()
+        self._snapshots.clear()
+
+    async def start(self) -> bool:
+        if self.running or self.start_block:
             return False
         self.emergency_stopped = False
         self.running = True
@@ -222,6 +249,8 @@ class TradingEngine:
                 release()
             except Exception:
                 logging.getLogger("auto_trader.strategy").exception("Could not restore shared settings after the run")
+                self.start_block = "실행 종료 후 공유 설정을 복원하지 못해 새 자동매매를 시작할 수 없습니다."
+
 
     async def _run(self) -> None:
         try:

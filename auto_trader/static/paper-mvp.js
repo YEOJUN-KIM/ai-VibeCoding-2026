@@ -49,11 +49,12 @@ function render() { renderRun(); renderHome(); renderHistory(); if (tab === 'set
 // ---------------------------------------------------------------- control strip
 function renderRun() {
   const r = st.run, held = r.held_symbols.length;
-  const tone = { idle: 'muted', running: 'green', stopped: 'amber', emergency: 'up', other: 'amber' }[r.state];
+  const tone = { idle: 'muted', running: 'green', stopped: 'amber', emergency: 'up', other: 'amber', blocked: 'up' }[r.state];
   $('#run-label').className = tone; $('#run-label').innerHTML = '<i class="dot"></i> ' + esc(r.label);
   let reason = r.message;
   if (r.state === 'idle') reason = '저장된 투자 기준으로 모의 운용을 시작할 수 있어요.';
   if (!r.running && r.state !== 'idle') reason = (held ? '보유 ' + held + '종목이 있습니다. ' : '') + '신규 판단·주문이 멈춰 있습니다.';
+  if (r.state === 'blocked') reason = r.blocked_reason;
   $('#run-reason').textContent = reason;
   const src = st.data_source === 'SYNTHETIC' ? '합성(가상) 시장 데이터로 검증 중 · 실제 시장 데이터는 아직 검증되지 않았습니다.' : '검증된 시장 데이터 소스가 연결되지 않았습니다 · 신규 진입은 보류되고 보유분 감시만 합니다.';
   $('#run-next').textContent = r.running ? '실행 중 · 보유분 손절·익절 감시가 켜져 있습니다. ' + src : r.stop_note + (r.state === 'emergency' ? ' 긴급정지의 실제 보장 범위는 일시정지와 같으며 별도 검증되지 않았습니다.' : '');

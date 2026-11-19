@@ -162,9 +162,10 @@ class PaperMvp:
 
     def auto_limits(self, s: MvpSettings | None = None) -> AutoLimits:
         """The automatic run's limits. Held only in memory by the risk manager while a run is active; manual orders never see them."""
-        _, cap, loss = self._limits(s or self.settings())
         s = s or self.settings()
-        return AutoLimits(max_order_amount=cap, max_symbol_amount=cap, max_total_investment=Decimal(s.budget), daily_loss_limit=loss)
+        _, cap, loss = self._limits(s)
+        return AutoLimits(max_order_amount=cap, max_symbol_amount=cap, max_total_investment=Decimal(s.budget), daily_loss_limit=loss,
+                          daily_buy_limit=s.daily_buys, session_open=self.engine.trading_start)
 
     def day01_config(self, s: MvpSettings | None = None) -> Day01Config:
         s = s or self.settings()
@@ -192,14 +193,7 @@ class PaperMvp:
     # ---- run-scoped engine parameters (in memory only; restored when the run ends)
     def _capture_legacy(self) -> dict:
         e = self.engine
-        return dict(
-            kwargs=dict(interval_seconds=e.interval_seconds, short_period=e.short_period, long_period=e.long_period,
-                        order_quantity=e.order_quantity, target_symbols=list(e.target_symbols), take_profit_rate=e.take_profit_rate,
-                        stop_loss_rate=e.stop_loss_rate, max_holding_days=e.max_holding_days,
-                        trading_start=e.trading_start.strftime("%H:%M"), trading_end=e.trading_end.strftime("%H:%M"),
-                        cooldown_minutes=e.cooldown_minutes, daily_order_limit=e.daily_order_limit, sizing_mode=e.sizing_mode,
-                        order_amount=e.order_amount, strategy_id=e.strategy_id, strategy_name=e.strategy_name),
-            price_feed=e.price_feed, count_sells=e.count_sells_in_daily_limit)
+        return dict(engine=e.capture_parameters(), price_feed=e.price_feed, count_sells=e.count_sells_in_daily_limit)
 
     def _activate(self, s: MvpSettings):
         eng = self.engine
@@ -223,31 +217,42 @@ class PaperMvp:
                   f"하루 손실 {limits.daily_loss_limit:,}원 · 자동매매에만 적용(수동 주문 제외) · 신규 매수부터 적용(기존 보유분 청산 기준 유지)")
 
     def _release(self):
-        """End of an automatic run: drop its limits and give the engine back its pre-MVP parameters (idempotent; no-op while running)."""
+        """End of an automatic run: drop its limits and put the engine's pre-MVP parameters back (idempotent, in memory only).
+        If that fails the engine is BLOCKED: no new automatic run (MVP or legacy) may start until a retry succeeds, and
+        the snapshot is kept untouched for that retry. Manual PAPER orders are not affected."""
         legacy, eng, log = self._legacy, self.engine, logging.getLogger("auto_trader.paper_mvp")
         if eng.running:
             return
         self.broker.risk_manager.auto_limits = None    # limits exist only while a run is active
-        if legacy is None:
-            return
-        cooldowns = dict(eng._last_order_at)
-        try:
-            eng.configure(**legacy["kwargs"])
+        if legacy is not None:
+            try:
+                eng.restore_parameters(legacy["engine"])
+            except Exception:
+                log.exception("Could not restore the engine parameters; new automatic runs stay blocked")
+                eng.start_block = "엔진 설정 복구가 끝나지 않아 새 자동매매를 시작할 수 없습니다. 다시 시작하면 복구를 재시도합니다."
+                try:
+                    self._log("CONTROL", "설정 복구 실패", eng.start_block)
+                except Exception:
+                    log.exception("Could not record the restore failure")
+                return
             self._legacy = None
-        except Exception:
-            log.exception("Could not restore the engine settings; the snapshot is kept for the next release")
-        finally:
-            eng._last_order_at.update(cooldowns)
-        if self._legacy is not None:
-            return
-        eng.price_feed, eng.count_sells_in_daily_limit = legacy["price_feed"], legacy["count_sells"]
-        eng.candidate_provider, eng.candidate_message, eng.run_release = None, "", None
+            eng.price_feed, eng.count_sells_in_daily_limit = legacy["price_feed"], legacy["count_sells"]
+            eng.candidate_provider, eng.candidate_message, eng.run_release = None, "", None
+        eng.start_block = None
+
+    def _ensure_startable(self):
+        """Retry a pending restore first; refuse while the engine is still blocked."""
+        if self.engine.start_block or self._legacy is not None:
+            self._release()
+        if self.engine.start_block:
+            raise MvpConflict(self.engine.start_block)
 
     def limit_legacy_run(self):
         """The existing /strategy/start flow is also automatic trading: it runs under the same in-memory limits (the saved or
         default MVP settings) instead of the persistent risk settings. Call under the paper lock, right before engine.start()."""
         if self.engine.running:
             raise MvpConflict("이미 자동매매가 실행 중입니다.")
+        self._ensure_startable()
         self.broker.risk_manager.auto_limits = self.auto_limits()
         self.engine.run_release = self._release        # clears the limits when that run ends
 
@@ -265,6 +270,7 @@ class PaperMvp:
         reason = self.start_guard() if self.start_guard else None
         if reason:
             raise MvpConflict(reason)
+        self._ensure_startable()
         if self.broker.management_scope != "AUTO":
             raise MvpConflict("관리 범위에 수동 보유분이 포함되어 있어 시작할 수 없습니다. 관리 범위를 '자동매매 보유분'으로 바꾸세요.")
         try:
@@ -386,6 +392,8 @@ class PaperMvp:
             state, label = "other", "다른 PAPER 전략 실행 중"
         elif strategy.running:
             state, label = "running", "자동매매 감시 중"
+        elif eng.start_block:
+            state, label = "blocked", "설정 복구 필요"
         elif strategy.emergency_stopped:
             state, label = "emergency", "긴급정지"
         elif broker.mvp_state().get("equity"):
@@ -413,7 +421,7 @@ class PaperMvp:
             data_source="SYNTHETIC" if self.source is not None else "NONE",
             run=dict(state=state, label=label, running=strategy.running, message=eng.data_message,
                      operating_state=strategy.operating_state, tick_count=strategy.tick_count,
-                     exit_monitoring=strategy.running, held_symbols=sorted(self._held()),
+                     exit_monitoring=strategy.running, blocked_reason=eng.start_block, held_symbols=sorted(self._held()),
                      stop_note="정지하면 신규 매수·매도 판단과 보유분의 손절·익절 감시가 모두 멈춥니다. 보유 주식은 자동 매도되지 않고 그대로 남습니다."
                                + ("" if strategy.running else " 현재 청산 감시는 꺼져 있습니다.")),
             account=dict(total_asset=str(account.total_asset), cash=str(account.cash), initial_cash=str(account.initial_cash),
