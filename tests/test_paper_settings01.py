@@ -177,7 +177,6 @@ class SettingsOwnershipTests(MvpBase):
         from unittest.mock import patch
         self.mvp.apply(self.small_budget())
         rm = self.broker.risk_manager
-        rm._auto_open = None
         with patch.object(self.broker, "update_mvp", side_effect=RuntimeError("db down")):
             status = rm.auto_status(rm.auto_limits)
             reason = rm.check_buy(symbol=MANUAL_SYMBOL, amount=Decimal(1000), fee=Decimal(0))

@@ -219,26 +219,66 @@ class DailyLossBaselineTests(Safety02Base):                              # --- C
             expected += self.broker.exit_proceeds(symbol, quantity, self.market.quote(symbol).price) - average * quantity
         self.assertEqual(self.broker.strategy_unrealized(), expected)
 
-    def test_loss_before_the_first_evaluation_of_the_day_holds_buys(self):
+    def test_loss_before_the_first_evaluation_of_the_day_is_counted_from_the_previous_evaluation(self):
         self.hold_auto_lots()
         for symbol in self.broker.strategy_symbols():
-            self.set_price(symbol, "0.90")                              # the loss happened before today's first evaluation
+            self.set_price(symbol, "0.90")                              # overnight / pre-first-evaluation loss
         self.next_day(11, 0)
         status = self.status()
-        self.assertFalse(status["new_buys_allowed"], "an unverifiable day-start baseline must not be treated as normal")
+        self.assertFalse(status["new_buys_allowed"])
+        self.assertIn("손실", status["block_reason"])                   # measured from the previous evaluation, not "from now"
+
+    def test_loss_between_open_and_a_late_first_evaluation_is_not_hidden(self):
+        self.hold_auto_lots(daily_loss_pct=Decimal("0.5"))
+        for symbol in self.broker.strategy_symbols():
+            self.set_price(symbol, "0.90")                              # falls right after the open ...
+        self.next_day(9, 14)                                            # ... first evaluation only at 09:14
+        status = self.status()
+        self.assertFalse(status["new_buys_allowed"])
+        self.assertIn("손실", status["block_reason"])
+
+    def test_carried_holdings_without_any_previous_record_hold_new_buys(self):
+        self.hold_auto_lots()
+        self.broker.update_mvp(auto_last=None)
+        self.next_day(11, 0)
+        status = self.status()
+        self.assertFalse(status["new_buys_allowed"])
         self.assertIn("기준", status["block_reason"])
         self.assertIsNotNone(self.broker.risk_manager.check_buy(symbol=PROBE, amount=Decimal(1000), fee=Decimal(0)))
 
+    def test_sell_before_the_first_evaluation_of_the_day_makes_the_baseline_untrusted(self):
+        self.hold_auto_lots(daily_loss_pct=Decimal("0.5"))
+        self.next_day(9, 3)
+        lot = self.broker.managed_lots()[0]
+        self.assertTrue(self.engine._sell(lot["symbol"], "exit before any evaluation", lot_id=lot["id"]))
+        for sym in list(self.broker.strategy_symbols()):                # sell everything: the book is flat again
+            for l in [x for x in self.broker.managed_lots() if x["symbol"] == sym]:
+                self.engine._sell(sym, "exit", lot_id=l["id"])
+        self.assertEqual(self.broker.strategy_symbols(), [])
+        status = self.status()
+        self.assertFalse(status["new_buys_allowed"], "a flat book is not trusted when carried lots were sold before the first evaluation")
+
     def test_hold_does_not_stop_exits_of_automatic_lots(self):
         self.hold_auto_lots()
-        for symbol in self.broker.strategy_symbols():
-            self.set_price(symbol, "0.90")
+        self.broker.update_mvp(auto_last=None)
         self.next_day(11, 0)
         self.assertFalse(self.status()["new_buys_allowed"])
         lot = self.broker.managed_lots()[0]
         self.assertTrue(self.engine._sell(lot["symbol"], "safety-02 exit", lot_id=lot["id"]))
 
-    def test_first_evaluation_at_the_open_is_a_valid_baseline_and_the_limit_then_works(self):
+    def test_account_reset_invalidates_the_baseline(self):
+        self.hold_auto_lots()
+        self.next_day(9, 5)
+        self.status()                                                   # baseline recorded
+        self.broker.reset_practice()
+        self.assertIsNone(self.broker.mvp_state().get("auto_open"))
+        self.mvp.apply(self.direct(daily_loss_pct=Decimal("0.5")))
+        self.assertTrue(self.status()["new_buys_allowed"])
+        self.broker.submit(OrderRequest(symbol=PROBE, side="BUY", quantity=20), source="STRATEGY")
+        self.set_price(PROBE, "0.5")
+        self.assertFalse(self.status()["new_buys_allowed"], "the old account's baseline must not offset the new account's loss")
+
+    def test_first_evaluation_next_day_with_unchanged_holdings_is_a_valid_baseline_and_the_limit_then_works(self):
         self.hold_auto_lots(daily_loss_pct=Decimal("0.5"))             # 50,000 KRW
         self.next_day(9, 5)
         self.assertTrue(self.status()["new_buys_allowed"])
@@ -260,6 +300,7 @@ class DailyLossBaselineTests(Safety02Base):                              # --- C
 
     def test_unreliable_baseline_stays_unreliable_after_restart(self):
         self.hold_auto_lots()
+        self.broker.update_mvp(auto_last=None)
         self.next_day(11, 0)
         self.assertFalse(self.status()["new_buys_allowed"])
         broker, engine, mvp = self.reboot()
@@ -277,7 +318,6 @@ class DailyLossBaselineTests(Safety02Base):                              # --- C
     def test_corrupt_baseline_record_holds_buys(self):
         self.mvp.apply(self.direct())
         self.broker.update_mvp(auto_open="garbage")
-        self.broker.risk_manager._auto_open = None
         status = self.status()
         self.assertFalse(status["new_buys_allowed"])
 

@@ -1,7 +1,7 @@
 """영구 설정과 메모리 PAPER 계좌를 결합한 위험 한도 관리."""
 
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from .database import connect
@@ -34,17 +34,15 @@ class AutoLimits:
     max_total_investment: Decimal
     daily_loss_limit: Decimal
     daily_buy_limit: int = 0                  # filled automatic buys per KST day; 0 = no limit (same meaning as the engine's)
-    session_open: time = time(9, 0)           # KST; a day baseline taken later than open + BASELINE_GRACE is not trusted
 
 
-BASELINE_GRACE = timedelta(minutes=15)
+LAST_EVAL_WRITE_EVERY = timedelta(seconds=60)
 
 
 class RiskManager:
     def __init__(self, market) -> None:
         self.market = market
         self.auto_limits: AutoLimits | None = None
-        self._auto_open = None  # (date, unrealised automatic P/L at the first evaluation of the day)
         self.account_id = None
         self.broker = None
         self._baseline_date = date.today()
@@ -140,34 +138,67 @@ class RiskManager:
     # ---- automatic-run limits (PAPER-SETTINGS-01)
     def _auto_day(self, limits: "AutoLimits"):
         """(profit today of automatic trades only, baseline_trusted). Profit = realised STRATEGY sells today + unrealised
-        (net of estimated exit costs) of automatic lots - the unrealised part at the day's baseline. The baseline is stored
-        with the account and survives restarts. It is trusted only if there were no automatic holdings when it was taken
-        (then all of the day's P/L comes from recorded orders) or it was taken at the session open; otherwise earlier
-        intraday moves could be missing and new buys are held."""
+        (net of estimated exit costs) of automatic lots - the unrealised part at the day's baseline.
+
+        The baseline is read from the account's persisted state on every call (so an account reset invalidates it) and is
+        trusted only when it can be proven from recorded facts, never from "whatever the first evaluation saw":
+          * previous evaluation record (`auto_last`, rewritten at most once a minute) exists, no automatic order was filled
+            since it and the holdings are identical -> that record is the day's starting point;
+          * or nothing is held and no automatic order was filled today -> the day starts flat at 0.
+        Anything else (carried holdings with no provable start, sells before the first evaluation, unreadable records) is
+        untrusted: new buys are held, exits are never touched."""
         from .trading import KST
         now = self.broker.now().astimezone(KST)
-        key = now.date().isoformat()
-        realized = sum((o.realized_profit or Decimal(0) for o in self.broker.orders()
-                        if o.source == "STRATEGY" and o.side.value == "SELL" and o.status.value == "FILLED"
-                        and o.created_at.astimezone(KST).date() == now.date()), Decimal(0))
+        today, key = now.date(), now.date().isoformat()
+        orders = [o for o in self.broker.orders() if o.source == "STRATEGY" and o.status.value == "FILLED"]
+        realized = sum((o.realized_profit or Decimal(0) for o in orders
+                        if o.side.value == "SELL" and o.created_at.astimezone(KST).date() == today), Decimal(0))
+        holdings = {sym: int(self.broker.strategy_quantity(sym)) for sym in self.broker.strategy_symbols()}
         unrealized = self.broker.strategy_unrealized()
-        if self._auto_open is None or self._auto_open["date"] != key:
-            saved = self.broker.mvp_state().get("auto_open")
-            if saved is None or (isinstance(saved, dict) and saved.get("date") != key) or (
-                    isinstance(saved, list) and saved and saved[0] != key):
-                opened = datetime.combine(now.date(), limits.session_open, tzinfo=KST)
-                trusted = not self.broker.strategy_symbols() or now <= opened + BASELINE_GRACE
-                record = dict(date=key, unrealized=str(unrealized), trusted=trusted, at=now.isoformat())
-                self.broker.update_mvp(auto_open=record)           # raises if it cannot be saved -> buys are held
-            elif isinstance(saved, dict):
-                record = dict(date=saved["date"], unrealized=str(Decimal(saved["unrealized"])), trusted=bool(saved["trusted"]),
-                              at=saved.get("at"))
-            elif isinstance(saved, list) and len(saved) == 2:     # written by the previous version: trust level unknown
-                record = dict(date=saved[0], unrealized=str(Decimal(saved[1])), trusted=False, at=None)
-            else:
-                raise ValueError("unreadable day baseline")
-            self._auto_open = record
-        return realized + unrealized - Decimal(self._auto_open["unrealized"]), bool(self._auto_open["trusted"])
+        state = self.broker.mvp_state()
+        base, last = state.get("auto_open"), state.get("auto_last")
+
+        if base is None or (isinstance(base, dict) and base.get("date") != key) or (isinstance(base, list) and base and base[0] != key):
+            record = None
+            try:
+                last_at = datetime.fromisoformat(last["at"])
+                last_holdings = {str(k): int(v) for k, v in last["holdings"].items()}
+                last_unrealized = Decimal(last["unrealized"])
+                since = [o for o in orders if o.created_at > last_at]
+                if last_at.astimezone(KST).date() < today and not since and last_holdings == holdings:
+                    record = dict(date=key, unrealized=str(last_unrealized), trusted=True, at=now.isoformat(), source="previous-evaluation")
+            except (TypeError, KeyError, ValueError, AttributeError, ArithmeticError):
+                pass                                                  # no usable previous record
+            if record is None:
+                flat_start = not holdings and not any(o.created_at.astimezone(KST).date() == today for o in orders)
+                record = dict(date=key, unrealized="0" if flat_start else str(unrealized), trusted=flat_start, at=now.isoformat(),
+                              source="flat-start" if flat_start else "unverifiable")
+            self.broker.update_mvp(auto_open=record)                  # raises if it cannot be saved -> buys are held
+        elif isinstance(base, dict):
+            record = dict(date=base["date"], unrealized=str(Decimal(base["unrealized"])), trusted=bool(base["trusted"]))
+        elif isinstance(base, list) and len(base) == 2:               # written by an earlier version: trust level unknown
+            record = dict(date=base[0], unrealized=str(Decimal(base[1])), trusted=False)
+        else:
+            raise ValueError("unreadable day baseline")
+
+        try:
+            stale = (datetime.fromisoformat(last["at"]) + LAST_EVAL_WRITE_EVERY <= now
+                     or {str(k): int(v) for k, v in last["holdings"].items()} != holdings)
+        except (TypeError, KeyError, ValueError, AttributeError):
+            stale = True
+        if stale:                                                     # the next day's provable starting point
+            self.broker.update_mvp(auto_last=dict(at=now.isoformat(), unrealized=str(unrealized), holdings=holdings))
+        return realized + unrealized - Decimal(record["unrealized"]), bool(record["trusted"])
+
+    def checkpoint(self) -> None:
+        """End-of-tick record of the automatic book (holdings, unrealised), so the next day's starting point is provable even
+        if the app stops right after a fill. Never raises: errors surface through auto_status."""
+        if self.auto_limits is None:
+            return
+        try:
+            self._auto_day(self.auto_limits)
+        except Exception:
+            pass
 
     def auto_profit(self, limits: "AutoLimits | None" = None) -> Decimal:
         return self._auto_day(limits or self.auto_limits or AutoLimits(Decimal(1), Decimal(1), Decimal(1), Decimal(1)))[0]
@@ -183,8 +214,8 @@ class RiskManager:
                         daily_profit=Decimal(0), invested_amount=Decimal(0), **base)
         reason = None
         if not trusted:
-            reason = ("오늘의 손익 시작 기준을 확인할 수 없어(첫 평가가 장 시작 이후이고 자동매매 보유분이 있었음) 신규 매수를 보류합니다. "
-                      "보유분의 청산 조건은 유지되며 다음 거래일 장 시작 때 기준이 새로 잡힙니다.")
+            reason = ("오늘의 손익 시작 기준을 확인할 수 없어(전일 평가 기록 없이 자동매매 보유분이 이월됨, 또는 첫 평가 전에 자동 매도가 있었음) "
+                      "신규 매수를 보류합니다. 보유분의 청산 조건은 유지되며, 오늘 평가 기록이 쌓이면 다음 거래일부터 기준이 확정됩니다.")
         elif profit <= -limits.daily_loss_limit:
             reason = "일일 손실 한도에 도달했습니다."
         return dict(new_buys_allowed=reason is None, block_reason=reason, daily_profit=profit, invested_amount=invested, **base)

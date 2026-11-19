@@ -346,6 +346,12 @@ class TradingEngine:
                 self.data_message = "완료된 1분봉 대기 · 신규 판단과 체결을 기다립니다."
             return
         self.step(candles=candles)
+        hook = getattr(self.broker.risk_manager, "checkpoint", None) if self.broker.risk_manager else None
+        if hook:
+            try:
+                hook()
+            except Exception:
+                logging.getLogger("auto_trader.strategy").exception("Could not record the end-of-tick automatic book")
 
     def step(self, *, candles=None) -> None:
         if self.price_feed is not None and candles is None:
