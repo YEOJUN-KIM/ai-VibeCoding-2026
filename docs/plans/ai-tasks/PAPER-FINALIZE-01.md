@@ -20,7 +20,7 @@
 | 미실행 / 금지 작업 | LIVE 주문, 실제 Toss/외부 시세·주문, 운영 DB·my-postgres, 운영 서버·워커 변경, .env 열람, 시스템 시계 변경, 새 PR/Draft 생성, PR #11 수정/병합, main 변경, force/reset/clean/rebase, 타 worktree·브랜치 삭제, 배포, 전체 prune·볼륨·이미지 삭제 |
 | 승인 상태 | 승인 |
 | 사용자 승인 근거 | PAPER-FINALIZE-01 지시(2026-11-20): P0/P1 수정·재현 테스트·로컬 commit, 격리 테스트·합성 종단 검증, 식별된 전용 테스트 컨테이너 정리, 검증 HEAD의 새 원격 브랜치 일반 push 승인 |
-| 진행 상태 | 작업 중 |
+| 진행 상태 | 검토 대기 (Codex 최종 재검토 P0/P1 없음, push 후 확정) |
 
 ## 착수 확인
 
