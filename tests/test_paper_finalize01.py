@@ -101,6 +101,28 @@ class MixedHoldingAccounting(MvpBase):
                 self.assertGreaterEqual(self.broker.position_average_price(SYMBOL), 0)
                 self._realized_matches()
 
+    def test_ledger_saved_by_the_earlier_implementation_never_gets_a_negative_cost(self):
+        """Earlier versions could leave automatic-lot cost (1500@200) above the position's remaining cost (1500@150 average)."""
+        for auto_price, manual_price in ((200, 100), (300, 100), (400, 100)):
+            with self.subTest(auto_price=auto_price):
+                self.broker.reset_practice()
+                with self.at_price(auto_price):
+                    for quantity in (1000, 500):                               # one order is capped at 1000 shares
+                        self.broker.submit(OrderRequest(symbol=SYMBOL, side="BUY", quantity=quantity), source="STRATEGY")
+                with self.at_price(manual_price):
+                    for quantity in (1000, 500):
+                        self.broker.submit(OrderRequest(symbol=SYMBOL, side="BUY", quantity=quantity), source="MANUAL")
+                held = self.broker._positions[SYMBOL]                        # the old manual sale: position shrinks, average unchanged
+                held["quantity"] = 1500
+                self.broker.begin_strategy([SYMBOL], scope="AUTO")
+                with self.at_price(auto_price):
+                    for quantity in (1000, 500):
+                        lot = self.broker.managed_lots()[0]
+                        order = self.broker.submit(OrderRequest(symbol=SYMBOL, side="SELL", quantity=quantity), source="STRATEGY", lot_id=lot["id"])
+                        self.assertEqual(order.status.value, "FILLED", order.message)
+                        average = self.broker.position_average_price(SYMBOL)
+                        self.assertTrue(average is None or average >= 0, average)
+
     def test_pure_strategy_holding_average_is_unchanged_by_a_partial_sale(self):
         with self.at_price(100):
             self.broker.submit(OrderRequest(symbol=SYMBOL, side="BUY", quantity=10), source="STRATEGY")

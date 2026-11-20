@@ -441,10 +441,15 @@ class PaperBroker:
         auto = [lot for lot in self._auto_lots if lot['symbol'] == symbol and lot.get('origin') == 'AUTO']
         auto_quantity = sum(lot['quantity'] for lot in auto)
         pool_quantity = quantity - auto_quantity
-        pool = average
-        if pool_quantity > 0:
-            candidate = (average * quantity - sum((Decimal(lot['average_price']) * lot['quantity'] for lot in auto), Decimal(0))) / pool_quantity
-            pool = candidate if candidate >= 0 else average        # inconsistent history: keep the previous (mixed average) behaviour
+        total_cost = average * quantity
+        auto_cost = sum((Decimal(lot['average_price']) * lot['quantity'] for lot in auto), Decimal(0))
+        tolerance = max(Decimal(1), total_cost * Decimal("1e-9"))
+        # Recovery policy for ledgers saved by the earlier implementation (whose manual sales could leave the automatic lots'
+        # cost above the position's remaining cost): if the lot costs do not fit inside the position, they cannot be trusted
+        # to split it, so the sale is booked at the position's mixed average exactly as before. Never a negative cost.
+        if pool_quantity < 0 or auto_cost > total_cost + tolerance or (pool_quantity == 0 and abs(total_cost - auto_cost) > tolerance):
+            return average
+        pool = (total_cost - auto_cost) / pool_quantity if pool_quantity > 0 else average
         auto_ids = {lot['id'] for lot in auto}
         cost, remaining = Decimal(0), sold
         if source == "STRATEGY":
