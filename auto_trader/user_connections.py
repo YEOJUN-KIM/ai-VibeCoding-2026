@@ -13,6 +13,9 @@ from .toss import TossClient, TossApiError
 
 def migrate_local_credentials() -> None:
     """Move the earlier encrypted column to local files before removing that column."""
+    from . import paper_mvp_isolated
+    if paper_mvp_isolated.active():     # isolated verification neither reads that column nor touches the credential files
+        return
     with connect() as conn:
         exists = conn.execute("SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='user_broker_connections' AND column_name='encrypted_credentials'").fetchone()
         if not exists:

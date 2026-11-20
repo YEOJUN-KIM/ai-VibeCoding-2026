@@ -14,7 +14,14 @@ def credential_path(user_id: int) -> Path:
     return SECRET_DIRECTORY / f'broker-{user_id}.bin'
 
 
+def _isolated() -> bool:
+    from . import paper_mvp_isolated
+    return paper_mvp_isolated.active()
+
+
 def read_encrypted(user_id: int) -> bytes | None:
+    if _isolated():          # isolated verification never reads stored broker credentials
+        return None
     try:
         return credential_path(user_id).read_bytes()
     except FileNotFoundError:
@@ -22,6 +29,8 @@ def read_encrypted(user_id: int) -> bytes | None:
 
 
 def write_encrypted(user_id: int, payload: bytes | None) -> None:
+    if _isolated():          # ...and never writes or deletes them
+        raise RuntimeError('격리 검증 모드에서는 증권 자격정보 저장소를 사용할 수 없습니다.')
     path = credential_path(user_id)
     if payload is None:
         path.unlink(missing_ok=True)

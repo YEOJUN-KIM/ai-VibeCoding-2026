@@ -33,11 +33,45 @@ class MixedHoldingAccounting(MvpBase):
             self.assertEqual(sale.status.value, "FILLED", sale.message)
             account = self.broker.account()
             order_realized = sum((o.realized_profit for o in self.broker.orders() if o.realized_profit is not None), Decimal(0))
-            self.assertEqual(account.realized_profit, order_realized)               # history and account tell the same story
+            self.assertAlmostEqual(account.realized_profit, order_realized, delta=Decimal('0.0001'))               # history and account tell the same story
             self.assertEqual(account.positions[0].quantity, 10)
             self.assertEqual(account.positions[0].average_price, self.broker.position_average_price(SYMBOL))
             # remaining 10 shares are the manual ones bought at ~200: cost basis must be that, not the stale mixed average
             self.assertGreater(account.positions[0].average_price, Decimal(190))
+
+    def _realized_matches(self):
+        account = self.broker.account()
+        booked = sum((o.realized_profit for o in self.broker.orders() if o.realized_profit is not None), Decimal(0))
+        self.assertAlmostEqual(account.realized_profit, booked, delta=Decimal('0.0001'))       # Decimal division noise only
+
+    def test_manual_sale_first_then_strategy_sale_keeps_orders_and_account_equal(self):
+        with self.at_price(100):
+            self.broker.submit(OrderRequest(symbol=SYMBOL, side="BUY", quantity=10), source="STRATEGY")
+        with self.at_price(200):
+            self.broker.submit(OrderRequest(symbol=SYMBOL, side="BUY", quantity=10), source="MANUAL")
+            self.assertEqual(self.broker.submit(OrderRequest(symbol=SYMBOL, side="SELL", quantity=10), source="MANUAL").status.value, "FILLED")
+            self._realized_matches()
+            remaining = self.broker.account().positions[0]
+            self.assertEqual(remaining.quantity, 10)
+            self.assertLess(remaining.average_price, Decimal(110))        # the remaining automatic lot's own cost (~100)
+            self.assertEqual(self.broker.submit(OrderRequest(symbol=SYMBOL, side="SELL", quantity=10), source="STRATEGY").status.value, "FILLED")
+            self._realized_matches()
+            self.assertEqual(self.broker.holding_quantity(SYMBOL), 0)
+
+    def test_partial_sales_in_both_orders_keep_orders_and_account_equal(self):
+        for first, second in (("MANUAL", "STRATEGY"), ("STRATEGY", "MANUAL")):
+            with self.subTest(first=first):
+                self.broker.reset_practice()
+                with self.at_price(100):
+                    self.broker.submit(OrderRequest(symbol=SYMBOL, side="BUY", quantity=10), source="STRATEGY")
+                with self.at_price(300):
+                    self.broker.submit(OrderRequest(symbol=SYMBOL, side="BUY", quantity=6), source="MANUAL")
+                with self.at_price(250):
+                    for source, qty in ((first, 3), (second, 4), (first, 2), (second, 2)):
+                        have = self.broker.strategy_quantity(SYMBOL) if source == "STRATEGY" else self.broker.holding_quantity(SYMBOL) - self.broker.strategy_quantity(SYMBOL)
+                        if have >= qty:
+                            self.assertEqual(self.broker.submit(OrderRequest(symbol=SYMBOL, side="SELL", quantity=qty), source=source).status.value, "FILLED")
+                        self._realized_matches()
 
     def test_pure_strategy_holding_average_is_unchanged_by_a_partial_sale(self):
         with self.at_price(100):
@@ -111,6 +145,20 @@ class IsolatedNeverLoadsStoredConnections(unittest.TestCase):
             client = uc.UserConnections().client(1)
         self.assertFalse(client.configured)
         boom.assert_not_called()
+
+
+class IsolatedNeverTouchesCredentialFiles(unittest.TestCase):
+    """P1-B: isolated startup must not migrate (write) or read the local credential files."""
+
+    def test_migration_and_vault_are_blocked(self):
+        from auto_trader import connection_vault as vault, user_connections as uc
+        boom = unittest.mock.Mock(side_effect=AssertionError("must not touch DB or vault"))
+        with patch.object(iso, "active", return_value=True), patch.object(uc, "connect", boom), patch.object(uc, "write_encrypted", boom):
+            uc.migrate_local_credentials()
+            boom.assert_not_called()
+            self.assertIsNone(vault.read_encrypted(1))
+            with self.assertRaises(RuntimeError):
+                vault.write_encrypted(1, b"x")
 
 
 if __name__ == "__main__":

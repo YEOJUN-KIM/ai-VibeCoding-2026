@@ -363,7 +363,18 @@ class PaperBroker:
             if lot_id and (selected_lot is None or request.quantity > selected_lot['quantity']):
                 status, message = OrderStatus.REJECTED, '관리 보유분 수량을 확인하세요.'
             strategy_average = Decimal(selected_lot['average_price']) if selected_lot else self.strategy_average(request.symbol) or Decimal(0)
-            realized = (amount - fee - tax - (strategy_average if source == "STRATEGY" else average) * request.quantity
+            sell_cost = Decimal(0)
+            if request.side == OrderSide.SELL and status == OrderStatus.FILLED:
+                # Cost per share of the shares being sold. Strategy sales use the strategy lot's cost. A manual sale of the
+                # unmanaged part uses that part's own cost (total cost minus the strategy-managed cost), not the mixed average.
+                if source == "STRATEGY":
+                    sell_cost = strategy_average
+                elif lot_id is None and self.strategy_quantity(request.symbol) and quantity > self.strategy_quantity(request.symbol):
+                    managed_cost = (self.strategy_average(request.symbol) or Decimal(0)) * self.strategy_quantity(request.symbol)
+                    sell_cost = (average * quantity - managed_cost) / (quantity - self.strategy_quantity(request.symbol))
+                else:
+                    sell_cost = average
+            realized = (amount - fee - tax - sell_cost * request.quantity
                         if request.side == OrderSide.SELL and status == OrderStatus.FILLED else None)
             order = Order(id=self._next_order_id, symbol=request.symbol, side=request.side,
                           quantity=request.quantity, price=execution_price, status=status,
@@ -382,10 +393,9 @@ class PaperBroker:
                 remaining = quantity + request.quantity if buying else quantity - request.quantity
                 if buying:
                     new_average = (average * quantity + amount + fee) / remaining
-                elif source == "STRATEGY" and remaining and strategy_average != average:
-                    # A strategy sale is booked at the strategy lot's own cost, so the same cost must leave the position;
-                    # otherwise a mixed manual+auto holding keeps a stale average and orders/account disagree on realized profit.
-                    new_average = max(Decimal(0), (average * quantity - strategy_average * request.quantity) / remaining)
+                elif remaining:
+                    # The cost that left through realized profit leaves the position too (exactly what the order booked).
+                    new_average = (average * quantity - sell_cost * request.quantity) / remaining
                 else:
                     new_average = average
                 self._cash += -amount - fee if buying else amount - fee - tax
