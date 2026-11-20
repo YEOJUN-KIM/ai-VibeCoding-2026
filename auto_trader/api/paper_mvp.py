@@ -12,9 +12,14 @@ router = APIRouter(prefix="/paper/mvp")
 
 def _controller() -> PaperMvp:
     """Controller for the current user's selected PAPER account (lazy import keeps the demo server runtime-free)."""
-    from .. import runtime
+    from .. import paper_mvp_isolated as isolated, runtime
     state = runtime.paper_state()
-    mvp = controller_for(state.broker, state.engine)
+    if isolated.active():      # verification only: synthetic source + virtual clock; auth/CSRF/start_guard stay real
+        source, clock = isolated.synthetic()
+        isolated.prepare_engine(state.engine)
+        mvp = controller_for(state.broker, state.engine, source=source, clock=clock)
+    else:
+        mvp = controller_for(state.broker, state.engine)
     mvp.lock = state.lock            # same lock as the legacy /strategy/start|stop, so the two can never interleave
     mvp.start_guard = lambda: (None if state.snapshot_at is not None
                                else "먼저 모의계좌를 준비하세요(실험계좌 선택 또는 실제 자산 복사).")

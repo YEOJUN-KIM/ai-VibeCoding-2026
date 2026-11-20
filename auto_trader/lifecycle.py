@@ -22,6 +22,9 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     stock_directory_warm_task: asyncio.Task | None = None
+    virtual_time_task: asyncio.Task | None = None
+    from . import paper_mvp_isolated
+    paper_mvp_isolated.assert_safe()        # a requested isolated run that is not provably isolated never starts
     long_term_candidate_task: asyncio.Task | None = None
     initialize()
     owner = initialize_ownership()
@@ -83,9 +86,14 @@ async def lifespan(application: FastAPI):
         await runtime.ml_collection_worker.start()
         await runtime.ml_quality_worker.start()
         await runtime.ml_macro_worker.start()
+    if paper_mvp_isolated.active():
+        virtual_time_task = paper_mvp_isolated.start_virtual_time(
+            lambda: [runtime.paper_state().engine, runtime.legacy_workspace.engine])
     try:
         yield
     finally:
+        if virtual_time_task is not None:
+            virtual_time_task.cancel()
         if stock_directory_warm_task is not None and not stock_directory_warm_task.done():
             stock_directory_warm_task.cancel()
         if long_term_candidate_task is not None and not long_term_candidate_task.done():
