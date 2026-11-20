@@ -147,23 +147,25 @@ class PaperMvp:
         saved = self.broker.mvp_state().get("settings")
         return MvpSettings.model_validate(saved) if saved else default_settings(self.broker.account().total_asset)
 
-    def _limits(self, s: MvpSettings):
+    def _limits(self, s: MvpSettings, *, strict: bool = True):
+        """`strict` is for saving/starting (new settings must fit the account). Reporting the status of settings that were
+        valid when saved must never fail because the account has since lost value (strict=False)."""
         total = self.broker.account().total_asset
-        if s.budget < 1:
+        if strict and s.budget < 1:
             raise MvpError("투자 금액은 1원 이상이어야 합니다.")
-        if Decimal(s.budget) > total:
+        if strict and Decimal(s.budget) > total:
             raise MvpError(f"투자 금액은 모의 총자산 {total:,.0f}원 이하여야 합니다.")
         cap = total * s.per_value / 100 if s.per_unit == "percent" else s.per_value
         cap = min(cap, Decimal(s.budget)).quantize(Decimal(1), rounding=ROUND_DOWN)
-        if cap < 1:
+        if strict and cap < 1:
             raise MvpError("종목당 한도가 너무 작습니다.")
         loss = max(Decimal(1), (total * s.daily_loss_pct / 100).quantize(Decimal(1), rounding=ROUND_DOWN))
         return total, cap, loss
 
-    def auto_limits(self, s: MvpSettings | None = None) -> AutoLimits:
+    def auto_limits(self, s: MvpSettings | None = None, *, strict: bool = True) -> AutoLimits:
         """The automatic run's limits. Held only in memory by the risk manager while a run is active; manual orders never see them."""
         s = s or self.settings()
-        _, cap, loss = self._limits(s)
+        _, cap, loss = self._limits(s, strict=strict)
         return AutoLimits(max_order_amount=cap, max_symbol_amount=cap, max_total_investment=Decimal(s.budget), daily_loss_limit=loss,
                           daily_buy_limit=s.daily_buys, session_close=self.engine.trading_end)
 
@@ -387,7 +389,7 @@ class PaperMvp:
         now = self._clock()
         account = broker.account()
         strategy = eng.status()
-        risk = broker.risk_manager.auto_status(self.auto_limits())
+        risk = broker.risk_manager.auto_status(self.auto_limits(strict=False))
         if strategy.running and not self._mine():
             state, label = "other", "다른 PAPER 전략 실행 중"
         elif strategy.running:

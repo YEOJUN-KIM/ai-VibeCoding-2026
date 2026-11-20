@@ -380,7 +380,14 @@ class PaperBroker:
             if status == OrderStatus.FILLED:
                 buying = request.side == OrderSide.BUY
                 remaining = quantity + request.quantity if buying else quantity - request.quantity
-                new_average = (average * quantity + amount + fee) / remaining if buying else average
+                if buying:
+                    new_average = (average * quantity + amount + fee) / remaining
+                elif source == "STRATEGY" and remaining and strategy_average != average:
+                    # A strategy sale is booked at the strategy lot's own cost, so the same cost must leave the position;
+                    # otherwise a mixed manual+auto holding keeps a stale average and orders/account disagree on realized profit.
+                    new_average = max(Decimal(0), (average * quantity - strategy_average * request.quantity) / remaining)
+                else:
+                    new_average = average
                 self._cash += -amount - fee if buying else amount - fee - tax
                 if remaining:
                     self._positions[request.symbol] = {"quantity": remaining, "average_price": new_average}

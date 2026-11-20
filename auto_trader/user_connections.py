@@ -54,6 +54,10 @@ class UserConnections:
         self._lock = RLock()
 
     def client(self, user_id: int) -> TossClient:
+        from . import paper_mvp_isolated
+        if paper_mvp_isolated.active():
+            # Isolated verification never loads a stored broker connection or its local vault, whatever the DB holds.
+            return TossClient(client_id='', client_secret='', account_ref='')
         with self._lock:
             with connect() as conn:
                 row = conn.execute('SELECT * FROM user_broker_connections WHERE user_id=%s', (user_id,)).fetchone()
