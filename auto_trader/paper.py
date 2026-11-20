@@ -365,15 +365,7 @@ class PaperBroker:
             strategy_average = Decimal(selected_lot['average_price']) if selected_lot else self.strategy_average(request.symbol) or Decimal(0)
             sell_cost = Decimal(0)
             if request.side == OrderSide.SELL and status == OrderStatus.FILLED:
-                # Cost per share of the shares being sold. Strategy sales use the strategy lot's cost. A manual sale of the
-                # unmanaged part uses that part's own cost (total cost minus the strategy-managed cost), not the mixed average.
-                if source == "STRATEGY":
-                    sell_cost = strategy_average
-                elif lot_id is None and self.strategy_quantity(request.symbol) and quantity > self.strategy_quantity(request.symbol):
-                    managed_cost = (self.strategy_average(request.symbol) or Decimal(0)) * self.strategy_quantity(request.symbol)
-                    sell_cost = (average * quantity - managed_cost) / (quantity - self.strategy_quantity(request.symbol))
-                else:
-                    sell_cost = average
+                sell_cost = self._sale_cost_per_share(request.symbol, request.quantity, source, selected_lot, quantity, average)
             realized = (amount - fee - tax - sell_cost * request.quantity
                         if request.side == OrderSide.SELL and status == OrderStatus.FILLED else None)
             order = Order(id=self._next_order_id, symbol=request.symbol, side=request.side,
@@ -440,6 +432,36 @@ class PaperBroker:
                     self._managed_lots = [lot for lot in self._managed_lots if lot['quantity']]
                 self._sync_allocations()
             return order
+
+    def _sale_cost_per_share(self, symbol, sold, source, selected_lot, quantity, average) -> Decimal:
+        """Accounting cost per share of the shares being sold (call under the lock).
+        Only automatic (AUTO-origin) lots have an exact cost of their own. Every other share of the symbol (manual buys, snapshot
+        holdings, shares adopted into management at a reference price) shares the rest of the position's cost. This keeps the
+        cost that leaves through realized profit equal to the cost that leaves the position."""
+        auto = [lot for lot in self._auto_lots if lot['symbol'] == symbol and lot.get('origin') == 'AUTO']
+        auto_quantity = sum(lot['quantity'] for lot in auto)
+        pool_quantity = quantity - auto_quantity
+        pool = average
+        if pool_quantity > 0:
+            candidate = (average * quantity - sum((Decimal(lot['average_price']) * lot['quantity'] for lot in auto), Decimal(0))) / pool_quantity
+            pool = candidate if candidate >= 0 else average        # inconsistent history: keep the previous (mixed average) behaviour
+        auto_ids = {lot['id'] for lot in auto}
+        cost, remaining = Decimal(0), sold
+        if source == "STRATEGY":
+            candidates = [selected_lot] if selected_lot else [lot for lot in self._managed_lots if lot['symbol'] == symbol]
+        else:
+            take = min(remaining, max(0, pool_quantity))
+            cost, remaining = pool * take, remaining - take
+            managed_ids = {lot['id'] for lot in self._managed_lots}
+            candidates = [lot for lot in auto if lot['id'] not in managed_ids]
+        for lot in candidates:
+            take = min(remaining, lot['quantity'])
+            cost += take * (Decimal(lot['average_price']) if lot['id'] in auto_ids else pool)
+            remaining -= take
+            if not remaining:
+                break
+        cost += remaining * pool
+        return cost / sold
 
     def orders(self):
         with self._lock:

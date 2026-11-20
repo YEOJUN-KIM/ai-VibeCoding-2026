@@ -73,6 +73,34 @@ class MixedHoldingAccounting(MvpBase):
                             self.assertEqual(self.broker.submit(OrderRequest(symbol=SYMBOL, side="SELL", quantity=qty), source=source).status.value, "FILLED")
                         self._realized_matches()
 
+    def test_adopted_holding_sold_in_parts_keeps_cost_non_negative_and_consistent(self):
+        """Adoption (scope ALL) stamps the lot with the current price as an exit reference, not as accounting cost."""
+        with self.at_price(100):
+            self.broker.submit(OrderRequest(symbol=SYMBOL, side="BUY", quantity=10), source="MANUAL")
+        with self.at_price(200):
+            self.broker.begin_strategy([SYMBOL], scope="ALL")
+            lot = self.broker.managed_lots()[0]
+            for quantity in (6, 4):
+                order = self.broker.submit(OrderRequest(symbol=SYMBOL, side="SELL", quantity=quantity), source="STRATEGY", lot_id=lot["id"])
+                self.assertEqual(order.status.value, "FILLED", order.message)
+                average = self.broker.position_average_price(SYMBOL)
+                self.assertTrue(average is None or average == Decimal(100), average)       # cost of the remaining shares unchanged
+                self._realized_matches()
+            self.assertEqual(self.broker.account().realized_profit, Decimal(1000))
+
+    def test_adopted_plus_auto_lots_keep_orders_and_account_equal(self):
+        with self.at_price(100):
+            self.broker.submit(OrderRequest(symbol=SYMBOL, side="BUY", quantity=10), source="MANUAL")
+        with self.at_price(200):
+            self.broker.begin_strategy([SYMBOL], scope="ALL")
+            self.broker.submit(OrderRequest(symbol=SYMBOL, side="BUY", quantity=10), source="STRATEGY")
+        with self.at_price(300):
+            for lot in list(self.broker.managed_lots()):
+                order = self.broker.submit(OrderRequest(symbol=SYMBOL, side="SELL", quantity=lot["quantity"] - 1), source="STRATEGY", lot_id=lot["id"])
+                self.assertEqual(order.status.value, "FILLED", order.message)
+                self.assertGreaterEqual(self.broker.position_average_price(SYMBOL), 0)
+                self._realized_matches()
+
     def test_pure_strategy_holding_average_is_unchanged_by_a_partial_sale(self):
         with self.at_price(100):
             self.broker.submit(OrderRequest(symbol=SYMBOL, side="BUY", quantity=10), source="STRATEGY")
