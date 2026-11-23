@@ -122,6 +122,15 @@ class SourceFeed:
         return prices, candles
 
 
+def _honest_message(message: str, synthetic: bool) -> str:
+    """The engine's status text is shared with the legacy live-price PAPER flow, where "실제 현재가" is true. With the fictional
+    synthetic source (isolated verification only) the same text would wrongly claim real prices, so the MVP status relabels it."""
+    if not synthetic:
+        return message
+    return (message.replace("실제 현재가", "합성(가상) 현재가").replace("실제 시세 기반", "합성(가상) 시세 기반")
+            .replace("실제 시세", "합성(가상) 시세"))
+
+
 class PaperMvp:
     def __init__(self, broker: PaperBroker, engine, *, source: MvpDataSource | None = None, clock=None, bind=True):
         if type(broker) is not PaperBroker:           # LIVE or any other broker is refused outright
@@ -421,7 +430,7 @@ class PaperMvp:
         return dict(
             mode="PAPER", live_blocked=True, real_data_verified=False,
             data_source="SYNTHETIC" if self.source is not None else "NONE",
-            run=dict(state=state, label=label, running=strategy.running, message=eng.data_message,
+            run=dict(state=state, label=label, running=strategy.running, message=_honest_message(eng.data_message, self.source is not None),
                      operating_state=strategy.operating_state, tick_count=strategy.tick_count,
                      exit_monitoring=strategy.running, blocked_reason=eng.start_block, held_symbols=sorted(self._held()),
                      stop_note="정지하면 신규 매수·매도 판단과 보유분의 손절·익절 감시가 모두 멈춥니다. 보유 주식은 자동 매도되지 않고 그대로 남습니다."

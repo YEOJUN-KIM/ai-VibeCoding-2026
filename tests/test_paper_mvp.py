@@ -1,5 +1,6 @@
 """PAPER-MVP-01 tests. Isolated: a throwaway schema in a TEST database only (refuses any other DB name)."""
 import asyncio
+import os
 import unittest
 from datetime import timedelta
 from decimal import Decimal
@@ -30,6 +31,8 @@ class MvpBase(unittest.TestCase):
     def setUp(self):
         if not app_settings.postgres_db.startswith("folio_mvp_test"):
             self.fail("refusing to run: POSTGRES_DB is not an isolated test database")
+        if app_settings.postgres_port == 5432 or app_settings.postgres_host not in ("127.0.0.1", "localhost", "::1"):
+            self.fail("refusing to run: the test database must be loopback on a non-default port (never the operational 5432)")
         self.schema = "test_mvp_" + uuid4().hex
         self.original_connect = database.connect
         with self.original_connect() as conn:
@@ -314,7 +317,10 @@ class SafetyTests(MvpBase):
             self.mvp.apply(self.balanced())
             self.engine.running = True
             self.poll(40)
-        self.assertEqual(app_settings.postgres_port, 55432)         # libpq (not Python sockets) talks to the isolated test DB only
+        # libpq (not Python sockets) talks to the isolated test DB only: whatever non-default port the disposable DB uses (POSTGRES_PORT)
+        self.assertNotEqual(app_settings.postgres_port, 5432)
+        self.assertIn(app_settings.postgres_host, ("127.0.0.1", "localhost", "::1"))
+        self.assertEqual(str(app_settings.postgres_port), os.environ.get("POSTGRES_PORT", str(app_settings.postgres_port)))
 
     def test_state_survives_restart_without_touching_cash(self):
         self.mvp.apply(self.balanced())
