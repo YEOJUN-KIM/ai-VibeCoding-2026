@@ -35,6 +35,7 @@ class AutoLimits:
     daily_loss_limit: Decimal
     daily_buy_limit: int = 0                  # filled automatic buys per KST day; 0 = no limit (same meaning as the engine's)
     session_close: time = time(15, 20)        # KST end of the run's trading hours (engine.trading_end)
+    max_holdings: int | None = None           # max symbols held by automatic trading; None only for the internal default object
 
 
 LAST_EVAL_WRITE_EVERY = timedelta(seconds=60)
@@ -159,8 +160,8 @@ class RiskManager:
         orders = [o for o in self.broker.orders() if o.source == "STRATEGY" and o.status.value == "FILLED"]
         realized = sum((o.realized_profit or Decimal(0) for o in orders
                         if o.side.value == "SELL" and o.created_at.astimezone(KST).date() == today), Decimal(0))
-        holdings = {sym: int(self.broker.strategy_quantity(sym)) for sym in self.broker.strategy_symbols()}
-        unrealized = self.broker.strategy_unrealized()
+        holdings = dict(self.broker.risk_holdings())        # persisted AUTO lots: correct before any run has started after a restart
+        unrealized = self.broker.risk_unrealized()
         state = self.broker.mvp_state()
         base, last = state.get("auto_open"), state.get("auto_last")
 
@@ -189,8 +190,11 @@ class RiskManager:
                               source="flat-start" if flat_start else "unverifiable")
             self.broker.update_mvp(auto_open=record)                  # raises if it cannot be saved -> buys are held
         elif isinstance(base, dict):
-            record = dict(date=base["date"], unrealized=str(Decimal(base["unrealized"])),
-                          trusted=bool(base["trusted"]) and base.get("v") == BASELINE_VERSION)
+            trusted = bool(base["trusted"]) and base.get("v") == BASELINE_VERSION
+            if trusted and base.get("source") == "flat-start" and holdings and not any(
+                    o.created_at.astimezone(KST).date() == today for o in orders):
+                trusted = False          # saved as "flat" while carried automatic holdings existed (earlier implementation): never trusted
+            record = dict(date=base["date"], unrealized=str(Decimal(base["unrealized"])), trusted=trusted)
         elif isinstance(base, list) and len(base) == 2:               # written by an earlier version: trust level unknown
             record = dict(date=base[0], unrealized=str(Decimal(base[1])), trusted=False)
         else:
@@ -208,10 +212,10 @@ class RiskManager:
             return
         try:
             self._auto_day(limits)
-            if not set(self.broker.strategy_symbols()) <= set(fresh_symbols):
+            if not set(self.broker.risk_symbols()) <= set(fresh_symbols):
                 return          # a held symbol had no fresh price this tick: its valuation is stale, so no new proof is stored
             now = self.broker.now()
-            holdings = {sym: int(self.broker.strategy_quantity(sym)) for sym in self.broker.strategy_symbols()}
+            holdings = dict(self.broker.risk_holdings())
             last = self.broker.mvp_state().get("auto_last")
             try:
                 due = (datetime.fromisoformat(last["at"]) + LAST_EVAL_WRITE_EVERY <= now
@@ -219,7 +223,7 @@ class RiskManager:
             except (TypeError, KeyError, ValueError, AttributeError):
                 due = True
             if due:
-                self.broker.update_mvp(auto_last=dict(at=now.isoformat(), unrealized=str(self.broker.strategy_unrealized()),
+                self.broker.update_mvp(auto_last=dict(at=now.isoformat(), unrealized=str(self.broker.risk_unrealized()),
                                                       holdings=holdings, source="tick", v=BASELINE_VERSION))
         except Exception:
             pass
@@ -232,7 +236,7 @@ class RiskManager:
                     daily_loss_limit=limits.daily_loss_limit)
         try:
             profit, trusted = self._auto_day(limits)
-            invested = self.broker.strategy_value()
+            invested = self.broker.risk_value()
         except Exception:                               # cannot establish the day's figures: hold new buys, never guess
             return dict(new_buys_allowed=False, block_reason="자동매매 일일 손익 기준을 확인할 수 없어 신규 매수를 보류합니다.",
                         daily_profit=Decimal(0), invested_amount=Decimal(0), **base)
@@ -250,7 +254,10 @@ class RiskManager:
             return status["block_reason"]
         if not RiskPolicy.order_amount_allowed(limits, amount, fee):
             return "1회 최대 주문 금액을 초과했습니다."
-        if not RiskPolicy.symbol_amount_allowed(limits, self.broker.strategy_symbol_value(symbol), amount):
+        held = self.broker.risk_symbols()
+        if limits.max_holdings is not None and symbol not in held and len(held) >= limits.max_holdings:
+            return f"자동매매 최대 보유 종목 수 {limits.max_holdings}개에 도달했습니다."
+        if not RiskPolicy.symbol_amount_allowed(limits, self.broker.risk_symbol_value(symbol), amount):
             return "종목별 최대 투자 금액을 초과했습니다."
         if not RiskPolicy.total_investment_allowed(limits, status["invested_amount"], amount):
             return "자동매매 투자 가능 금액을 초과했습니다."

@@ -308,6 +308,42 @@ class PaperBroker:
             return sum((self.exit_proceeds(s, p["quantity"], self.market.quote(s).price) - p["average_price"] * p["quantity"]
                         for s, p in self._strategy_positions.items()), Decimal(0))
 
+    # ---- automatic-run risk book (PAPER-SAFETY-FIX). Built from the persisted AUTO lots (plus lots adopted into the current
+    # management), NOT from the run-scoped `_strategy_positions`, which is empty after a restart until a run starts. Carried
+    # automatic holdings therefore count for the holdings cap, the investment limits and the day's baseline at every moment.
+    def _risk_lots(self) -> list[dict]:
+        seen, lots = set(), []
+        for lot in list(self._auto_lots) + list(self._managed_lots):
+            if lot['id'] not in seen and lot['quantity']:
+                seen.add(lot['id'])
+                lots.append(lot)
+        return lots
+
+    def risk_holdings(self) -> dict[str, int]:
+        with self._lock:
+            book: dict[str, int] = {}
+            for lot in self._risk_lots():
+                book[lot['symbol']] = book.get(lot['symbol'], 0) + int(lot['quantity'])
+            return book
+
+    def risk_symbols(self) -> list[str]:
+        return list(self.risk_holdings())
+
+    def risk_symbol_value(self, symbol: str) -> Decimal:
+        return self.market.quote(symbol).price * self.risk_holdings().get(symbol, 0)
+
+    def risk_value(self) -> Decimal:
+        return sum((self.risk_symbol_value(s) for s in self.risk_holdings()), Decimal(0))
+
+    def risk_unrealized(self) -> Decimal:
+        """Like strategy_unrealized (net of estimated exit costs) but over the risk book."""
+        with self._lock:
+            cost: dict[str, Decimal] = {}
+            for lot in self._risk_lots():
+                cost[lot['symbol']] = cost.get(lot['symbol'], Decimal(0)) + Decimal(lot['average_price']) * lot['quantity']
+            return sum((self.exit_proceeds(s, q, self.market.quote(s).price) - cost[s]
+                        for s, q in self.risk_holdings().items()), Decimal(0))
+
     def strategy_symbols(self) -> list[str]:
         with self._lock:
             return [s for s, p in self._strategy_positions.items() if p["quantity"]]

@@ -167,7 +167,7 @@ class PaperMvp:
         s = s or self.settings()
         _, cap, loss = self._limits(s, strict=strict)
         return AutoLimits(max_order_amount=cap, max_symbol_amount=cap, max_total_investment=Decimal(s.budget), daily_loss_limit=loss,
-                          daily_buy_limit=s.daily_buys, session_close=self.engine.trading_end)
+                          daily_buy_limit=s.daily_buys, session_close=self.engine.trading_end, max_holdings=s.max_holdings)
 
     def day01_config(self, s: MvpSettings | None = None) -> Day01Config:
         s = s or self.settings()
@@ -327,8 +327,8 @@ class PaperMvp:
         cfg = self.day01_config(s)
         account = self.broker.account()
         risk = self.broker.risk_manager.auto_status(self.auto_limits(s))
-        positions = tuple(sc.Position(sym, self.broker.strategy_quantity(sym), self.broker.strategy_symbol_value(sym), data.as_of,
-                                      self.engine.market.quote(sym).price, data.as_of) for sym in self.broker.strategy_symbols())
+        positions = tuple(sc.Position(sym, self.broker.risk_holdings()[sym], self.broker.risk_symbol_value(sym), data.as_of,
+                                      self.engine.market.quote(sym).price, data.as_of) for sym in self.broker.risk_symbols())
         portfolio = sc.Portfolio(data.as_of, cash=account.cash, total_asset=account.total_asset, positions=positions,
                                  daily_loss=max(Decimal(0), -risk["daily_profit"]), **portfolio_limits_for(cfg))
         result = run_scout_pipeline(
@@ -344,7 +344,7 @@ class PaperMvp:
             self._hold("SCOUT_HOLD", "Scout 판단 보류: " + ", ".join(result.hold_reasons), notes=result.hold_reasons)
             return []
         held = self._held()                                       # symbols NOT to buy again: automatic and manual holdings
-        free = max(0, s.max_holdings - len(self.broker.strategy_symbols()))   # the holdings cap counts automatic holdings only
+        free = max(0, s.max_holdings - len(self.broker.risk_symbols()))   # the holdings cap counts automatic holdings only
         chosen = [sym for sym in result.passed if sym not in held][:free]
         for sym in chosen:
             price = self.source.price(sym, now)

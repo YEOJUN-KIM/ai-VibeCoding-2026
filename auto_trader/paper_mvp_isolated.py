@@ -61,6 +61,7 @@ def prepare_engine(engine) -> None:
     """Make this one engine use virtual time and no broker market-hours lookup (which would call Toss)."""
     _, clock = synthetic()
     engine._clock = clock
+    engine.broker.clock = clock          # order times, daily counts and the risk day follow the same virtual time as the engine
     engine.market_hours_provider = None
 
 

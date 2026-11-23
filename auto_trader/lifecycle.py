@@ -88,7 +88,7 @@ async def lifespan(application: FastAPI):
         await runtime.ml_macro_worker.start()
     if paper_mvp_isolated.active():
         virtual_time_task = paper_mvp_isolated.start_virtual_time(
-            lambda: [runtime.paper_state().engine, runtime.legacy_workspace.engine])
+            lambda: _all_engines(runtime))
     try:
         yield
     finally:
@@ -108,3 +108,14 @@ async def lifespan(application: FastAPI):
         await runtime.ml_candidate_recorder.stop()
         await runtime.ml_decision_recorder.stop()
         await asyncio.gather(*(state.quote_stream.close() for state in list(runtime.workspaces.items.values()) or [runtime.legacy_workspace]))
+
+
+def _all_engines(runtime) -> list:
+    """Every engine of every user workspace and paper session (isolated verification clock): one virtual clock is shared,
+    so it must advance while ANY of them runs, not only the engine of the user who happens to be current."""
+    states = [runtime.legacy_workspace, *list(runtime.workspaces.items.values())]
+    engines = []
+    for state in states:
+        engines.append(state.engine)
+        engines.extend(session[1] for session in state.sessions.values())
+    return engines

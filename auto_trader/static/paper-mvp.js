@@ -42,7 +42,12 @@ async function refresh() {
     if (!saved) { saved = fromServer(st.settings); draft = copy(saved); renderSettings(); }
     else if (!dirty && tab !== 'settings') { saved = fromServer(st.settings); draft = copy(saved); }
     render();
-  } catch (e) { $('#run-reason').textContent = e.message; }
+  } catch (e) {
+    $('#run-label').className = 'amber'; $('#run-label').innerHTML = '<i class="dot"></i> 상태 확인 실패';
+    $('#run-reason').textContent = e.message + ' · 현재 실행 상태를 확인할 수 없습니다. 화면의 이전 정보는 최신이 아닐 수 있습니다.';
+    $('#run-next').textContent = '실행 중일 수 있으니 연결을 확인한 뒤 새로고침하세요.';
+    $('#start').disabled = $('#pause').disabled = true;
+  }
 }
 function render() { renderRun(); renderHome(); renderHistory(); if (tab === 'settings') settingSummary(); }
 
@@ -209,7 +214,7 @@ function validSettings(s) {
   if (!Number.isFinite(s.per) || s.per <= 0 || s.per > (s.unit === 'percent' ? 100 : T)) return '종목당 한도를 확인하세요.';
   if (!Number.isInteger(s.count) || s.count < 1 || s.count > 30) return '보유 종목 수는 1~30의 정수로 입력하세요.';
   if (!Number.isFinite(s.loss) || s.loss < .1 || s.loss > 20) return '하루 손실 한도는 0.1~20%로 입력하세요.';
-  if (!Number.isInteger(s.dailyBuys) || s.dailyBuys < 0 || s.dailyBuys > 100) return '하루 주문 횟수는 0~100의 정수로 입력하세요(0은 제한 없음).';
+  if (!Number.isInteger(s.dailyBuys) || s.dailyBuys < 0 || s.dailyBuys > 100) return '하루 매수 횟수는 0~100의 정수로 입력하세요(0은 제한 없음).';
   if (!Number.isFinite(s.stop) || s.stop < .1 || s.stop > 50) return '손절 기준은 0.1~50%로 입력하세요.';
   if (!Number.isFinite(s.take) || s.take < .1 || s.take > 100) return '익절 기준은 0.1~100%로 입력하세요.';
   if (!Number.isInteger(s.days) || s.days < 1 || s.days > 365) return '최대 보유 일수는 1~365일로 입력하세요.';

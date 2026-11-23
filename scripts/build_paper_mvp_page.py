@@ -72,9 +72,9 @@ html = sub(html, '<button class="primary" type="submit">설정 저장·적용</b
 html = sub(html, '<small id="save-status" style="display:block;margin-top:4px">현재 적용값 · 이 탭의 메모리에만 보관</small>', '<small id="save-status" style="display:block;margin-top:4px"></small>')
 html = sub(html, '시연 기준: ', '기준: ', count=3)
 html = sub(html, '투자 제한과 같은 값을 사용합니다.', '투자 제한과 같은 값을 사용합니다. 원금 보장은 아닙니다.')
-html = sub(html, '<label class="field-label" for="daily-buys">하루 신규 매수 횟수 한도</label>', '<label class="field-label" for="daily-buys">하루 주문 횟수 한도 (0=제한 없음)</label>')
+html = sub(html, '<label class="field-label" for="daily-buys">하루 신규 매수 횟수 한도</label>', '<label class="field-label" for="daily-buys">하루 매수 횟수 한도 (0=제한 없음)</label>')
 html = sub(html, '일일 손실 한도는 신규·추가 매수만 제한합니다. 기존 매수분의 위험 감시·손절·익절 판단은 유지하는 설계입니다. 최고가 매도를 보장하지 않습니다.',
-           '일일 손실 한도는 신규·추가 매수만 제한합니다. 자동매매가 실행 중인 동안 기존 매수분의 손절·익절은 계속 감시하지만, 일시정지·긴급정지 중에는 이 감시도 멈춥니다. 최고가 매도를 보장하지 않습니다. 하루 주문 횟수는 현재 엔진 기준으로 매수와 매도를 함께 셉니다.')
+           '일일 손실 한도는 신규·추가 매수만 제한합니다. 자동매매가 실행 중인 동안 기존 매수분의 손절·익절은 계속 감시하지만, 일시정지·긴급정지 중에는 이 감시도 멈춥니다. 최고가 매도를 보장하지 않습니다. 하루 매수 횟수 한도는 신규 매수만 세며, 보유분의 매도(청산)는 횟수 제한을 받지 않습니다.')
 
 # --- history
 html = cut(html, '<p class="context">기존 가상 자산의 기간 시작·종료 차이입니다.', '</p></article>',
