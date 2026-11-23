@@ -88,6 +88,10 @@ html = cut(html, '<div class="summary-grid history-summary">', '</small></articl
 html = sub(html, '<span class="badge neutral">PAPER · 3종목</span>', '<span class="badge neutral" id="holdings-badge">PAPER</span>')
 html = sub(html, '<p class="sub">가상 기록 · 행을 펼쳐 거래 또는 보류 이유를 확인하세요.</p>', '<p class="sub">가상 기록 · 행을 펼쳐 거래·관망·판단 보류 이유를 확인하세요.</p>')
 
+# --- the synthetic/status badge is the first span of .topbar .right; the preview hides it under 1200px, which would
+# hide the "synthetic" warning on narrow screens. Never reintroduce that rule (checked-in page removed it on purpose).
+html = sub(html, ".topbar .right span:first-child{display:none}", "")
+
 # --- demo-only pages, footer, script
 html = cut(html, '  <section id="page-assets"', '</section>\n </main>', ' </main>')
 html = sub(html, '<footer class="footer">FOLIO UX-02 · 독립 HTML · 가상 예시 · 새로고침하면 모든 시연 설정과 거래가 초기화됩니다.</footer>',
