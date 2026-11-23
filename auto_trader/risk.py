@@ -186,14 +186,21 @@ class RiskManager:
             if record is None:
                 flat_start = not holdings and not any(o.created_at.astimezone(KST).date() == today for o in orders)
                 record = dict(v=BASELINE_VERSION, date=key, unrealized="0" if flat_start else str(unrealized), trusted=flat_start,
-                              at=now.isoformat(),
+                              at=now.isoformat(), flat_verified=flat_start,
                               source="flat-start" if flat_start else "unverifiable")
             self.broker.update_mvp(auto_open=record)                  # raises if it cannot be saved -> buys are held
         elif isinstance(base, dict):
             trusted = bool(base["trusted"]) and base.get("v") == BASELINE_VERSION
-            if trusted and base.get("source") == "flat-start" and holdings and not any(
-                    o.created_at.astimezone(KST).date() == today for o in orders):
-                trusted = False          # saved as "flat" while carried automatic holdings existed (earlier implementation): never trusted
+            if trusted and base.get("source") == "flat-start" and not base.get("flat_verified"):
+                # a "flat" start not written with the verified-flat marker (earlier implementation) may have been saved while
+                # carried automatic holdings existed. Trust is never restored by later fills, so the invalidity is persisted
+                # (best effort: if saving fails the in-memory answer is still untrusted) and survives partial sells and restarts.
+                trusted = False
+                try:
+                    self.broker.update_mvp(auto_open=dict(v=base.get("v"), date=base["date"], unrealized=str(Decimal(base["unrealized"])),
+                                                          trusted=False, at=base.get("at"), source="unverifiable"))
+                except Exception:
+                    pass
             record = dict(date=base["date"], unrealized=str(Decimal(base["unrealized"])), trusted=trusted)
         elif isinstance(base, list) and len(base) == 2:               # written by an earlier version: trust level unknown
             record = dict(date=base[0], unrealized=str(Decimal(base[1])), trusted=False)
