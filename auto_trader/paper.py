@@ -290,13 +290,6 @@ class PaperBroker:
         with self._lock:
             self._strategy_context = deepcopy(context or {})
 
-    def daily_buy_count(self, day) -> int:
-        """Filled automatic (STRATEGY) buys on a KST calendar day, derived from the persisted order ledger.
-        Rejected orders never reach a fill; a repeated request_id returns the first order, so it is never counted twice."""
-        from .trading import KST
-        return sum(1 for o in self.orders() if o.source == "STRATEGY" and o.side == OrderSide.BUY
-                   and o.status == OrderStatus.FILLED and o.created_at.astimezone(KST).date() == day)
-
     def strategy_symbol_value(self, symbol: str) -> Decimal:
         with self._lock:
             return self.market.quote(symbol).price * int(self._strategy_positions.get(symbol, {}).get("quantity", 0))
@@ -310,7 +303,7 @@ class PaperBroker:
 
     # ---- automatic-run risk book (PAPER-SAFETY-FIX). Built from the persisted AUTO lots (plus lots adopted into the current
     # management), NOT from the run-scoped `_strategy_positions`, which is empty after a restart until a run starts. Carried
-    # automatic holdings therefore count for the holdings cap, the investment limits and the day's baseline at every moment.
+    # automatic holdings therefore count for the operating amount at every moment.
     def _risk_lots(self) -> list[dict]:
         seen, lots = set(), []
         for lot in list(self._auto_lots) + list(self._managed_lots):
@@ -334,15 +327,6 @@ class PaperBroker:
 
     def risk_value(self) -> Decimal:
         return sum((self.risk_symbol_value(s) for s in self.risk_holdings()), Decimal(0))
-
-    def risk_unrealized(self) -> Decimal:
-        """Like strategy_unrealized (net of estimated exit costs) but over the risk book."""
-        with self._lock:
-            cost: dict[str, Decimal] = {}
-            for lot in self._risk_lots():
-                cost[lot['symbol']] = cost.get(lot['symbol'], Decimal(0)) + Decimal(lot['average_price']) * lot['quantity']
-            return sum((self.exit_proceeds(s, q, self.market.quote(s).price) - cost[s]
-                        for s, q in self.risk_holdings().items()), Decimal(0))
 
     def strategy_symbols(self) -> list[str]:
         with self._lock:

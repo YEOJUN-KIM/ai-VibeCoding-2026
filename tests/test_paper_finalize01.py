@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from auto_trader import paper_mvp_isolated as iso
 from auto_trader.api import paper_mvp as api
 from auto_trader.models import OrderRequest
+from auto_trader.risk import AutoLimits
 from tests.test_paper_mvp import MvpBase
 
 SYMBOL = "005930"
@@ -18,6 +19,10 @@ SYMBOL = "005930"
 
 class MixedHoldingAccounting(MvpBase):
     """P1-2: a strategy sale out of a mixed manual+auto holding must keep orders and account in agreement."""
+
+    def setUp(self):
+        super().setUp()
+        self.broker.risk_manager.auto_limits = AutoLimits(max_total_investment=Decimal("1000000000"))   # an automatic run's operating amount
 
     def at_price(self, price):
         original = self.market.quote

@@ -9,11 +9,6 @@ const esc = t => String(t ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 const KST = { timeZone: 'Asia/Seoul', hour12: false };
 const fmtTime = iso => { const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleString('ko-KR', { ...KST, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }); };
 const fmtFull = iso => { const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleString('ko-KR', { ...KST, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) + ' KST'; };
-const presets = {
-  안정형: { unit: 'percent', per: 15, count: 8, loss: 1, stop: 3, take: 6, days: 30, dailyBuys: 5 },
-  균형형: { unit: 'percent', per: 25, count: 6, loss: 2, stop: 5, take: 10, days: 20, dailyBuys: 10 },
-  적극형: { unit: 'percent', per: 35, count: 4, loss: 3, stop: 7, take: 14, days: 15, dailyBuys: 15 },
-};
 let csrf = '', st = null, saved = null, draft = null, dirty = false, tab = 'home', period = 'day', historyPeriod = 'all', filter = '전체', toastTimer, chartPts = [];
 
 async function api(path, options = {}) {
@@ -29,10 +24,10 @@ async function api(path, options = {}) {
 }
 function toast(t) { clearTimeout(toastTimer); $('#toast').textContent = t; $('#toast').hidden = false; toastTimer = setTimeout(() => $('#toast').hidden = true, 4000); }
 const copy = x => JSON.parse(JSON.stringify(x));
-const fromServer = s => ({ budget: s.budget, sectors: s.sectors, profile: s.profile, unit: s.per_unit, per: num(s.per_value), count: s.max_holdings, loss: num(s.daily_loss_pct), dailyBuys: s.daily_buys, stop: num(s.stop_pct), take: num(s.take_pct), days: s.max_days });
-const toServer = d => ({ budget: d.budget, sectors: d.sectors, profile: d.profile, per_unit: d.unit, per_value: d.per, max_holdings: d.count, daily_loss_pct: d.loss, daily_buys: d.dailyBuys, stop_pct: d.stop, take_pct: d.take, max_days: d.days });
+const fromServer = s => ({ budget: s.budget, sectors: s.sectors, stop: num(s.stop_pct), take: num(s.take_pct), days: s.max_days });
+const toServer = d => ({ budget: d.budget, sectors: d.sectors, stop_pct: d.stop, take_pct: d.take, max_days: d.days });
 const total = () => num(st.account.total_asset);
-const summary = s => s.profile + ' · ' + (s.sectors.length > 1 ? s.sectors[0] + ' 외 ' + (s.sectors.length - 1) + '개' : s.sectors[0] || '분야 선택 필요');
+const summary = s => s.sectors.length > 1 ? s.sectors[0] + ' 외 ' + (s.sectors.length - 1) + '개' : s.sectors[0] || '분야 선택 필요';
 const cls = n => n > 0 ? 'up' : n < 0 ? 'down' : '';
 
 // ---------------------------------------------------------------- load / refresh
@@ -164,7 +159,7 @@ function renderHistory() {
   $$('#all-holdings [data-detail]').forEach(e => e.onclick = () => detail(e.dataset.detail));
   $('#holdings-badge').textContent = 'PAPER · ' + st.holdings.length + '종목';
   const r = st.risk, s = fromServer(st.settings);
-  $('#account-safety').textContent = '현재 계좌 안전 기준 · ' + summary(s) + ' · 자동투자 ' + won(s.budget) + ' · 종목당 ' + won(num(r.max_symbol_amount)) + ' · 최대 ' + s.count + '종목 · 하루 손실 ' + won(num(r.daily_loss_limit)) + ' · 현재 투자금 ' + won(num(r.invested_amount)) + (r.new_buys_allowed ? ' · 신규 매수 가능' : ' · 신규 매수 제한: ' + r.block_reason) + '. 한도를 낮춰도 기존 보유분을 강제 매도하지 않습니다.';
+  $('#account-safety').textContent = '자동매매 운용 금액 ' + won(s.budget) + ' · 현재 자동매매 투자금 ' + won(num(r.invested_amount)) + (r.new_buys_allowed ? ' · 신규 매수 가능' : ' · 신규 매수 제한: ' + r.block_reason) + '. 금액을 낮춰도 기존 보유분을 강제 매도하지 않습니다. 직접 하는 모의 주문에는 적용되지 않습니다.';
   $('#account-safety').classList.toggle('amber', !r.new_buys_allowed);
   const start = historyPeriod === 'all' ? null : periodStart(historyPeriod);
   const list = records().filter(x => (filter === '전체' || x.type === filter) && (!start || new Date(x.at) >= start));
@@ -193,28 +188,19 @@ function settingSummary() {
   $$('[data-ratio]').forEach(e => e.classList.toggle('active', Math.abs(+e.dataset.ratio - percent) < .01));
   $$('[data-sector]').forEach(e => { const on = draft.sectors.includes(e.dataset.sector); e.classList.toggle('selected', on); e.setAttribute('aria-pressed', on); });
   $('#sector-help').textContent = '관심 업종은 저장만 되며 후보 선정에는 아직 반영되지 않습니다(미연결). 현재 후보는 거래대금 순위와 데이터 품질 검사를 통과한 종목입니다.';
-  $$('[data-profile]').forEach(e => { const on = draft.profile === e.dataset.profile; e.classList.toggle('selected', on); e.setAttribute('aria-pressed', on); });
-  $('#custom-profile').classList.toggle('selected', draft.profile === '직접 설정'); $('#custom-profile').setAttribute('aria-pressed', draft.profile === '직접 설정');
   $('#draft-summary').textContent = summary(draft);
   dirty = changed();
   $('#save-status').textContent = run ? '실행 중에는 설정을 바꿀 수 없습니다 · 일시정지 후 변경하세요.' : dirty ? '저장하지 않은 변경 · 저장·적용을 눌러 반영하세요.' : '현재 적용값 · 서버(모의계좌)에 저장됨';
   $('#save-button').disabled = run;
-  $('#exit-summary').textContent = '손절 ' + draft.stop + '% · 익절 ' + draft.take + '% · 최대 ' + draft.days + '일';
-  $('#limit-basis').textContent = draft.unit === 'percent' ? '모의 총자산 기준 · ' + won(T * draft.per / 100) : '종목당 최대 매수금액 기준';
   $('#budget').max = T; $('#settings-error').textContent = '';
 }
 function renderSettings() {
-  $('#budget').value = draft.budget; $('#per-stock').value = draft.per; $('#limit-unit').value = draft.unit; $('#max-holdings').value = draft.count;
-  $('#daily-loss').value = draft.loss; $('#daily-buys').value = draft.dailyBuys; settingSummary();
+  $('#budget').value = draft.budget; $('#stop-pct').value = draft.stop; $('#take-pct').value = draft.take; $('#max-days').value = draft.days; settingSummary();
 }
 function validSettings(s) {
   const T = total();
-  if (!Number.isInteger(s.budget) || s.budget < 1 || s.budget > T) return '투자 금액은 1원 이상 ' + won(T) + ' 이하의 정수로 입력하세요.';
+  if (!Number.isInteger(s.budget) || s.budget < 1 || s.budget > T) return '자동매매 운용 금액은 1원 이상 ' + won(T) + ' 이하의 정수로 입력하세요.';
   if (!s.sectors.length) return '관심 업종 또는 FOLIO 추천을 선택하세요.';
-  if (!Number.isFinite(s.per) || s.per <= 0 || s.per > (s.unit === 'percent' ? 100 : T)) return '종목당 한도를 확인하세요.';
-  if (!Number.isInteger(s.count) || s.count < 1 || s.count > 30) return '보유 종목 수는 1~30의 정수로 입력하세요.';
-  if (!Number.isFinite(s.loss) || s.loss < .1 || s.loss > 20) return '하루 손실 한도는 0.1~20%로 입력하세요.';
-  if (!Number.isInteger(s.dailyBuys) || s.dailyBuys < 0 || s.dailyBuys > 100) return '하루 매수 횟수는 0~100의 정수로 입력하세요(0은 제한 없음).';
   if (!Number.isFinite(s.stop) || s.stop < .1 || s.stop > 50) return '손절 기준은 0.1~50%로 입력하세요.';
   if (!Number.isFinite(s.take) || s.take < .1 || s.take > 100) return '익절 기준은 0.1~100%로 입력하세요.';
   if (!Number.isInteger(s.days) || s.days < 1 || s.days > 365) return '최대 보유 일수는 1~365일로 입력하세요.';
@@ -224,24 +210,14 @@ $('#budget').oninput = () => { draft.budget = $('#budget').value === '' ? NaN : 
 $('#budget-slider').oninput = () => { draft.budget = Math.round(total() * Number($('#budget-slider').value) / 100); $('#budget').value = draft.budget; settingSummary(); };
 $$('[data-ratio]').forEach(e => e.onclick = () => { draft.budget = Math.round(total() * Number(e.dataset.ratio) / 100); renderSettings(); });
 $$('[data-sector]').forEach(e => e.onclick = () => { const s = e.dataset.sector; if (s === 'FOLIO 추천') draft.sectors = [s]; else { draft.sectors = draft.sectors.filter(x => x !== 'FOLIO 추천'); draft.sectors = draft.sectors.includes(s) ? draft.sectors.filter(x => x !== s) : [...draft.sectors, s]; } settingSummary(); });
-$$('[data-profile]').forEach(e => e.onclick = () => { draft = { ...draft, profile: e.dataset.profile, ...presets[e.dataset.profile] }; renderSettings(); });
-[['per-stock', 'per'], ['max-holdings', 'count'], ['daily-loss', 'loss'], ['daily-buys', 'dailyBuys']].forEach(([id, key]) => $('#' + id).oninput = () => { draft[key] = $('#' + id).value === '' ? NaN : Number($('#' + id).value); draft.profile = '직접 설정'; settingSummary(); });
-$('#limit-unit').onchange = () => { const u = $('#limit-unit').value, T = total(); draft.per = u === 'amount' ? Math.round(T * draft.per / 100) : Math.round(draft.per / T * 10000) / 100; draft.unit = u; draft.profile = '직접 설정'; renderSettings(); };
+[['stop-pct', 'stop'], ['take-pct', 'take'], ['max-days', 'days']].forEach(([id, key]) => $('#' + id).oninput = () => { draft[key] = $('#' + id).value === '' ? NaN : Number($('#' + id).value); settingSummary(); });
 $('#settings-form').onsubmit = async e => {
   e.preventDefault(); const err = validSettings(draft); if (err) { $('#settings-error').textContent = err; return; }
   try { st = await api('/paper/mvp/settings', { method: 'PUT', body: JSON.stringify(toServer(draft)) }); saved = fromServer(st.settings); draft = copy(saved); dirty = false; render(); renderSettings(); toast('설정을 저장·적용했습니다. 신규 매수부터 적용되며 기존 보유분의 청산 기준은 유지됩니다.'); }
   catch (error) { $('#settings-error').textContent = error.message; }
 };
 $('#revert').onclick = () => { draft = copy(saved); renderSettings(); toast('현재 적용값으로 되돌렸습니다.'); };
-$('#defaults').onclick = () => { draft = { ...draft, budget: Math.round(total() / 2), sectors: ['FOLIO 추천'], profile: '균형형', ...presets.균형형 }; renderSettings(); toast('초기값을 입력했습니다. 적용하려면 저장하세요.'); };
-function custom() {
-  const t = copy(draft);
-  modal('투자 기준 직접 설정', '<p class="sub">여기서 바꾼 투자 제한은 아래 입력란과 같은 값을 사용합니다.</p><div class="modal-fields" style="margin-top:20px">' + [['stop', '매수분 손절 기준 (%)', 0.1, 50, 0.1], ['take', '매수분 익절 기준 (%)', 0.1, 100, 0.1], ['days', '최대 보유 일수', 1, 365, 1], ['count', '최대 보유 종목 수', 1, 30, 1], ['loss', '하루 손실 한도 (%)', 0.1, 20, 0.1]].map(([k, l, mn, mx, sp]) => '<div><label class="field-label" for="m-' + k + '">' + l + '</label><input id="m-' + k + '" type="number" min="' + mn + '" max="' + mx + '" step="' + sp + '" value="' + t[k] + '"></div>').join('') + '</div><div class="notice" style="margin-top:20px">기존 매수분의 청산 기준은 바뀌지 않습니다.</div>', '<button id="m-cancel">취소</button><button class="primary" id="m-apply">입력란에 반영</button>');
-  $('#m-cancel').onclick = () => $('#modal').close();
-  $('#m-apply').onclick = () => { ['stop', 'take', 'days', 'count', 'loss'].forEach(k => t[k] = Number($('#m-' + k).value)); const er = validSettings({ ...t }); if (er) { $('#modal-error').textContent = er; return; } t.profile = '직접 설정'; draft = t; renderSettings(); $('#modal').close(); toast('입력란에 반영했습니다. 최종 적용은 설정 저장·적용을 누르세요.'); };
-}
-$('#custom-profile').onclick = custom; $('#edit-exit').onclick = custom;
-
+$('#defaults').onclick = () => { draft = { ...draft, budget: Math.round(total() / 2), sectors: ['FOLIO 추천'], stop: 5, take: 10, days: 20 }; renderSettings(); toast('초기값을 입력했습니다. 적용하려면 저장하세요.'); };
 // ---------------------------------------------------------------- tabs / boot
 function selectTab(t) {
   if (t === 'settings' && tab !== 'settings') { draft = copy(saved); renderSettings(); }

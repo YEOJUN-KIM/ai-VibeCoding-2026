@@ -10,7 +10,7 @@ from uuid import uuid4
 from psycopg import sql
 
 from auto_trader import database, paper, risk
-from auto_trader.paper_mvp import MvpError, MvpSettings, PaperMvp, PRESETS
+from auto_trader.paper_mvp import MvpError, MvpSettings, PaperMvp
 from auto_trader.paper_mvp_synthetic import DAY, SyntheticSource, VirtualClock
 from auto_trader.settings import settings as app_settings
 from auto_trader.simulator import MarketSimulator
@@ -67,13 +67,13 @@ class MvpBase(unittest.TestCase):
             self.clock.advance(minutes=1)
 
     def balanced(self, **changes):
-        base = dict(budget=5000000, sectors=["FOLIO 추천"], profile="균형형", **PRESETS["균형형"])
+        base = dict(budget=5000000, sectors=["FOLIO 추천"], stop_pct=5, take_pct=10, max_days=20)
         base.update(changes)
         return MvpSettings(**base)
 
     def reapply(self, **changes):
         self.engine.running = False
-        self.mvp.apply(self.balanced(profile="직접 설정", **changes))
+        self.mvp.apply(self.balanced(**changes))
         self.engine.running = True
 
 
@@ -82,14 +82,12 @@ class SettingsTests(MvpBase):
         self.mvp.apply(self.balanced())
         limits = self.broker.risk_manager.auto_limits           # in-memory limits of the automatic run only
         self.assertEqual(limits.max_total_investment, Decimal(5000000))
-        self.assertEqual(limits.max_symbol_amount, Decimal(2500000))
-        self.assertEqual(limits.daily_loss_limit, Decimal(200000))
+        self.assertEqual({f for f in limits.__dataclass_fields__}, {"max_total_investment"})   # the operating amount is the only limit
         self.assertEqual(self.broker.risk_manager.settings().max_total_investment, Decimal(7000000))   # saved settings untouched
         self.assertEqual(self.engine.stop_loss_rate, Decimal(5))
         self.assertEqual(self.engine.take_profit_rate, Decimal(10))
         restarted = paper.PaperBroker(self.market, self.CASH, account_name="mvp-test")
         restarted.initialize()
-        self.assertEqual(restarted.mvp_state()["settings"]["profile"], "균형형")
         self.assertEqual(restarted.mvp_state()["settings"]["budget"], 5000000)
 
     def test_invalid_settings_rejected_and_nothing_applied(self):
@@ -99,7 +97,7 @@ class SettingsTests(MvpBase):
                 self.mvp.apply(self.balanced(budget=budget))
         self.assertEqual(self.broker.risk_manager.settings().max_total_investment, before.max_total_investment)
         with self.assertRaises(ValueError):
-            MvpSettings(budget=1, sectors=[], profile="x", **PRESETS["균형형"])
+            MvpSettings(budget=1, sectors=[], stop_pct=5, take_pct=10, max_days=20)
 
     def test_cannot_change_while_running(self):
         self.engine.running = True
@@ -114,7 +112,7 @@ class SettingsTests(MvpBase):
         self.assertTrue(lots, "expected an open lot")
         before = {l["id"]: (l["context"]["stop_loss_rate"], l["context"]["take_profit_rate"]) for l in lots}
         self.engine.running = False
-        self.mvp.apply(self.balanced(stop_pct=Decimal(1), take_pct=Decimal(2), profile="직접 설정"))
+        self.mvp.apply(self.balanced(stop_pct=Decimal(1), take_pct=Decimal(2)))
         after = {l["id"]: (l["context"]["stop_loss_rate"], l["context"]["take_profit_rate"]) for l in self.broker.managed_lots()}
         self.assertEqual(before, after)
         self.assertEqual(self.engine.stop_loss_rate, Decimal(1))      # future buys use the new rule
@@ -139,11 +137,13 @@ class FlowTests(MvpBase):
             self.assertLessEqual(cost, Decimal(5000000))                 # budget limits purchases, not later price gains
             symbols_traded |= {o.symbol for o in self.broker.orders()}
         orders = list(reversed(self.broker.orders()))
-        self.assertEqual(symbols_traded, {"100001", "100002"})      # Scout-excluded 100004/100005 never traded; 100003 never signalled
+        # No per-order/per-symbol cap: the first entry may use the whole operating amount, so 100002 finds no budget left.
+        # Scout-excluded 100004/100005 never traded; 100003 never signalled.
+        self.assertEqual(symbols_traded, {"100001"})
         self.assertEqual([(o.symbol, o.side.value) for o in orders if o.status.value == "FILLED"],
-                         [("100001", "BUY"), ("100002", "BUY"), ("100002", "SELL"), ("100001", "SELL")])
+                         [("100001", "BUY"), ("100001", "SELL")])
         self.assertTrue(all(o.source == "STRATEGY" for o in orders))
-        self.assertEqual(self.broker.holding_quantity("100001") + self.broker.holding_quantity("100002"), 0)
+        self.assertEqual(self.broker.holding_quantity("100001"), 0)
         realized = sum((o.realized_profit or Decimal(0)) for o in orders)
         self.assertEqual(self.broker.account().total_profit, realized)
         kinds = {d["kind"] for d in self.mvp.status()["decisions"]}
@@ -165,44 +165,18 @@ class FlowTests(MvpBase):
             run(self.engine.poll_market())
         self.assertEqual(len(self.broker.orders()), count)
 
-    def test_max_holdings_limits_new_entries(self):
-        self.reapply(max_holdings=1)
-        for _ in range(25):
-            self.poll()
-            self.assertLessEqual(len(self.broker.account().positions), 1)
-        buys = [o for o in self.broker.orders() if o.side.value == "BUY" and o.status.value == "FILLED"]
-        self.assertEqual(len({o.symbol for o in buys}), 1)
-
-    def test_total_budget_and_symbol_cap_hold(self):
-        self.reapply(budget=120000, per_unit="amount", per_value=Decimal(60000))
+    def test_total_budget_holds_and_is_the_only_cap(self):
+        self.reapply(budget=120000)
         for _ in range(40):
             self.poll()
             self.assertLessEqual(holdings_value(self.broker), Decimal(120000) + Decimal(8000))   # price drift after a buy
-            for p in self.broker.account().positions:
-                self.assertLessEqual(p.quantity * p.average_price, Decimal(60000))
         self.assertTrue(any(o.side.value == "BUY" for o in self.broker.orders()))
 
     def test_unaffordable_budget_never_buys(self):
-        self.reapply(budget=40000, per_unit="amount", per_value=Decimal(40000))
+        self.reapply(budget=40000)
         self.poll(40)
         self.assertEqual([o for o in self.broker.orders() if o.status.value == "FILLED"], [])
         self.assertEqual(self.broker.account().cash, self.CASH)
-
-    def test_daily_loss_limit_blocks_new_buys(self):
-        from auto_trader.paper_mvp_synthetic import SCENARIO
-        self.source.scenario = {k: SCENARIO[k] for k in ("100002", "100003")}   # only the losing trade: net equity falls
-        self.reapply(daily_loss_pct=Decimal("0.1"))                  # 10,000 KRW
-        blocked = None
-        for _ in range(60):
-            self.poll()
-            st = self.mvp.status()
-            if not st["risk"]["new_buys_allowed"]:
-                blocked = st
-                break
-        self.assertIsNotNone(blocked, "the synthetic stop-out loss should trip the daily loss limit")
-        self.assertIn("손실", blocked["risk"]["block_reason"])
-        self.assertIn("손실", self.broker.risk_manager.check_buy(symbol="100003", amount=Decimal(50000), fee=Decimal(0)))
-
 
 class HoldTests(MvpBase):
     def setUp(self):

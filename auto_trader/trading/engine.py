@@ -323,12 +323,10 @@ class TradingEngine:
         if not self._within_hours() or self._clock() - prices_requested_at > timedelta(seconds=30):
             self.data_message = "시세 조회 지연 또는 운영 종료: 다음 시세를 기다립니다."
             return
-        priced = set()                      # symbols whose valid price was actually applied to the market in this tick
         for symbol, price in prices.items():
             if self.market.has_symbol(symbol) and price.is_finite() and price > 0:
                 stock = next(s for s in self.market.stocks() if s.symbol == symbol)
                 self.market.upsert_stock(stock, price)
-                priced.add(symbol)
         if prices or candles:
             self.last_data_at = self._clock()
         self.data_message = "실제 현재가 · 완료된 1분봉 · 모의 체결"
@@ -348,12 +346,6 @@ class TradingEngine:
                 self.data_message = "완료된 1분봉 대기 · 신규 판단과 체결을 기다립니다."
             return
         self.step(candles=candles)
-        hook = getattr(self.broker.risk_manager, "checkpoint", None) if self.broker.risk_manager else None
-        if hook:
-            try:
-                hook(priced)        # symbols whose valid price was applied in THIS tick
-            except Exception:
-                logging.getLogger("auto_trader.strategy").exception("Could not record the end-of-tick automatic book")
 
     def step(self, *, candles=None) -> None:
         if self.price_feed is not None and candles is None:

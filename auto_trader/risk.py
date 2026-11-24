@@ -1,7 +1,7 @@
 """영구 설정과 메모리 PAPER 계좌를 결합한 위험 한도 관리."""
 
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import date
 from decimal import Decimal
 
 from .database import connect
@@ -27,20 +27,11 @@ PRESETS = {
 
 @dataclass(frozen=True)
 class AutoLimits:
-    """In-memory limits of ONE automatic PAPER run (PAPER-SETTINGS-01). Never persisted, never applied to manual orders;
-    they are measured against automatic holdings/results only (cash is shared with manual trading)."""
-    max_order_amount: Decimal
-    max_symbol_amount: Decimal
+    """The ONE user-set limit of an automatic PAPER run (PAPER-SIMPLIFY-01): the operating amount in KRW. In memory only,
+    never applied to manual orders, measured against automatic holdings only (cash is shared with manual trading).
+    The earlier per-order / per-symbol / holdings / daily-buy / daily-loss limits and the day-baseline machinery behind
+    the loss limit are preserved on branch archive/folio-legacy-risk-settings (see docs/technical/PAPER_SIMPLIFY_01.md)."""
     max_total_investment: Decimal
-    daily_loss_limit: Decimal
-    daily_buy_limit: int = 0                  # filled automatic buys per KST day; 0 = no limit (same meaning as the engine's)
-    session_close: time = time(15, 20)        # KST end of the run's trading hours (engine.trading_end)
-    max_holdings: int | None = None           # max symbols held by automatic trading; None only for the internal default object
-
-
-LAST_EVAL_WRITE_EVERY = timedelta(seconds=60)
-CLOSE_PROOF_WINDOW = timedelta(minutes=10)    # a previous-day record counts as a 'close' if taken this close to session_close
-BASELINE_VERSION = 2                             # records written by an older rule are never trusted
 
 
 class RiskManager:
@@ -139,166 +130,24 @@ class RiskManager:
             return "일일 주문 횟수 한도에 도달했습니다."
         return None
 
-    # ---- automatic-run limits (PAPER-SETTINGS-01)
-    def _auto_day(self, limits: "AutoLimits"):
-        """(profit today of automatic trades only, baseline_trusted). Profit = realised STRATEGY sells today + unrealised
-        (net of estimated exit costs) of automatic lots - the unrealised part at the day's baseline.
-
-        This function only READS the previous-day record; see checkpoint() for how it is written.
-        The baseline is read from the account's persisted state on every call (so an account reset invalidates it) and is
-        trusted only when it can be proven from recorded facts, never from "whatever the first evaluation saw":
-          * the previous TRADING day's closing evaluation (`auto_last`: taken within CLOSE_PROOF_WINDOW of the session close,
-            on the previous weekday, so overnight price moves are counted as the new day's) exists, no automatic order was
-            filled since it and the holdings are identical -> that record is the day's starting point. An intraday or older
-            record cannot prove the price path in between and is not used;
-          * or nothing is held and no automatic order was filled today -> the day starts flat at 0.
-        Anything else (carried holdings with no provable start, sells before the first evaluation, unreadable records) is
-        untrusted: new buys are held, exits are never touched."""
-        from .trading import KST
-        now = self.broker.now().astimezone(KST)
-        today, key = now.date(), now.date().isoformat()
-        orders = [o for o in self.broker.orders() if o.source == "STRATEGY" and o.status.value == "FILLED"]
-        realized = sum((o.realized_profit or Decimal(0) for o in orders
-                        if o.side.value == "SELL" and o.created_at.astimezone(KST).date() == today), Decimal(0))
-        holdings = dict(self.broker.risk_holdings())        # persisted AUTO lots: correct before any run has started after a restart
-        unrealized = self.broker.risk_unrealized()
-        state = self.broker.mvp_state()
-        base, last = state.get("auto_open"), state.get("auto_last")
-
-        if base is None or (isinstance(base, dict) and base.get("date") != key) or (isinstance(base, list) and base and base[0] != key):
-            record = None
-            try:
-                if last.get("v") != BASELINE_VERSION or last.get("source") != "tick":
-                    raise ValueError("closing record not written by an engine tick under the current rule")
-                last_at = datetime.fromisoformat(last["at"])
-                last_holdings = {str(k): int(v) for k, v in last["holdings"].items()}
-                last_unrealized = Decimal(last["unrealized"])
-                since = [o for o in orders if o.created_at > last_at]
-                last_local = last_at.astimezone(KST)
-                gap = (today - last_local.date()).days
-                previous_trading_day = gap >= 1 and all((last_local.date() + timedelta(days=d)).weekday() >= 5 for d in range(1, gap))
-                closing = last_local.time() >= (datetime.combine(today, limits.session_close) - CLOSE_PROOF_WINDOW).time()
-                if previous_trading_day and closing and not since and last_holdings == holdings:
-                    record = dict(v=BASELINE_VERSION, date=key, unrealized=str(last_unrealized), trusted=True, at=now.isoformat(),
-                                  source="previous-close")
-            except (TypeError, KeyError, ValueError, AttributeError, ArithmeticError):
-                pass                                                  # no usable previous record
-            if record is None:
-                flat_start = not holdings and not any(o.created_at.astimezone(KST).date() == today for o in orders)
-                record = dict(v=BASELINE_VERSION, date=key, unrealized="0" if flat_start else str(unrealized), trusted=flat_start,
-                              at=now.isoformat(), flat_verified=flat_start,
-                              source="flat-start" if flat_start else "unverifiable")
-            self.broker.update_mvp(auto_open=record)                  # raises if it cannot be saved -> buys are held
-        elif isinstance(base, dict):
-            trusted = bool(base["trusted"]) and base.get("v") == BASELINE_VERSION
-            if trusted and base.get("source") == "flat-start" and not base.get("flat_verified"):
-                # a "flat" start not written with the verified-flat marker (earlier implementation) may have been saved while
-                # carried automatic holdings existed. Trust is never restored by later fills, so the invalidity is persisted
-                # (best effort: if saving fails the in-memory answer is still untrusted) and survives partial sells and restarts.
-                trusted = False
-                try:
-                    self.broker.update_mvp(auto_open=dict(v=base.get("v"), date=base["date"], unrealized=str(Decimal(base["unrealized"])),
-                                                          trusted=False, at=base.get("at"), source="unverifiable"))
-                except Exception:
-                    pass
-            record = dict(date=base["date"], unrealized=str(Decimal(base["unrealized"])), trusted=trusted)
-        elif isinstance(base, list) and len(base) == 2:               # written by an earlier version: trust level unknown
-            record = dict(date=base[0], unrealized=str(Decimal(base[1])), trusted=False)
-        else:
-            raise ValueError("unreadable day baseline")
-
-        return realized + unrealized - Decimal(record["unrealized"]), bool(record["trusted"])
-
-    def checkpoint(self, fresh_symbols) -> None:
-        """Called by the engine after a tick that fetched fresh prices and stepped. The ONLY writer of `auto_last`: a status
-        view or an order check says nothing about when prices were last observed, so it can never create a closing proof.
-        Today's baseline is established first (it reads the previous record), then the record is advanced (at most once a
-        minute, or at once when the holdings changed) and only if EVERY held symbol was priced this tick. Never raises: errors surface through auto_status."""
-        limits = self.auto_limits
-        if limits is None:
-            return
-        try:
-            self._auto_day(limits)
-            if not set(self.broker.risk_symbols()) <= set(fresh_symbols):
-                return          # a held symbol had no fresh price this tick: its valuation is stale, so no new proof is stored
-            now = self.broker.now()
-            holdings = dict(self.broker.risk_holdings())
-            last = self.broker.mvp_state().get("auto_last")
-            try:
-                due = (datetime.fromisoformat(last["at"]) + LAST_EVAL_WRITE_EVERY <= now
-                       or {str(k): int(v) for k, v in last["holdings"].items()} != holdings)
-            except (TypeError, KeyError, ValueError, AttributeError):
-                due = True
-            if due:
-                self.broker.update_mvp(auto_last=dict(at=now.isoformat(), unrealized=str(self.broker.risk_unrealized()),
-                                                      holdings=holdings, source="tick", v=BASELINE_VERSION))
-        except Exception:
-            pass
-
-    def auto_profit(self, limits: "AutoLimits | None" = None) -> Decimal:
-        return self._auto_day(limits or self.auto_limits or AutoLimits(Decimal(1), Decimal(1), Decimal(1), Decimal(1)))[0]
-
+    # ---- automatic-run operating amount (PAPER-SIMPLIFY-01)
     def auto_status(self, limits: "AutoLimits") -> dict:
-        base = dict(max_total_investment=limits.max_total_investment, max_symbol_amount=limits.max_symbol_amount,
-                    daily_loss_limit=limits.daily_loss_limit)
-        try:
-            profit, trusted = self._auto_day(limits)
-            invested = self.broker.risk_value()
-        except Exception:                               # cannot establish the day's figures: hold new buys, never guess
-            return dict(new_buys_allowed=False, block_reason="자동매매 일일 손익 기준을 확인할 수 없어 신규 매수를 보류합니다.",
-                        daily_profit=Decimal(0), invested_amount=Decimal(0), **base)
-        reason = None
-        if not trusted:
-            reason = ("오늘의 손익 시작 기준을 확인할 수 없어(전일 평가 기록 없이 자동매매 보유분이 이월됨, 또는 첫 평가 전에 자동 매도가 있었음) "
-                      "신규 매수를 보류합니다. 보유분의 청산 조건은 유지되며, 오늘 평가 기록이 쌓이면 다음 거래일부터 기준이 확정됩니다.")
-        elif profit <= -limits.daily_loss_limit:
-            reason = "일일 손실 한도에 도달했습니다."
-        return dict(new_buys_allowed=reason is None, block_reason=reason, daily_profit=profit, invested_amount=invested, **base)
+        invested = self.broker.risk_value()
+        room = limits.max_total_investment - invested
+        reason = None if room > 0 else "자동매매 운용 금액을 모두 사용했습니다."
+        return dict(new_buys_allowed=reason is None, block_reason=reason, invested_amount=invested,
+                    max_total_investment=limits.max_total_investment)
 
-    def _check_auto_buy(self, symbol: str, amount: Decimal, fee: Decimal, limits: "AutoLimits") -> str | None:
-        status = self.auto_status(limits)
-        if status["block_reason"]:
-            return status["block_reason"]
-        if not RiskPolicy.order_amount_allowed(limits, amount, fee):
-            return "1회 최대 주문 금액을 초과했습니다."
-        held = self.broker.risk_symbols()
-        if limits.max_holdings is not None and symbol not in held and len(held) >= limits.max_holdings:
-            return f"자동매매 최대 보유 종목 수 {limits.max_holdings}개에 도달했습니다."
-        if not RiskPolicy.symbol_amount_allowed(limits, self.broker.risk_symbol_value(symbol), amount):
-            return "종목별 최대 투자 금액을 초과했습니다."
-        if not RiskPolicy.total_investment_allowed(limits, status["invested_amount"], amount):
-            return "자동매매 투자 가능 금액을 초과했습니다."
-        if limits.daily_buy_limit > 0:
-            from .trading import KST
-            try:
-                used = self.broker.daily_buy_count(self.broker.now().astimezone(KST).date())
-            except Exception:
-                return "하루 매수 횟수를 확인할 수 없어 신규 매수를 보류합니다."
-            if used >= limits.daily_buy_limit:
-                return f"하루 매수 한도 {limits.daily_buy_limit}회에 도달했습니다."
+    def _check_auto_buy(self, amount: Decimal, limits: "AutoLimits") -> str | None:
+        """An automatic buy must fit the operating amount (automatic holdings at market value + this buy)."""
+        if self.broker.risk_value() + amount > limits.max_total_investment:
+            return "자동매매 운용 금액을 초과합니다."
         return None
 
-    def check_buy(self, *, symbol: str, amount: Decimal, fee: Decimal,
-                  ignore_min_cash_ratio: bool = False,
-                  ignore_daily_order_limit: bool = False) -> str | None:
-        if self.auto_limits is not None:                # an automatic run owns its own limits; saved settings are not used
-            return self._check_auto_buy(symbol, amount, fee, self.auto_limits)
-        config = self.settings()
-        cash, invested, total_asset, daily_profit, orders = self._metrics()
-        reason = self.global_block_reason(
-            config, daily_profit, orders,
-            ignore_daily_order_limit=ignore_daily_order_limit,
-        )
-        if reason:
-            return reason
-        symbol_value = self.broker.position_value(symbol)
-        if not RiskPolicy.order_amount_allowed(config, amount, fee):
-            return "1회 최대 주문 금액을 초과했습니다."
-        if not RiskPolicy.symbol_amount_allowed(config, symbol_value, amount):
-            return "종목별 최대 투자 금액을 초과했습니다."
-        if not RiskPolicy.total_investment_allowed(config, invested, amount):
-            return "전체 최대 투자 금액을 초과했습니다."
-        remaining_cash = cash - amount - fee
-        if not ignore_min_cash_ratio and total_asset and RiskPolicy.cash_ratio(remaining_cash, total_asset) < config.min_cash_ratio:
-            return "최소 현금 보유 비율 아래로 내려갑니다."
-        return None
+    def check_buy(self, *, symbol: str, amount: Decimal, fee: Decimal, **_ignored) -> str | None:
+        """PAPER buys that reach the risk manager are automatic ones. They are bound by the run's operating amount only;
+        a buy without one (no run owns the limit) is refused. The persistent settings above serve LIVE order previews and
+        are never consulted for PAPER. Balance, quantity and duplicate checks stay in PaperBroker.submit."""
+        if self.auto_limits is None:
+            return "자동매매 운용 금액이 설정되지 않아 매수할 수 없습니다."
+        return self._check_auto_buy(amount + fee, self.auto_limits)

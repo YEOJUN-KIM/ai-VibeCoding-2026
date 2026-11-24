@@ -5,9 +5,10 @@ entry/exit signals, sizing, costs and fills, and `PaperBroker` + `RiskManager` s
 Nothing here can place a real order: the controller only accepts a `PaperBroker`, this module imports no
 broker/LIVE order code (checked by a test), and market data comes from an injected `MvpDataSource`.
 
-PAPER-SETTINGS-01: the MVP settings are the only automatic-trading settings. Their limits live in memory on the risk
-manager (`AutoLimits`) only while a run is active, are measured against automatic holdings, and never limit manual
-orders; the persistent risk settings are never written. Engine parameters are restored when the run ends.
+PAPER-SIMPLIFY-01: the only user-set limit is the automatic operating amount (`budget`, KRW). It lives in memory on the
+risk manager (`AutoLimits`) only while a run is active, is measured against automatic holdings, and never limits manual
+orders; the persistent risk settings are never read or written. Engine parameters are restored when the run ends.
+The former per-symbol / holdings / daily-buy / daily-loss settings are on branch archive/folio-legacy-risk-settings.
 
 Fail-closed rules (each tested): no data source, stale data, undeclared clock uncertainty, a Scout HOLD or a
 provider error all mean "no new entries". Held lots keep their own exit rules; they are never rewritten by a
@@ -37,11 +38,10 @@ from .trading import KST
 STALE_AFTER = timedelta(seconds=90)
 MAX_DECISIONS, MAX_EQUITY = 200, 1500
 
-PRESETS = {  # UX-02 PC page values (the page marks them as not final policy)
-    "안정형": dict(per_unit="percent", per_value=15, max_holdings=8, daily_loss_pct=1, stop_pct=3, take_pct=6, max_days=30, daily_buys=5),
-    "균형형": dict(per_unit="percent", per_value=25, max_holdings=6, daily_loss_pct=2, stop_pct=5, take_pct=10, max_days=20, daily_buys=10),
-    "적극형": dict(per_unit="percent", per_value=35, max_holdings=4, daily_loss_pct=3, stop_pct=7, take_pct=14, max_days=15, daily_buys=15),
-}
+# Exit rules are strategy parameters, not investment limits. Defaults = the former "균형형" exit values.
+DEFAULT_EXIT = dict(stop_pct=5, take_pct=10, max_days=20)
+# Scout/DAY-01 require positive limits. These stand for "no separate limit": the operating amount is the only one.
+NO_SEPARATE_LIMIT_POSITIONS, NO_SEPARATE_LIMIT_ORDERS = 1000, 1_000_000
 
 
 class MvpError(ValueError):
@@ -53,21 +53,15 @@ class MvpConflict(MvpError):
 
 
 class MvpSettings(BaseModel):
-    budget: int = Field(ge=0)
+    budget: int = Field(ge=0)                     # automatic operating amount, KRW (the only user-set limit)
     sectors: list[str] = Field(min_length=1)
-    profile: str
-    per_unit: Literal["percent", "amount"]
-    per_value: Decimal = Field(gt=0)
-    max_holdings: int = Field(ge=1, le=30)
-    daily_loss_pct: Decimal = Field(ge=Decimal("0.1"), le=20)
-    daily_buys: int = Field(ge=0, le=100)
     stop_pct: Decimal = Field(ge=Decimal("0.1"), le=50)
     take_pct: Decimal = Field(ge=Decimal("0.1"), le=100)
     max_days: int = Field(ge=1, le=365)
 
 
 def default_settings(total: Decimal) -> MvpSettings:
-    return MvpSettings(budget=int(total / 2), sectors=["FOLIO 추천"], profile="균형형", **PRESETS["균형형"])
+    return MvpSettings(budget=int(total / 2), sectors=["FOLIO 추천"], **DEFAULT_EXIT)
 
 
 @dataclass(frozen=True)
@@ -156,46 +150,38 @@ class PaperMvp:
         saved = self.broker.mvp_state().get("settings")
         return MvpSettings.model_validate(saved) if saved else default_settings(self.broker.account().total_asset)
 
-    def _limits(self, s: MvpSettings, *, strict: bool = True):
-        """`strict` is for saving/starting (new settings must fit the account). Reporting the status of settings that were
-        valid when saved must never fail because the account has since lost value (strict=False)."""
+    def _check_budget(self, s: MvpSettings) -> Decimal:
+        """Saving/starting needs a budget that fits the account. Reporting settings that were valid when saved never fails."""
         total = self.broker.account().total_asset
-        if strict and s.budget < 1:
-            raise MvpError("투자 금액은 1원 이상이어야 합니다.")
-        if strict and Decimal(s.budget) > total:
-            raise MvpError(f"투자 금액은 모의 총자산 {total:,.0f}원 이하여야 합니다.")
-        cap = total * s.per_value / 100 if s.per_unit == "percent" else s.per_value
-        cap = min(cap, Decimal(s.budget)).quantize(Decimal(1), rounding=ROUND_DOWN)
-        if strict and cap < 1:
-            raise MvpError("종목당 한도가 너무 작습니다.")
-        loss = max(Decimal(1), (total * s.daily_loss_pct / 100).quantize(Decimal(1), rounding=ROUND_DOWN))
-        return total, cap, loss
+        if s.budget < 1:
+            raise MvpError("자동매매 운용 금액은 1원 이상이어야 합니다.")
+        if Decimal(s.budget) > total:
+            raise MvpError(f"자동매매 운용 금액은 모의 총자산 {total:,.0f}원 이하여야 합니다.")
+        return total
 
-    def auto_limits(self, s: MvpSettings | None = None, *, strict: bool = True) -> AutoLimits:
-        """The automatic run's limits. Held only in memory by the risk manager while a run is active; manual orders never see them."""
-        s = s or self.settings()
-        _, cap, loss = self._limits(s, strict=strict)
-        return AutoLimits(max_order_amount=cap, max_symbol_amount=cap, max_total_investment=Decimal(s.budget), daily_loss_limit=loss,
-                          daily_buy_limit=s.daily_buys, session_close=self.engine.trading_end, max_holdings=s.max_holdings)
+    def auto_limits(self, s: MvpSettings | None = None) -> AutoLimits:
+        """The automatic run's operating amount. Held only in memory by the risk manager while a run is active; manual orders never see it."""
+        return AutoLimits(max_total_investment=Decimal((s or self.settings()).budget))
 
     def day01_config(self, s: MvpSettings | None = None) -> Day01Config:
         s = s or self.settings()
-        total, cap, loss = self._limits(s)
+        total = self._check_budget(s)
+        budget = Decimal(s.budget)
         return Day01Config(
             execution="research_estimated_open", vwap_mode="exact", sizing="AFFORDABLE_UP_TO_CAP", order_quantity=1000,
             initial_cash=total, fee_rate=self.broker.fee_rate, sell_tax_rate=self.broker.sell_tax_rate,
-            slippage_rate=self.broker.slippage_rate, max_order_amount=cap, max_symbol_amount=cap,
-            max_total_investment=Decimal(s.budget), max_positions=s.max_holdings, min_cash_ratio=Decimal(0),
-            daily_loss_limit=loss, daily_order_limit=s.daily_buys or 100)
+            slippage_rate=self.broker.slippage_rate, max_order_amount=budget, max_symbol_amount=budget,
+            max_total_investment=budget, max_positions=NO_SEPARATE_LIMIT_POSITIONS, min_cash_ratio=Decimal(0),
+            daily_loss_limit=total, daily_order_limit=NO_SEPARATE_LIMIT_ORDERS)
 
     def apply(self, s: MvpSettings, *, activate: bool = True) -> MvpSettings:
         """Validate and save the settings. With `activate` (start-of-run) they also become the automatic run's limits and
         engine parameters; the settings page saves with activate=False. Saved settings never touch the persistent risk
-        settings (which serve LIVE previews and legacy strategies) and never limit manual orders. Existing lots keep the
+        settings (which serve LIVE previews) and never limit manual orders. Existing lots keep the
         exit rules they were bought with (stored per lot); only future buys use the new values."""
         if self.engine.running:
             raise MvpConflict("자동매매를 일시정지한 뒤 설정을 변경하세요.")
-        self._limits(s)                               # validation only
+        self._check_budget(s)                         # validation only
         self.broker.update_mvp(settings=s.model_dump(mode="json"))
         if activate:
             self._activate(s)
@@ -214,18 +200,17 @@ class PaperMvp:
         cooldowns = dict(eng._last_order_at)           # configure() clears them; a restart must not bypass the cooldown
         try:
             eng.configure(interval_seconds=eng.interval_seconds, short_period=eng.short_period, long_period=eng.long_period,
-                          order_quantity=eng.order_quantity, target_symbols=[], sizing_mode="AMOUNT", order_amount=limits.max_order_amount,
+                          order_quantity=eng.order_quantity, target_symbols=[], sizing_mode="AMOUNT", order_amount=limits.max_total_investment,
                           take_profit_rate=s.take_pct, stop_loss_rate=s.stop_pct, max_holding_days=s.max_days,
-                          daily_order_limit=s.daily_buys, strategy_name="PAPER-MVP Scout")
+                          daily_order_limit=0, strategy_name="PAPER-MVP Scout")
             eng._last_order_at.update(cooldowns)
-            eng.count_sells_in_daily_limit = False      # the daily limit is a BUY limit; exits are never limited
+            eng.count_sells_in_daily_limit = False
             self.broker.risk_manager.auto_limits = limits
             eng.run_release = self._release
         except Exception:
             self._release()
             raise
-        self._log("CONTROL", "투자 설정 적용", f"{s.profile} · 투자 {s.budget:,}원 · 종목당 {limits.max_order_amount:,}원 · 최대 {s.max_holdings}종목 · "
-                  f"하루 손실 {limits.daily_loss_limit:,}원 · 자동매매에만 적용(수동 주문 제외) · 신규 매수부터 적용(기존 보유분 청산 기준 유지)")
+        self._log("CONTROL", "투자 설정 적용", f"자동매매 운용 금액 {s.budget:,}원 · 자동매매에만 적용(수동 주문 제외) · 신규 매수부터 적용(기존 보유분 청산 기준 유지)")
 
     def _release(self):
         """End of an automatic run: drop its limits and put the engine's pre-MVP parameters back (idempotent, in memory only).
@@ -335,11 +320,10 @@ class PaperMvp:
         s = self.settings()
         cfg = self.day01_config(s)
         account = self.broker.account()
-        risk = self.broker.risk_manager.auto_status(self.auto_limits(s))
         positions = tuple(sc.Position(sym, self.broker.risk_holdings()[sym], self.broker.risk_symbol_value(sym), data.as_of,
                                       self.engine.market.quote(sym).price, data.as_of) for sym in self.broker.risk_symbols())
         portfolio = sc.Portfolio(data.as_of, cash=account.cash, total_asset=account.total_asset, positions=positions,
-                                 daily_loss=max(Decimal(0), -risk["daily_profit"]), **portfolio_limits_for(cfg))
+                                 **portfolio_limits_for(cfg))
         result = run_scout_pipeline(
             as_of=data.as_of, snapshot=data.snapshot, candle_rows=data.candle_rows, orderbook_results=data.orderbooks,
             instruments=data.instruments, portfolio=portfolio, day01_config=cfg, clock_uncertainty=data.clock_uncertainty,
@@ -353,8 +337,7 @@ class PaperMvp:
             self._hold("SCOUT_HOLD", "Scout 판단 보류: " + ", ".join(result.hold_reasons), notes=result.hold_reasons)
             return []
         held = self._held()                                       # symbols NOT to buy again: automatic and manual holdings
-        free = max(0, s.max_holdings - len(self.broker.risk_symbols()))   # the holdings cap counts automatic holdings only
-        chosen = [sym for sym in result.passed if sym not in held][:free]
+        chosen = [sym for sym in result.passed if sym not in held]
         for sym in chosen:
             price = self.source.price(sym, now)
             if price is None or price <= 0:
@@ -362,7 +345,7 @@ class PaperMvp:
                 continue
             self.engine.market.upsert_stock(Stock(symbol=sym, name=self.source.name(sym), market="KRX"), price)
         if not chosen:
-            why = "보유 종목 수가 한도에 도달했습니다." if not free else "이미 보유 중인 종목뿐이라 추가 진입하지 않습니다."
+            why = "이미 보유 중인 종목뿐이라 추가 진입하지 않습니다."
             self.engine.candidate_message = "정상 관망 · " + why
             self._log("WATCH", "정상 관망", why, symbols=list(result.passed))
             return []
@@ -398,7 +381,7 @@ class PaperMvp:
         now = self._clock()
         account = broker.account()
         strategy = eng.status()
-        risk = broker.risk_manager.auto_status(self.auto_limits(strict=False))
+        risk = broker.risk_manager.auto_status(self.auto_limits())
         if strategy.running and not self._mine():
             state, label = "other", "다른 PAPER 전략 실행 중"
         elif strategy.running:
@@ -441,10 +424,9 @@ class PaperMvp:
                          realized_profit=str(account.realized_profit), unrealized_profit=str(account.unrealized_profit),
                          total_fees=str(account.total_fees)),
             pnl=pnl, settings=self.settings().model_dump(mode="json"),
-            risk=dict(new_buys_allowed=risk["new_buys_allowed"], block_reason=risk["block_reason"], daily_profit=str(risk["daily_profit"]),
+            risk=dict(new_buys_allowed=risk["new_buys_allowed"], block_reason=risk["block_reason"],
                       invested_amount=str(risk["invested_amount"]), max_total_investment=str(risk["max_total_investment"]),
-                      max_symbol_amount=str(risk["max_symbol_amount"]), daily_loss_limit=str(risk["daily_loss_limit"]),
-                      scope="자동매매 보유분·손익 기준(수동 주문에는 적용되지 않음)"),
+                      scope="자동매매 운용 금액 기준(수동 주문에는 적용되지 않음)"),
             holdings=holdings, trades=trades, decisions=list(reversed(broker.mvp_state().get("decisions", []))),
             series=[[t.isoformat(), str(v)] for t, v in samples], checked_at=now.isoformat())
 

@@ -63,18 +63,29 @@ html = cut(html, '<div class="summary-grid"><article class="stat"><span class="f
 
 # --- settings
 html = cut(html, '<div class="notice settings-intro">', '</div>',
-           '<div class="notice settings-intro">저장하면 모의계좌에 보관되고 <strong>신규 매수부터 적용</strong>됩니다. 기존 보유분은 매수 당시 청산 기준을 유지하며, 계좌 전체의 안전 제한은 최신 설정을 따릅니다. 자동매매 실행 중에는 설정을 바꿀 수 없습니다. 투자 성향별 수치는 UX-02 시연 기준을 그대로 쓰며 최종 정책이 아닙니다.</div>')
+           '<div class="notice settings-intro">저장하면 모의계좌에 보관되고 <strong>신규 매수부터 적용</strong>됩니다. 기존 보유분은 매수 당시 청산 기준을 유지합니다. '
+           '자동매매 실행 중에는 설정을 바꿀 수 없습니다. 직접 하는 모의 주문에는 이 금액이 적용되지 않으며, 보유 현금과 수량 범위에서만 주문할 수 있습니다.</div>')
+# PAPER-SIMPLIFY-01: the only user-set limit is the operating amount. Profile cards (which bundled the removed limits) and the
+# "투자 제한" section are replaced by the exit criteria (strategy parameters, not investment limits).
+NEW_EXIT = (
+    '    <article class="panel settings-section"><div class="section-title"><div class="step"><span class="index">03</span><h2>청산 기준</h2></div>'
+    '<p>새로 매수하는 분량에<br>적용할 손절·익절 기준입니다.</p></div><div><div class="limits-grid">'
+    '<div><label class="field-label" for="stop-pct">손절 기준</label><div class="input-unit"><input id="stop-pct" type="number" min="0.1" max="50" step="0.1"><span>%</span></div></div>'
+    '<div><label class="field-label" for="take-pct">익절 기준</label><div class="input-unit"><input id="take-pct" type="number" min="0.1" max="100" step="0.1"><span>%</span></div></div>'
+    '<div><label class="field-label" for="max-days">최대 보유 일수</label><div class="input-unit"><input id="max-days" type="number" min="1" max="365" step="1"><span>일</span></div></div></div>'
+    '<p class="context">자동매매가 실행 중인 동안 기존 매수분의 손절·익절은 계속 감시하지만, 일시정지·긴급정지 중에는 이 감시도 멈춥니다. 최고가 매도를 보장하지 않습니다. '
+    '종목당·주문당·보유 종목 수·하루 매수 횟수·하루 손실 같은 별도 한도는 없으며, 자동매매 운용 금액만 적용됩니다.</p></div></article>\n')
+html, n = re.subn(r'(?m)^    <article class="panel settings-section"><div class="section-title"><div class="step"><span class="index">03</span>.*\n'
+                  r'    <article class="panel settings-section"><div class="section-title"><div class="step"><span class="index">04</span>.*\n',
+                  lambda m: NEW_EXIT, html, count=1)
+assert n == 1
+html = re.sub(r'<span class="badge" id="draft-summary">[^<]*</span>', '<span class="badge" id="draft-summary"></span>', html, count=1)
 html = sub(html, '<span>100% · 10,258,000원</span>', '<span id="budget-max">100%</span>')
 html = sub(html, 'max="10258000"', 'max="1000000000"')
 html = sub(html, 'aria-describedby="budget-help"', 'aria-describedby="budget-help"')
-html = sub(html, '100%를 지정해도 전액을 바로 매수하지 않습니다.', '100%를 지정해도 전액을 바로 매수하지 않으며, 종목당 한도·보유 종목 수·하루 손실 한도가 함께 적용됩니다.')
+html = sub(html, '100%를 지정해도 전액을 바로 매수하지 않습니다.', '자동매매가 보유·매수할 수 있는 최대 금액(원)입니다. 이 금액만 한도로 적용됩니다.')
 html = sub(html, '<button class="primary" type="submit">설정 저장·적용</button>', '<button class="primary" type="submit" id="save-button">설정 저장·적용</button>')
 html = sub(html, '<small id="save-status" style="display:block;margin-top:4px">현재 적용값 · 이 탭의 메모리에만 보관</small>', '<small id="save-status" style="display:block;margin-top:4px"></small>')
-html = sub(html, '시연 기준: ', '기준: ', count=3)
-html = sub(html, '투자 제한과 같은 값을 사용합니다.', '투자 제한과 같은 값을 사용합니다. 원금 보장은 아닙니다.')
-html = sub(html, '<label class="field-label" for="daily-buys">하루 신규 매수 횟수 한도</label>', '<label class="field-label" for="daily-buys">하루 매수 횟수 한도 (0=제한 없음)</label>')
-html = sub(html, '일일 손실 한도는 신규·추가 매수만 제한합니다. 기존 매수분의 위험 감시·손절·익절 판단은 유지하는 설계입니다. 최고가 매도를 보장하지 않습니다.',
-           '일일 손실 한도는 신규·추가 매수만 제한합니다. 자동매매가 실행 중인 동안 기존 매수분의 손절·익절은 계속 감시하지만, 일시정지·긴급정지 중에는 이 감시도 멈춥니다. 최고가 매도를 보장하지 않습니다. 하루 매수 횟수 한도는 신규 매수만 세며, 보유분의 매도(청산)는 횟수 제한을 받지 않습니다.')
 
 # --- history
 html = cut(html, '<p class="context">기존 가상 자산의 기간 시작·종료 차이입니다.', '</p></article>',
