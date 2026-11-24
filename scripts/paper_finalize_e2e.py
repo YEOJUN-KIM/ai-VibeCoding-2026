@@ -57,7 +57,7 @@ s, me = call(op, "POST", "/auth/login", {"username": user, "password": password}
 check("1 login", s == 200, s)
 csrf = me.get("csrf_token")
 s, page = call(op, "GET", "/paper-mvp")
-check("2 /paper-mvp page (existing paper menu target)", s == 200 and "운용 홈" in page and 'href="/paper"' in page, s)
+check("2 /paper-mvp page (existing paper menu target)", s == 200 and "운용 홈" in page and 'href="/paper"' not in page and 'id="prepare"' in page, s)
 s, _ = call(op, "POST", "/paper/accounts/EXPERIMENT/select", None, csrf=csrf)
 check("3 experiment account prepared", s == 200, s)
 s, st = call(op, "GET", "/paper/mvp/status")

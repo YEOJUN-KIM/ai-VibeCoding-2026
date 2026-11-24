@@ -24,7 +24,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_DOWN
 from typing import Literal, Protocol
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from . import day01_scout as sc
 from .day01_scout_link import portfolio_limits_for
@@ -38,7 +38,9 @@ from .trading import KST
 STALE_AFTER = timedelta(seconds=90)
 MAX_DECISIONS, MAX_EQUITY = 200, 1500
 
-# Exit rules are strategy parameters, not investment limits. Defaults = the former "균형형" exit values.
+# PAPER-SIMPLIFY-02: exit rules are FOLIO's own strategy parameters, not user input and not investment limits. Every new
+# automatic buy gets these values; lots already held keep the values stored with them (context), and exit decisions
+# are unchanged. Defaults = the former "균형형" exit values. Previously saved user values for these are no longer read.
 DEFAULT_EXIT = dict(stop_pct=5, take_pct=10, max_days=20)
 # Scout/DAY-01 require positive limits. These stand for "no separate limit": the operating amount is the only one.
 NO_SEPARATE_LIMIT_POSITIONS, NO_SEPARATE_LIMIT_ORDERS = 1000, 1_000_000
@@ -53,15 +55,14 @@ class MvpConflict(MvpError):
 
 
 class MvpSettings(BaseModel):
-    budget: int = Field(ge=0)                     # automatic operating amount, KRW (the only user-set limit)
-    sectors: list[str] = Field(min_length=1)
-    stop_pct: Decimal = Field(ge=Decimal("0.1"), le=50)
-    take_pct: Decimal = Field(ge=Decimal("0.1"), le=100)
-    max_days: int = Field(ge=1, le=365)
+    """The only user-set value: the automatic operating amount (KRW). Removed inputs (sectors, stop/take %, max days)
+    are rejected by the API (extra=forbid) so they can no longer be changed from outside."""
+    model_config = ConfigDict(extra="forbid")
+    budget: int = Field(ge=0)
 
 
 def default_settings(total: Decimal) -> MvpSettings:
-    return MvpSettings(budget=int(total / 2), sectors=["FOLIO 추천"], **DEFAULT_EXIT)
+    return MvpSettings(budget=int(total / 2))
 
 
 @dataclass(frozen=True)
@@ -148,7 +149,10 @@ class PaperMvp:
     # ------------------------------------------------------------------ settings
     def settings(self) -> MvpSettings:
         saved = self.broker.mvp_state().get("settings")
-        return MvpSettings.model_validate(saved) if saved else default_settings(self.broker.account().total_asset)
+        # Saved records from before PAPER-SIMPLIFY-02 may carry the removed keys; only the operating amount is read.
+        if saved and isinstance(saved.get("budget"), int):
+            return MvpSettings(budget=saved["budget"])
+        return default_settings(self.broker.account().total_asset)
 
     def _check_budget(self, s: MvpSettings) -> Decimal:
         """Saving/starting needs a budget that fits the account. Reporting settings that were valid when saved never fails."""
@@ -182,7 +186,7 @@ class PaperMvp:
         if self.engine.running:
             raise MvpConflict("자동매매를 일시정지한 뒤 설정을 변경하세요.")
         self._check_budget(s)                         # validation only
-        self.broker.update_mvp(settings=s.model_dump(mode="json"))
+        self.broker.update_mvp(settings=s.model_dump(mode="json"))   # replaces the whole record: removed keys are not kept
         if activate:
             self._activate(s)
         return s
@@ -201,7 +205,7 @@ class PaperMvp:
         try:
             eng.configure(interval_seconds=eng.interval_seconds, short_period=eng.short_period, long_period=eng.long_period,
                           order_quantity=eng.order_quantity, target_symbols=[], sizing_mode="AMOUNT", order_amount=limits.max_total_investment,
-                          take_profit_rate=s.take_pct, stop_loss_rate=s.stop_pct, max_holding_days=s.max_days,
+                          take_profit_rate=Decimal(DEFAULT_EXIT["take_pct"]), stop_loss_rate=Decimal(DEFAULT_EXIT["stop_pct"]), max_holding_days=DEFAULT_EXIT["max_days"],
                           daily_order_limit=0, strategy_name="PAPER-MVP Scout")
             eng._last_order_at.update(cooldowns)
             eng.count_sells_in_daily_limit = False
@@ -411,7 +415,7 @@ class PaperMvp:
                        reason=o.reason, message=o.message, at=o.created_at.isoformat(), source=o.source)
                   for o in broker.orders()]
         return dict(
-            mode="PAPER", live_blocked=True, real_data_verified=False,
+            mode="PAPER", live_blocked=True, ready_reason=(self.start_guard() if self.start_guard else None), real_data_verified=False,
             data_source="SYNTHETIC" if self.source is not None else "NONE",
             run=dict(state=state, label=label, running=strategy.running, message=_honest_message(eng.data_message, self.source is not None),
                      operating_state=strategy.operating_state, tick_count=strategy.tick_count,

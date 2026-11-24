@@ -19,10 +19,11 @@ def dashboard_root(request: Request) -> RedirectResponse:
 
 
 @router.get("/paper", include_in_schema=False, response_model=None)
-def paper_dashboard(request: Request) -> FileResponse | RedirectResponse:
+def retired_paper_page(request: Request) -> RedirectResponse:
+    """PAPER-SIMPLIFY-02: the legacy PAPER screen is gone; its replacement is /paper-mvp (account prep lives there)."""
     if not session_from_request(request):
         return RedirectResponse("/login", status_code=303)
-    return FileResponse(runtime.static_dir / "index.html")
+    return RedirectResponse("/paper-mvp", status_code=303)
 
 
 @router.get("/paper-mvp", include_in_schema=False, response_model=None)
@@ -61,10 +62,12 @@ def long_term_page(request: Request) -> FileResponse | RedirectResponse:
 
 
 @router.get("/settings", include_in_schema=False, response_model=None)
-def settings_page(request: Request) -> FileResponse | RedirectResponse:
+def retired_settings_page(request: Request) -> RedirectResponse:
+    """PAPER-SIMPLIFY-02: the stand-alone settings screen is gone. Account, password, PIN, broker connection and
+    logout are in the account menu (top right) of every page. A URL fragment such as #account survives the redirect."""
     if not session_from_request(request):
         return RedirectResponse("/login", status_code=303)
-    return FileResponse(runtime.static_dir / "settings.html")
+    return RedirectResponse("/live", status_code=303)
 
 
 @router.get("/stocks/{symbol}", include_in_schema=False, response_model=None)

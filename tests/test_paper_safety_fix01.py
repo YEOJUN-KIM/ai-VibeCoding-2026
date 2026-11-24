@@ -107,8 +107,9 @@ class IsolatedClockAndUiTests(unittest.TestCase):
     def test_status_failure_replaces_a_stale_running_label(self):
         self.assertIn("상태 확인 실패", (STATIC / "paper-mvp.js").read_text(encoding="utf-8"))
 
-    def test_sector_choice_is_still_declared_as_not_connected(self):
-        self.assertIn("후보 선정에는 아직 반영되지 않습니다", (STATIC / "paper-mvp.js").read_text(encoding="utf-8"))
+    def test_unconnected_sector_choice_is_gone(self):      # PAPER-SIMPLIFY-02: removed instead of declared "not connected"
+        self.assertNotIn("data-sector", (STATIC / "paper-mvp.js").read_text(encoding="utf-8"))
+        self.assertNotIn("data-sector", (STATIC / "paper-mvp.html").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

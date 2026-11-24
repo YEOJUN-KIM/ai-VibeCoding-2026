@@ -1,6 +1,7 @@
 'use strict';
 // PAPER-MVP-01 page script. Every number comes from GET /paper/mvp/status; the page never invents data.
-// Writes: PUT /paper/mvp/settings, POST /paper/mvp/{start,stop,emergency-stop} (CSRF token from /auth/me).
+// Writes: PUT /paper/mvp/settings ({budget} only), POST /paper/mvp/{start,stop,emergency-stop},
+// POST /paper/accounts/EXPERIMENT/select (prepare the virtual 10,000,000 KRW account). CSRF token from /auth/me.
 const $ = s => document.querySelector(s), $$ = s => Array.from(document.querySelectorAll(s));
 const num = v => Number(v), money = n => Math.round(n).toLocaleString('ko-KR'), won = n => money(n) + '원';
 const signedWon = n => (n > 0 ? '+' : n < 0 ? '−' : '') + won(Math.abs(n));
@@ -24,10 +25,10 @@ async function api(path, options = {}) {
 }
 function toast(t) { clearTimeout(toastTimer); $('#toast').textContent = t; $('#toast').hidden = false; toastTimer = setTimeout(() => $('#toast').hidden = true, 4000); }
 const copy = x => JSON.parse(JSON.stringify(x));
-const fromServer = s => ({ budget: s.budget, sectors: s.sectors, stop: num(s.stop_pct), take: num(s.take_pct), days: s.max_days });
-const toServer = d => ({ budget: d.budget, sectors: d.sectors, stop_pct: d.stop, take_pct: d.take, max_days: d.days });
+const fromServer = s => ({ budget: s.budget });
+const toServer = d => ({ budget: d.budget });
 const total = () => num(st.account.total_asset);
-const summary = s => s.sectors.length > 1 ? s.sectors[0] + ' 외 ' + (s.sectors.length - 1) + '개' : s.sectors[0] || '분야 선택 필요';
+const summary = s => '운용 금액 ' + (Number.isFinite(s.budget) ? won(s.budget) : '입력 필요');
 const cls = n => n > 0 ? 'up' : n < 0 ? 'down' : '';
 
 // ---------------------------------------------------------------- load / refresh
@@ -52,13 +53,15 @@ function renderRun() {
   const tone = { idle: 'muted', running: 'green', stopped: 'amber', emergency: 'up', other: 'amber', blocked: 'up' }[r.state];
   $('#run-label').className = tone; $('#run-label').innerHTML = '<i class="dot"></i> ' + esc(r.label);
   let reason = r.message;
-  if (r.state === 'idle') reason = '저장된 투자 기준으로 모의 운용을 시작할 수 있어요.';
+  if (r.state === 'idle') reason = '저장된 운용 금액으로 모의 운용을 시작할 수 있어요.';
+  if (st.ready_reason) reason = st.ready_reason;
   if (!r.running && r.state !== 'idle') reason = (held ? '보유 ' + held + '종목이 있습니다. ' : '') + '신규 판단·주문이 멈춰 있습니다.';
   if (r.state === 'blocked') reason = r.blocked_reason;
   $('#run-reason').textContent = reason;
   const src = st.data_source === 'SYNTHETIC' ? '합성(가상) 시장 데이터로 검증 중 · 실제 시장 데이터는 아직 검증되지 않았습니다.' : '검증된 시장 데이터 소스가 연결되지 않았습니다 · 신규 진입은 보류되고 보유분 감시만 합니다.';
   $('#run-next').textContent = r.running ? '실행 중 · 보유분 손절·익절 감시가 켜져 있습니다. ' + src : r.stop_note + (r.state === 'emergency' ? ' 긴급정지의 실제 보장 범위는 일시정지와 같으며 별도 검증되지 않았습니다.' : '');
-  $('#start').disabled = r.running; $('#start').textContent = r.state === 'stopped' || r.state === 'emergency' ? '다시 시작' : '시작';
+  $('#prepare').hidden = !st.ready_reason;
+  $('#start').disabled = r.running || !!st.ready_reason; $('#start').textContent = r.state === 'stopped' || r.state === 'emergency' ? '다시 시작' : '시작';
   $('#pause').disabled = r.state !== 'running'; $('#emergency').disabled = r.state === 'emergency';
   $('#source-badge').textContent = st.data_source === 'SYNTHETIC' ? 'PAPER · 합성 데이터' : 'PAPER · 데이터 소스 미연결';
   $('#source-badge').className = 'badge ' + (st.data_source === 'SYNTHETIC' ? 'amber' : 'neutral');
@@ -67,6 +70,9 @@ async function control(path, ok) {
   try { st = await api(path, { method: 'POST' }); render(); toast(ok); } catch (e) { toast(e.message); }
 }
 $('#start').onclick = () => { if (dirty) { toast('저장하지 않은 설정이 있습니다. 설정 저장·적용 후 시작하세요.'); return; } control('/paper/mvp/start', '자동매매를 시작했습니다. 모든 거래는 가상이며 실제 주문은 없습니다.'); };
+$('#prepare').onclick = async () => {
+  try { await api('/paper/accounts/EXPERIMENT/select', { method: 'POST' }); saved = null; await refresh(); toast('가상 1,000만원 모의계좌를 준비했습니다. 실제 계좌와 연결되지 않습니다.'); } catch (e) { toast(e.message); }
+};
 $('#pause').onclick = () => control('/paper/mvp/stop', '일시정지했습니다. 보유 주식은 그대로 남고 청산 감시도 멈춥니다.');
 $('#emergency').onclick = () => control('/paper/mvp/emergency-stop', '긴급정지했습니다. 보유 주식은 매도하지 않으며 청산 감시도 멈춥니다.');
 
@@ -186,8 +192,6 @@ function settingSummary() {
   $('#budget-percent').textContent = (isFinite(percent) ? percent : 0).toFixed(1) + '%'; $('#budget-slider').value = Math.max(0, Math.min(100, percent || 0));
   $('#budget-max').textContent = '100% · ' + won(T);
   $$('[data-ratio]').forEach(e => e.classList.toggle('active', Math.abs(+e.dataset.ratio - percent) < .01));
-  $$('[data-sector]').forEach(e => { const on = draft.sectors.includes(e.dataset.sector); e.classList.toggle('selected', on); e.setAttribute('aria-pressed', on); });
-  $('#sector-help').textContent = '관심 업종은 저장만 되며 후보 선정에는 아직 반영되지 않습니다(미연결). 현재 후보는 거래대금 순위와 데이터 품질 검사를 통과한 종목입니다.';
   $('#draft-summary').textContent = summary(draft);
   dirty = changed();
   $('#save-status').textContent = run ? '실행 중에는 설정을 바꿀 수 없습니다 · 일시정지 후 변경하세요.' : dirty ? '저장하지 않은 변경 · 저장·적용을 눌러 반영하세요.' : '현재 적용값 · 서버(모의계좌)에 저장됨';
@@ -195,29 +199,23 @@ function settingSummary() {
   $('#budget').max = T; $('#settings-error').textContent = '';
 }
 function renderSettings() {
-  $('#budget').value = draft.budget; $('#stop-pct').value = draft.stop; $('#take-pct').value = draft.take; $('#max-days').value = draft.days; settingSummary();
+  $('#budget').value = draft.budget; settingSummary();
 }
 function validSettings(s) {
   const T = total();
   if (!Number.isInteger(s.budget) || s.budget < 1 || s.budget > T) return '자동매매 운용 금액은 1원 이상 ' + won(T) + ' 이하의 정수로 입력하세요.';
-  if (!s.sectors.length) return '관심 업종 또는 FOLIO 추천을 선택하세요.';
-  if (!Number.isFinite(s.stop) || s.stop < .1 || s.stop > 50) return '손절 기준은 0.1~50%로 입력하세요.';
-  if (!Number.isFinite(s.take) || s.take < .1 || s.take > 100) return '익절 기준은 0.1~100%로 입력하세요.';
-  if (!Number.isInteger(s.days) || s.days < 1 || s.days > 365) return '최대 보유 일수는 1~365일로 입력하세요.';
   return '';
 }
 $('#budget').oninput = () => { draft.budget = $('#budget').value === '' ? NaN : Number($('#budget').value); settingSummary(); };
 $('#budget-slider').oninput = () => { draft.budget = Math.round(total() * Number($('#budget-slider').value) / 100); $('#budget').value = draft.budget; settingSummary(); };
 $$('[data-ratio]').forEach(e => e.onclick = () => { draft.budget = Math.round(total() * Number(e.dataset.ratio) / 100); renderSettings(); });
-$$('[data-sector]').forEach(e => e.onclick = () => { const s = e.dataset.sector; if (s === 'FOLIO 추천') draft.sectors = [s]; else { draft.sectors = draft.sectors.filter(x => x !== 'FOLIO 추천'); draft.sectors = draft.sectors.includes(s) ? draft.sectors.filter(x => x !== s) : [...draft.sectors, s]; } settingSummary(); });
-[['stop-pct', 'stop'], ['take-pct', 'take'], ['max-days', 'days']].forEach(([id, key]) => $('#' + id).oninput = () => { draft[key] = $('#' + id).value === '' ? NaN : Number($('#' + id).value); settingSummary(); });
 $('#settings-form').onsubmit = async e => {
   e.preventDefault(); const err = validSettings(draft); if (err) { $('#settings-error').textContent = err; return; }
-  try { st = await api('/paper/mvp/settings', { method: 'PUT', body: JSON.stringify(toServer(draft)) }); saved = fromServer(st.settings); draft = copy(saved); dirty = false; render(); renderSettings(); toast('설정을 저장·적용했습니다. 신규 매수부터 적용되며 기존 보유분의 청산 기준은 유지됩니다.'); }
+  try { st = await api('/paper/mvp/settings', { method: 'PUT', body: JSON.stringify(toServer(draft)) }); saved = fromServer(st.settings); draft = copy(saved); dirty = false; render(); renderSettings(); toast('운용 금액을 저장·적용했습니다. 신규 매수부터 적용되며 기존 보유분의 청산 기준은 유지됩니다.'); }
   catch (error) { $('#settings-error').textContent = error.message; }
 };
 $('#revert').onclick = () => { draft = copy(saved); renderSettings(); toast('현재 적용값으로 되돌렸습니다.'); };
-$('#defaults').onclick = () => { draft = { ...draft, budget: Math.round(total() / 2), sectors: ['FOLIO 추천'], stop: 5, take: 10, days: 20 }; renderSettings(); toast('초기값을 입력했습니다. 적용하려면 저장하세요.'); };
+$('#defaults').onclick = () => { draft = { budget: Math.round(total() / 2) }; renderSettings(); toast('초기값을 입력했습니다. 적용하려면 저장하세요.'); };
 // ---------------------------------------------------------------- tabs / boot
 function selectTab(t) {
   if (t === 'settings' && tab !== 'settings') { draft = copy(saved); renderSettings(); }

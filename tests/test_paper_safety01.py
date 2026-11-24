@@ -115,7 +115,7 @@ class SafetyRegressionTests(MvpBase):
 
     # --- A. daily limit counts only buys; exits are never blocked -----------------------------
     def test_daily_buy_limit_counts_buys_only(self):
-        self.mvp.apply(self.balanced(daily_buys=3, profile="직접 설정"))
+        self.mvp.apply(self.balanced())
         self.assertFalse(self.engine.count_sells_in_daily_limit)
         self.engine.running = True
         self.poll(45)                                       # full scenario: buys, then stop-out / take-profit sells
@@ -127,7 +127,7 @@ class SafetyRegressionTests(MvpBase):
         self.assertEqual(self.engine._daily_orders.get(today, 0), len(buys), "sells must not use up the buy allowance")
 
     def test_exits_proceed_when_buy_limit_is_reached(self):
-        self.mvp.apply(self.balanced(daily_buys=1, profile="직접 설정"))
+        self.mvp.apply(self.balanced())
         self.engine.running = True
         self.poll(45)
         filled = [o for o in self.broker.orders() if o.status.value == "FILLED"]

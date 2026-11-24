@@ -36,7 +36,7 @@ async function scenario({database = true, configured = true, statusFails = false
 (async () => {
   const missingKeys = await scenario({configured: false});
   assert.equal(missingKeys.readyDisabled, false);
-  assert.equal(missingKeys.destination, '/settings#account');
+  assert.equal(missingKeys.destination, '/live#account');
   assert.ok(missingKeys.nodes.get('#readiness-detail').textContent.includes('등록·복구'));
   assert.equal((await scenario()).destination, '/live');
   assert.equal((await scenario({statusFails: true})).destination, '/live');

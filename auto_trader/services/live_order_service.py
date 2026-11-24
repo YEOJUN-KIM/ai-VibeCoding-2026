@@ -4,7 +4,7 @@ from datetime import date, timedelta, timezone
 from decimal import Decimal
 from fastapi import HTTPException, Request
 from ..auth import AuthenticatedUser, live_pin_status
-from ..models import LiveDryRunConfirmRequest, LiveDryRunOrder, LiveOrderPreview, LiveOrderPreviewCheck, LiveOrderPreviewRequest, LiveRealOrderConfirmRequest
+from ..models import LiveDryRunConfirmRequest, LiveDryRunOrder, LiveOrderImpactItem, LiveOrderPreview, LiveOrderPreviewCheck, LiveOrderPreviewRequest, LiveRealOrderConfirmRequest
 from ..settings import settings
 from ..toss import TossApiError
 from ..live_orders import prepare_real_order, orders_for_reconciliation, real_order_for_user, save_dry_run_order, update_real_order
@@ -79,7 +79,7 @@ def _preview_live_order(
     payload: LiveOrderPreviewRequest,
     request: Request,
     user: AuthenticatedUser,
-    *, relax_financial_limits: bool,
+    *, relax_financial_limits: bool = False,  # retained for call compatibility; no financial-limit checks remain
 ) -> LiveOrderPreview:
     _, authorized_until = live_pin_status(request, user)
     if authorized_until is None:
@@ -101,48 +101,57 @@ def _preview_live_order(
         estimated_amount = reference_price * payload.quantity
         portfolio = runtime.toss_client.portfolio()
         buying_power = runtime.toss_client.buying_power()
-        config = runtime.risk_manager.settings()
     except TossApiError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     checks: list[LiveOrderPreviewCheck] = []
-    relaxed_financial_limits = relax_financial_limits
 
     def add_check(name: str, passed: bool, success: str, failure: str) -> None:
         checks.append(LiveOrderPreviewCheck(name=name, passed=passed, message=success if passed else failure))
 
-    def add_financial_check(name: str, passed: bool, success: str, failure: str) -> None:
-        if relaxed_financial_limits:
-            message = success if passed else f"테스트 모드에서 한도 적용을 생략했습니다: {failure}"
-            checks.append(LiveOrderPreviewCheck(name=name, passed=True, message=message))
-        else:
-            checks.append(LiveOrderPreviewCheck(name=name, passed=passed, warning=not passed, message=success if passed else failure))
-
     add_check("LIVE PIN", True, "LIVE PIN 인증이 유효합니다.", "LIVE PIN 인증이 필요합니다.")
-    if relaxed_financial_limits:
-        add_check("DRY RUN 테스트", True, "투자 정책 한도만 적용하지 않는 테스트 모드입니다. 실제 현금과 보유 수량은 검사합니다.", "")
-    add_financial_check("주문 금액", RiskPolicy.order_amount_allowed(config, estimated_amount),
-                        "1회 주문 한도 이내입니다.", "1회 최대 주문 금액을 초과합니다.")
+    # No investment-policy warnings (per-order / per-symbol / total / min-cash) are produced here.
+    # Hard safety checks below (cash, holdings) stay; the user decides the rest from the neutral impact view.
     holding = next((item for item in portfolio.holdings if item.symbol.upper() == payload.symbol.upper()), None)
+    held_quantity = holding.quantity if holding else Decimal(0)
+    cash_before = buying_power.krw_cash_buying_power
+    total_asset = portfolio.market_value + cash_before
+    impact: list[LiveOrderImpactItem] = []
     if payload.side.value == "BUY":
-        symbol_value = holding.market_value if holding else Decimal(0)
-        total_asset = portfolio.market_value + buying_power.krw_cash_buying_power
-        remaining_cash = buying_power.krw_cash_buying_power - estimated_amount
-        current_cash_ratio = RiskPolicy.cash_ratio(buying_power.krw_cash_buying_power, total_asset)
-        cash_ratio = RiskPolicy.cash_ratio(remaining_cash, total_asset)
-        add_check("주문 가능 금액", estimated_amount <= buying_power.krw_cash_buying_power,
+        add_check("주문 가능 금액", estimated_amount <= cash_before,
                   "원화 주문 가능 금액 이내입니다.", "원화 주문 가능 금액이 부족합니다.")
-        add_financial_check("종목별 한도", RiskPolicy.symbol_amount_allowed(config, symbol_value, estimated_amount),
-                            "종목별 투자 한도 이내입니다.", "종목별 최대 투자 금액을 초과합니다.")
-        add_financial_check("전체 투자 한도", RiskPolicy.total_investment_allowed(config, portfolio.market_value, estimated_amount),
-                            "전체 투자 한도 이내입니다.", "전체 최대 투자 금액을 초과합니다.")
-        add_financial_check("최소 현금", cash_ratio >= config.min_cash_ratio,
-                            f"현금 비율 {current_cash_ratio:.1f}% → {cash_ratio:.1f}%로, 기준 {config.min_cash_ratio:.1f}% 이상입니다.",
-                            f"현금 비율 {current_cash_ratio:.1f}% → {cash_ratio:.1f}%로, 안전 기준 {config.min_cash_ratio:.1f}%보다 낮아집니다.")
+        cash_after = cash_before - estimated_amount
+        quantity_after = held_quantity + payload.quantity
+        symbol_value_before = holding.market_value if holding else Decimal(0)
+        symbol_value_after = symbol_value_before + estimated_amount
+        # A buy converts cash to stock at the reference price, so total assets are unchanged by the estimate.
+        total_after = total_asset
     else:
-        available_quantity = holding.quantity if holding else Decimal(0)
-        add_check("보유 수량", payload.quantity <= available_quantity,
+        add_check("보유 수량", payload.quantity <= held_quantity,
                   "현재 보유 수량 이내입니다.", "매도할 보유 수량이 부족합니다.")
+        cash_after = cash_before + estimated_amount
+        quantity_after = held_quantity - payload.quantity
+        symbol_value_before = holding.market_value if holding else Decimal(0)
+        symbol_value_after = max(symbol_value_before - estimated_amount, Decimal(0))
+        total_after = total_asset
+    impact.append(LiveOrderImpactItem(label="원화 주문 가능 금액", before=cash_before, after=cash_after, unit="원"))
+    impact.append(LiveOrderImpactItem(label="보유 수량", before=held_quantity, after=quantity_after, unit="주"))
+    if total_asset:
+        impact.append(LiveOrderImpactItem(
+            label="종목 비중(주문가 기준 추정)",
+            before=RiskPolicy.cash_ratio(symbol_value_before, total_asset),
+            after=RiskPolicy.cash_ratio(symbol_value_after, total_after), unit="%"))
+        impact.append(LiveOrderImpactItem(
+            label="현금 비중(주문가 기준 추정)",
+            before=RiskPolicy.cash_ratio(cash_before, total_asset),
+            after=RiskPolicy.cash_ratio(cash_after, total_after), unit="%"))
+    if payload.side.value == "SELL" and holding is not None:
+        impact.append(LiveOrderImpactItem(
+            label="예상 매도 손익(평균단가 기준, 수수료·세금 제외)",
+            after=(reference_price - holding.average_purchase_price) * payload.quantity, unit="원"))
+    impact.append(LiveOrderImpactItem(
+        label="수수료·세금", unit="원",
+        note="주문 전에는 확정할 수 없습니다. 체결 후 토스증권 내역에서 확인하세요."))
     approved = all(check.passed or check.warning for check in checks)
     return LiveOrderPreview(
         approved=approved,
@@ -155,8 +164,8 @@ def _preview_live_order(
         reference_price=reference_price,
         estimated_amount=estimated_amount,
         checks=checks,
-        message=("투자 한도 초과 경고가 있습니다. 확인 후 계속할 수 있습니다. 실제 주문은 전송되지 않았습니다."
-                 if approved and any(check.warning for check in checks) else "모든 사전 검사를 통과했습니다. 실제 주문은 전송되지 않았습니다."
+        impact=impact,
+        message=("필수 사전 검사를 통과했습니다. 아래 예상 변화를 확인하세요. 실제 주문은 전송되지 않았습니다."
                  if approved else "통과하지 못한 항목이 있습니다. 실제 주문은 전송되지 않았습니다."),
     )
 
@@ -199,8 +208,6 @@ def submit_live_real_order(
     if not preview.approved:
         failed = next((check.message for check in preview.checks if not check.passed), preview.message)
         raise HTTPException(status_code=409, detail=f"실제 주문 검토를 통과하지 못했습니다: {failed}")
-    if any(check.warning for check in preview.checks) and not payload.accept_financial_warnings:
-        raise HTTPException(status_code=409, detail="투자 한도 초과 경고를 확인하고 계속 주문에 동의해야 합니다.")
     try:
         account = runtime.toss_client.selected_account()
         account_label = runtime.toss_client.buying_power().account_label

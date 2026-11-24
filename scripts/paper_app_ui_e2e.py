@@ -70,7 +70,7 @@ s, page, _ = call(op, "GET", "/paper-mvp")
 check("6 logged-in /paper-mvp serves the UX-02 page", s == 200 and "운용 홈" in page and 'href="/live"' in page and 'href="/news"' in page, s)
 s, _, _ = call(op, "GET", "/static/paper-mvp.js")
 check("7 JS served", s == 200, s)
-for p in ("/live", "/stocks", "/paper", "/long-term", "/news"):
+for p in ("/live", "/stocks", "/long-term", "/news"):
     s, body, _ = call(op, "GET", p)
     check("8 menu target %s reachable" % p, s == 200 and 'href="/paper-mvp"' in body, s)
 

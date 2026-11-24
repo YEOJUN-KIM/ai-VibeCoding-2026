@@ -30,10 +30,19 @@ html = re.sub(r'<meta http-equiv="Content-Security-Policy"[^>]*>',
 html = re.sub(r'<meta name="description"[^>]*>', '<meta name="description" content="FOLIO 모의 자동매매 MVP. 모든 거래는 가상(PAPER)이며 실제 주문은 없습니다.">', html, count=1)
 html = re.sub(r"<title>.*?</title>", "<title>모의 자동매매 · FOLIO</title>", html, count=1)
 
-# --- sidebar / topbar: only the PAPER page is real here
+# --- sidebar / topbar: the real app menu. PAPER-SIMPLIFY-02: no "설정" entry and no link to the retired legacy /paper screen;
+# account / password / PIN / broker connection / logout are in the shared account menu (static/account-menu.js, top right).
+NAV_CSS = (".nav a{display:flex;align-items:center;gap:12px;color:#b5b6c2;text-decoration:none;padding:13px 12px;font-size:13px;border-radius:6px}"
+           ".nav a:hover{background:var(--soft)}.nav a.active{background:#282237;color:var(--bright)}"
+           ".nav a i{font-style:normal;font-size:11px;color:#777988;width:19px;text-align:center;flex-shrink:0}"
+           ".nav a.active svg{width:19px;height:19px;stroke:currentColor;fill:none;stroke-width:1.6;flex-shrink:0}"
+           "@media(max-width:640px){.nav a{flex:0 0 auto;padding:10px 8px;font-size:11px;gap:6px;white-space:nowrap}.nav a svg{width:15px;height:15px}}")
+html = sub(html, ".skip{position:fixed;left:240px", NAV_CSS + "\n.skip{position:fixed;left:240px")
 html = cut(html, '<nav class="nav"', '</nav>',
-           '<nav class="nav" aria-label="주요 메뉴"><button data-page="paper" class="active" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true">'
-           '<path d="M8 3h8M10 3v6l-6 10q-1 2 2 2h12q3 0 2-2L14 9V3M7 15h10"/></svg>모의매매</button></nav>')
+           '<nav class="nav" aria-label="주요 메뉴"><a href="/live"><i>01</i>자산 현황</a><a href="/stocks"><i>02</i>국내 주식</a>'
+           '<a href="/paper-mvp" class="active" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true">'
+           '<path d="M8 3h8M10 3v6l-6 10q-1 2 2 2h12q3 0 2-2L14 9V3M7 15h10"/></svg>모의매매</a>'
+           '<a href="/long-term"><i>04</i>장기 리서치</a><a href="/news"><i>05</i>주요 뉴스</a></nav>')
 html = re.sub(r'<div class="sidebar-bottom">.*?</aside>',
               '<div class="sidebar-bottom"><div class="offline"><i class="dot"></i>PAPER · 가상 거래</div><small>실제 주문 없음<br>실제 증권 계좌와 연결되지 않습니다</small></div>\n</aside>', html, count=1, flags=re.S)
 html = re.sub(r'<div class="right">.*?</div></header>',
@@ -46,6 +55,9 @@ html = sub(html, '<div class="left">WORKSPACE <span style="color:#555765;margin:
 html = sub(html, 'aria-label="전략 실행·정지 화면 시연"', 'aria-label="자동매매 실행·정지"')
 html = sub(html, '<p class="control-note" id="run-next">버튼은 화면 상태만 바꿉니다. 주문·시세 수신은 발생하지 않습니다.</p>', '<p class="control-note" id="run-next"></p>')
 html = sub(html, '<small id="run-reason">저장된 투자 기준으로 가상 운용을 시작할 수 있어요.</small>', '<small id="run-reason"></small>')
+
+# PAPER-SIMPLIFY-02: the legacy /paper screen is gone, so account preparation (virtual 10,000,000 KRW) is a button here.
+html = sub(html, '<button class="primary" id="start">', '<button id="prepare" hidden>가상 모의계좌 준비</button><button class="primary" id="start">')
 
 # --- home: replace fictional numbers with ids filled by the script
 html = cut(html, '<div class="wealth">', '</small></div>',
@@ -65,19 +77,25 @@ html = cut(html, '<div class="summary-grid"><article class="stat"><span class="f
 html = cut(html, '<div class="notice settings-intro">', '</div>',
            '<div class="notice settings-intro">저장하면 모의계좌에 보관되고 <strong>신규 매수부터 적용</strong>됩니다. 기존 보유분은 매수 당시 청산 기준을 유지합니다. '
            '자동매매 실행 중에는 설정을 바꿀 수 없습니다. 직접 하는 모의 주문에는 이 금액이 적용되지 않으며, 보유 현금과 수량 범위에서만 주문할 수 있습니다.</div>')
-# PAPER-SIMPLIFY-01: the only user-set limit is the operating amount. Profile cards (which bundled the removed limits) and the
-# "투자 제한" section are replaced by the exit criteria (strategy parameters, not investment limits).
-NEW_EXIT = (
+# PAPER-SIMPLIFY-02: the operating amount is the only user input. Market (Korea) stays fixed; the interest-sector buttons
+# (never connected to candidate selection) and the user stop/take/holding-period inputs are removed. FOLIO's own exit
+# criteria are recorded per lot and shown in the holding detail.
+NEW_TARGET = (
+    '    <article class="panel settings-section"><div class="section-title"><div class="step"><span class="index">02</span><h2>투자 대상</h2></div>'
+    '<p>국내 시장에서<br>FOLIO가 후보를 찾습니다.</p></div><div>'
+    '<div class="market"><span>투자 시장</span>대한민국 · 국내 주식 <span class="badge neutral" style="margin-left:8px">고정</span></div>'
+    '<p class="context" id="sector-help">FOLIO 추천 · 후보는 거래대금 순위와 데이터 품질 검사를 통과한 종목에서 FOLIO가 고릅니다. '
+    '업종·종목은 직접 고르지 않습니다.</p></div></article>\n'
     '    <article class="panel settings-section"><div class="section-title"><div class="step"><span class="index">03</span><h2>청산 기준</h2></div>'
-    '<p>새로 매수하는 분량에<br>적용할 손절·익절 기준입니다.</p></div><div><div class="limits-grid">'
-    '<div><label class="field-label" for="stop-pct">손절 기준</label><div class="input-unit"><input id="stop-pct" type="number" min="0.1" max="50" step="0.1"><span>%</span></div></div>'
-    '<div><label class="field-label" for="take-pct">익절 기준</label><div class="input-unit"><input id="take-pct" type="number" min="0.1" max="100" step="0.1"><span>%</span></div></div>'
-    '<div><label class="field-label" for="max-days">최대 보유 일수</label><div class="input-unit"><input id="max-days" type="number" min="1" max="365" step="1"><span>일</span></div></div></div>'
-    '<p class="context">자동매매가 실행 중인 동안 기존 매수분의 손절·익절은 계속 감시하지만, 일시정지·긴급정지 중에는 이 감시도 멈춥니다. 최고가 매도를 보장하지 않습니다. '
-    '종목당·주문당·보유 종목 수·하루 매수 횟수·하루 손실 같은 별도 한도는 없으며, 자동매매 운용 금액만 적용됩니다.</p></div></article>\n')
-html, n = re.subn(r'(?m)^    <article class="panel settings-section"><div class="section-title"><div class="step"><span class="index">03</span>.*\n'
+    '<p>FOLIO 기본 기준을<br>사용합니다.</p></div><div>'
+    '<p class="context" id="exit-help">손절·익절·최대 보유 기간은 직접 입력하지 않고 FOLIO 기본 기준을 사용합니다. 기준은 매수분마다 기록되며 '
+    '보유 종목 상세에서 확인할 수 있습니다. 이미 보유한 분량은 매수 당시 기준을 유지합니다. 자동매매가 실행 중인 동안 보유분 감시가 켜져 있고, '
+    '일시정지·긴급정지 중에는 감시도 멈춥니다. 최고가 매도를 보장하지 않으며, 종목당·주문당·보유 종목 수·하루 매수 횟수·하루 손실 같은 별도 한도는 없고 '
+    '자동매매 운용 금액만 적용됩니다.</p></div></article>\n')
+html, n = re.subn(r'(?m)^    <article class="panel settings-section"><div class="section-title"><div class="step"><span class="index">02</span>.*\n'
+                  r'    <article class="panel settings-section"><div class="section-title"><div class="step"><span class="index">03</span>.*\n'
                   r'    <article class="panel settings-section"><div class="section-title"><div class="step"><span class="index">04</span>.*\n',
-                  lambda m: NEW_EXIT, html, count=1)
+                  lambda m: NEW_TARGET, html, count=1)
 assert n == 1
 html = re.sub(r'<span class="badge" id="draft-summary">[^<]*</span>', '<span class="badge" id="draft-summary"></span>', html, count=1)
 html = sub(html, '<span>100% · 10,258,000원</span>', '<span id="budget-max">100%</span>')
@@ -108,6 +126,6 @@ html = cut(html, '  <section id="page-assets"', '</section>\n </main>', ' </main
 html = sub(html, '<footer class="footer">FOLIO UX-02 · 독립 HTML · 가상 예시 · 새로고침하면 모든 시연 설정과 거래가 초기화됩니다.</footer>',
            '<footer class="footer">FOLIO · 모의 자동매매 MVP · 모든 거래는 가상이며 실제 주문은 없습니다 · 실제 시장 데이터 기반 운용은 아직 검증되지 않았습니다.</footer>')
 i = html.index("<script>")
-html = html[:i] + '<script src="/static/paper-mvp.js"></script>\n</body>\n</html>\n'
+html = html[:i] + '<script src="/static/account-menu.js"></script>\n<script src="/static/paper-mvp.js"></script>\n</body>\n</html>\n'
 out_path.write_text(html, encoding="utf-8", newline="\n")
 print("wrote", out_path.relative_to(root), len(html), "bytes")

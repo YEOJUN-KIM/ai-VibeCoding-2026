@@ -159,7 +159,8 @@ class SimplifyTests(MvpBase):
         self.broker.update_mvp(settings=dict(budget=2000000, sectors=["FOLIO 추천"], profile="균형형", per_unit="percent", per_value=25,
                                              max_holdings=6, daily_loss_pct=2, daily_buys=10, stop_pct=4, take_pct=8, max_days=12))
         s = self.mvp.settings()
-        self.assertEqual((s.budget, s.stop_pct, s.max_days), (2000000, 4, 12))
+        self.assertEqual(s.budget, 2000000)
+        self.assertFalse({"stop_pct", "take_pct", "max_days", "sectors"} & set(s.model_dump()))   # removed inputs are not exposed any more
         self.assertEqual(self.broker.mvp_state()["settings"]["per_unit"], "percent")        # stored data is never destroyed by a load
 
     def test_budget_is_free_input_not_a_fixed_example(self):
@@ -195,15 +196,6 @@ class SimplifyTests(MvpBase):
         self.assertFalse(self.engine.running)
         self.assertIsNone(self.broker.risk_manager.auto_limits)
         self.assertEqual(dict(take=self.engine.take_profit_rate, stop=self.engine.stop_loss_rate, name=self.engine.strategy_name), legacy)
-
-    def test_legacy_strategy_settings_endpoint_is_disabled(self):
-        from fastapi import HTTPException
-        from auto_trader.api import paper as paper_api
-        from auto_trader.models import StrategySettingsUpdate
-        payload = StrategySettingsUpdate(interval_seconds=60, short_period=5, long_period=20, order_quantity=1)
-        with self.assertRaises(HTTPException) as caught:
-            paper_api.strategy_settings(payload, None)
-        self.assertEqual(caught.exception.status_code, 409)
 
     def test_no_leftover_limits_after_restart(self):
         self.mvp.apply(self.budget())

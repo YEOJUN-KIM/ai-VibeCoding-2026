@@ -194,6 +194,15 @@ class LiveOrderPreviewCheck(BaseModel):
     message: str
 
 
+class LiveOrderImpactItem(BaseModel):
+    """Neutral before/after view of one order effect. Unknown values stay None and carry a note."""
+    label: str
+    before: Decimal | None = None
+    after: Decimal | None = None
+    unit: str = ""
+    note: str | None = None
+
+
 class LiveOrderPreview(BaseModel):
     approved: bool
     dry_run: bool = True
@@ -206,11 +215,12 @@ class LiveOrderPreview(BaseModel):
     reference_price: Decimal
     estimated_amount: Decimal
     checks: list[LiveOrderPreviewCheck]
+    impact: list[LiveOrderImpactItem] = []
     message: str
 
 
 class LiveDryRunConfirmRequest(LiveOrderPreviewRequest):
-    accept_financial_warnings: bool = False
+    accept_financial_warnings: bool = False  # deprecated and ignored; kept so older clients still validate
     client_order_id: str = Field(min_length=8, max_length=36, pattern=r"^[a-zA-Z0-9\-_]+$")
 
 

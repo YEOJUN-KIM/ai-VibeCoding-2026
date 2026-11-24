@@ -12,7 +12,7 @@ async def security_headers(request: Request, call_next):
     origin = request.headers.get("origin")
     if request.method not in {"GET", "HEAD", "OPTIONS"} and origin and origin != str(request.base_url).rstrip("/"):
         return JSONResponse({"detail": "다른 사이트의 요청은 허용하지 않습니다."}, status_code=403)
-    if request.url.path in {"/static/index.html", "/static/live.html"}:
+    if request.url.path == "/static/live.html":   # PAPER-SIMPLIFY-02: /static/index.html (legacy PAPER page) is deleted -> plain 404
         return RedirectResponse("/", status_code=303)
     response = await call_next(request)
     response.headers["Cache-Control"] = "no-store"

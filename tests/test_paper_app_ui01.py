@@ -34,15 +34,15 @@ class IsolationGuard(unittest.TestCase):
 
 class MenuWiring(unittest.TestCase):
     def test_every_page_menu_points_paper_to_the_new_screen(self):
-        for name in ("index", "live", "long-term", "news", "settings", "stock-detail", "stocks", "paper-mvp"):
+        for name in ("live", "long-term", "news", "stock-detail", "stocks", "paper-mvp"):
             html = (STATIC / f"{name}.html").read_text(encoding="utf-8")
             self.assertIn('href="/paper-mvp"', html, name)
-            if name != "paper-mvp":
-                self.assertNotIn('href="/paper"', html, name)
+            self.assertNotIn('href="/paper"', html, name)
+            self.assertNotIn('href="/settings"', html, name)       # PAPER-SIMPLIFY-02: account functions are in the account menu
 
-    def test_new_screen_keeps_the_five_menus_and_the_legacy_manual_screen(self):
+    def test_new_screen_keeps_the_menus_without_the_retired_screens(self):
         html = (STATIC / "paper-mvp.html").read_text(encoding="utf-8")
-        for href in ("/live", "/stocks", "/long-term", "/news", "/paper"):
+        for href in ("/live", "/stocks", "/long-term", "/news"):
             self.assertIn('href="%s"' % href, html)
 
 

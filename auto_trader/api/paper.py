@@ -6,7 +6,7 @@ from datetime import date
 from fastapi import Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from ..auth import AuthenticatedUser, require_csrf, require_user
-from ..models import Account, Order, OrderRequest, PaperWorkspaceStatus, PaperManagementUpdate, Quote, RiskSettings, RiskSettingsUpdate, RiskStatus, Stock, StrategySettingsUpdate, StrategyStatus
+from ..models import Account, Order, OrderRequest, PaperWorkspaceStatus, PaperManagementUpdate, Quote, Stock, StrategyStatus
 from ..decision_history import read_decision_history
 from fastapi import APIRouter
 from .. import runtime
@@ -56,13 +56,6 @@ async def snapshot_live_account(_: AuthenticatedUser = Depends(require_csrf)) ->
     return await paper_workspace_service.snapshot_live_account(_)
 
 
-@router.post("/paper/strategies/{strategy_id}/select", response_model=PaperWorkspaceStatus)
-async def select_paper_strategy(
-    strategy_id: int, user: AuthenticatedUser = Depends(require_csrf),
-) -> PaperWorkspaceStatus:
-    return await paper_workspace_service.select_paper_strategy(strategy_id, user)
-
-
 @router.get("/quotes", response_model=list[Quote])
 def quotes(move: bool = False, _: AuthenticatedUser = Depends(require_user)) -> list[Quote]:
     if move:
@@ -85,23 +78,6 @@ def account(_: AuthenticatedUser = Depends(require_user)) -> Account:
 @router.get("/orders", response_model=list[Order])
 def orders(_: AuthenticatedUser = Depends(require_user)) -> list[Order]:
     return runtime.broker.orders()
-
-
-@router.get("/risk", response_model=RiskStatus)
-def risk_status(_: AuthenticatedUser = Depends(require_user)) -> RiskStatus:
-    return runtime.broker.risk_manager.status()
-
-
-@router.put("/risk/settings", response_model=RiskSettings)
-def update_risk_settings(
-    payload: RiskSettingsUpdate, _: AuthenticatedUser = Depends(require_csrf)
-) -> RiskSettings:
-    if runtime.engine.running:
-        raise HTTPException(status_code=409, detail="자동매매를 중지한 뒤 한도를 변경하세요.")
-    try:
-        return runtime.broker.risk_manager.update(payload)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.delete("/paper/reset", response_model=Account)
@@ -127,37 +103,6 @@ def create_order(
 
 @router.get("/strategy/status", response_model=StrategyStatus)
 def strategy_status(_: AuthenticatedUser = Depends(require_user)) -> StrategyStatus:
-    return runtime.engine.status()
-
-
-@router.put("/strategy/settings", response_model=StrategyStatus)
-def strategy_settings(
-    payload: StrategySettingsUpdate, _: AuthenticatedUser = Depends(require_csrf)
-) -> StrategyStatus:
-    # PAPER-SETTINGS-01: automatic-trading settings have one owner (/paper/mvp/settings). This route is kept (compatible
-    # response shape) but can no longer reconfigure the shared engine behind a running or saved automatic run.
-    raise HTTPException(status_code=409, detail="자동매매 설정은 자동매매 투자 설정 화면에서 변경합니다. 이 경로의 설정 변경은 더 이상 지원되지 않습니다.")
-
-
-@router.post("/strategy/start", response_model=StrategyStatus)
-@runtime._serialize_paper_change
-async def strategy_start(_: AuthenticatedUser = Depends(require_csrf)) -> StrategyStatus:
-    if runtime.paper_state().snapshot_at is None:
-        raise HTTPException(status_code=409, detail="먼저 현재 실제 자산을 모의계좌에 복사하세요.")
-    if runtime.paper_state().selected_strategy is None:
-        raise HTTPException(status_code=409, detail="검증할 저장 전략을 먼저 선택하세요.")
-    from ..paper_mvp import MvpError, controller_for
-    state = runtime.paper_state()
-    mvp = controller_for(state.broker, state.engine)   # the same controller the MVP endpoints use
-    try:
-        mvp.limit_legacy_run()          # automatic orders always run under the one auto-trading limit set
-        if not await runtime.engine.start():
-            mvp._release()
-    except MvpError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except BaseException:
-        mvp._release()
-        raise
     return runtime.engine.status()
 
 

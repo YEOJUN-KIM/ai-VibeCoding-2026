@@ -67,7 +67,7 @@ class MvpBase(unittest.TestCase):
             self.clock.advance(minutes=1)
 
     def balanced(self, **changes):
-        base = dict(budget=5000000, sectors=["FOLIO 추천"], stop_pct=5, take_pct=10, max_days=20)
+        base = dict(budget=5000000)
         base.update(changes)
         return MvpSettings(**base)
 
@@ -97,7 +97,7 @@ class SettingsTests(MvpBase):
                 self.mvp.apply(self.balanced(budget=budget))
         self.assertEqual(self.broker.risk_manager.settings().max_total_investment, before.max_total_investment)
         with self.assertRaises(ValueError):
-            MvpSettings(budget=1, sectors=[], stop_pct=5, take_pct=10, max_days=20)
+            MvpSettings(budget=1, sectors=["FOLIO 추천"])   # removed inputs are rejected
 
     def test_cannot_change_while_running(self):
         self.engine.running = True
@@ -112,10 +112,12 @@ class SettingsTests(MvpBase):
         self.assertTrue(lots, "expected an open lot")
         before = {l["id"]: (l["context"]["stop_loss_rate"], l["context"]["take_profit_rate"]) for l in lots}
         self.engine.running = False
-        self.mvp.apply(self.balanced(stop_pct=Decimal(1), take_pct=Decimal(2)))
+        self.mvp.apply(self.balanced(budget=4000000))
         after = {l["id"]: (l["context"]["stop_loss_rate"], l["context"]["take_profit_rate"]) for l in self.broker.managed_lots()}
         self.assertEqual(before, after)
-        self.assertEqual(self.engine.stop_loss_rate, Decimal(1))      # future buys use the new rule
+        self.assertEqual(self.engine.stop_loss_rate, Decimal(5))      # future buys use FOLIO's own default exit rule (not user input)
+        self.assertEqual(self.engine.take_profit_rate, Decimal(10))
+        self.assertEqual(self.engine.max_holding_days, 20)
         shown = {l["stop_pct"] for h in self.mvp.status()["holdings"] for l in h["lots"]}
         self.assertEqual(shown, {"5"})
 

@@ -866,6 +866,32 @@ $("#order-price").addEventListener("input", () => {
   $("#order-price").dataset.edited = "true";
   updateOrderEstimate();
 });
+// Neutral before/after view of one order. Unknown values (null) are never estimated; the server supplies a note instead.
+function impactNumber(value, unit) {
+  const n = Number(value);
+  if (unit === "원") return won.format(n);
+  if (unit === "%") return `${n.toFixed(1)}%`;
+  return `${integer.format(n)}${unit}`;
+}
+function impactText(item) {
+  const parts = [];
+  if (item.before != null && item.after != null) parts.push(`${impactNumber(item.before, item.unit)} → ${impactNumber(item.after, item.unit)}`);
+  else if (item.after != null) parts.push(impactNumber(item.after, item.unit));
+  if (item.note) parts.push(item.note);
+  return parts.join(" · ");
+}
+function impactList(items) {
+  const list = document.createElement("dl");
+  list.className = "order-impact";
+  (items || []).forEach((item) => {
+    const term = document.createElement("dt");
+    const detail = document.createElement("dd");
+    term.textContent = item.label;
+    detail.textContent = impactText(item);
+    list.append(term, detail);
+  });
+  return list;
+}
 $("#live-order-preview-button").addEventListener("click", async () => {
   const button = $("#live-order-preview-button");
   const result = $("#order-preview-result");
@@ -876,7 +902,7 @@ $("#live-order-preview-button").addEventListener("click", async () => {
   button.textContent = "검토 중...";
   result.hidden = false;
   result.className = "order-preview-result loading";
-  result.textContent = "계좌와 위험 한도를 확인하고 있습니다.";
+  result.textContent = "계좌의 주문 가능 금액과 보유 수량을 확인하고 있습니다.";
   try {
     const preview = await api("/live/orders/preview", {
       method: "POST",
@@ -893,19 +919,19 @@ $("#live-order-preview-button").addEventListener("click", async () => {
     const checks = document.createElement("ul");
     preview.checks.forEach((check) => {
       const item = document.createElement("li");
-      item.className = check.warning ? "warning" : check.passed ? "passed" : "failed";
-      item.textContent = `${check.warning ? "⚠" : check.passed ? "✓" : "!"} ${check.message}`;
+      item.className = check.passed ? "passed" : "failed";
+      item.textContent = `${check.passed ? "✓" : "!"} ${check.message}`;
       checks.append(item);
     });
-    result.append(heading, message, checks);
+    result.append(heading, message, checks, impactList(preview.impact));
     if (preview.approved) {
       approvedOrderPayload = payload;
       approvedOrderPreview = preview;
       const confirmButton = document.createElement("button");
       confirmButton.type = "button";
       confirmButton.className = "button order-final-confirm-button";
-      confirmButton.textContent = preview.checks.some(check=>check.warning) ? "한도 경고 확인 후 계속" : "최종 확인으로 이동";
-      confirmButton.addEventListener("click",()=>{const warnings=preview.checks.filter(check=>check.warning);if(warnings.length&&!window.confirm(warnings.map(check=>check.message).join("\n")+"\n\n투자 한도를 초과해도 주문 검토를 계속할까요?"))return;approvedOrderPayload.accept_financial_warnings=warnings.length>0;openDryRunConfirmModal();});
+      confirmButton.textContent = "최종 확인으로 이동";
+      confirmButton.addEventListener("click",()=>{openDryRunConfirmModal();});
       result.append(confirmButton);
     }
   } catch (error) {
@@ -938,7 +964,7 @@ function openDryRunConfirmModal() {
   if (approvedOrderPayload.mode === "SINGLE") {
     values.push(["감시 가격", won.format(approvedOrderPayload.trigger_price)], ["만료일", approvedOrderPayload.expire_date]);
   }
-  if(approvedOrderPreview.checks.some(check=>check.warning)) values.push(["확인한 한도 경고",approvedOrderPreview.checks.filter(check=>check.warning).map(check=>check.message).join(" · ")]);
+  (approvedOrderPreview.impact||[]).forEach(item=>values.push([item.label,impactText(item)]));
   summary.replaceChildren(...values.map(([labelText, valueText]) => {
     const row = document.createElement("div");
     const label = document.createElement("span");
@@ -1079,9 +1105,8 @@ async function initialize() {
     const session = await api("/auth/me");
     csrfToken = session.csrf_token;
     $("#current-user").textContent = session.username;
-    const risk = await api("/risk");
-    $("#order-cash-policy").textContent = "실제 주문 안전 한도 적용";
-    $("#order-cash-policy-detail").textContent = `실제 주문은 현금·보유 수량과 1회·종목별·전체 투자 한도, 주문 후 최소 현금 ${Number(risk.settings.min_cash_ratio).toFixed(0)}% 기준을 모두 검사합니다.`;
+    $("#order-cash-policy").textContent = "주문 전 확인";
+    $("#order-cash-policy-detail").textContent = "주문 가능 금액·보유 수량과 입력값은 서버가 다시 검사합니다. 투자 금액 기준은 따로 두지 않으며, 주문 후 예상 변화를 확인한 뒤 직접 결정합니다.";
     const readiness = await api("/live/orders/real/readiness");
     liveTradingReady = readiness.configured && readiness.enabled;
     $("#order-lock-badge").textContent = liveTradingReady ? "주문 가능" : "주문 잠김";

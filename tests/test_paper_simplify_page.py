@@ -26,10 +26,11 @@ class SettingsTabContract(unittest.TestCase):
         for name in REMOVED_IDS:
             self.assertNotIn(f"'#{name}'", self.js, name)
 
-    def test_only_budget_and_exit_rules_are_sent_to_the_server(self):
+    def test_only_budget_is_sent_to_the_server(self):
         to_server = re.search(r"const toServer = .*", self.js).group(0)
-        for key in ("budget", "sectors", "stop_pct", "take_pct", "max_days"):
-            self.assertIn(key, to_server)
+        self.assertIn("budget", to_server)
+        for key in ("sectors", "stop_pct", "take_pct", "max_days"):      # PAPER-SIMPLIFY-02: removed user inputs
+            self.assertNotIn(key, to_server)
         for gone in ("per_unit", "per_value", "max_holdings", "daily_loss_pct", "daily_buys", "profile"):
             self.assertNotIn(gone, to_server)
 
@@ -41,18 +42,10 @@ class SettingsTabContract(unittest.TestCase):
 
 
 class LegacyPaperPage(unittest.TestCase):
-    def test_saved_limit_tab_and_renderer_are_gone(self):
-        index = (STATIC / "index.html").read_text(encoding="utf-8")
-        app = (STATIC / "app.js").read_text(encoding="utf-8")
-        self.assertNotIn('data-paper-tab="safety"', index)
-        self.assertNotIn('data-paper-panel="safety"', index)
-        self.assertNotIn("renderRisk", app)
-        self.assertNotIn("api('/risk')", app)
-
-    def test_settings_page_marks_the_limit_tab_as_live_only(self):
-        settings = (STATIC / "settings.html").read_text(encoding="utf-8")
-        self.assertIn("LIVE 주문 미리보기의 경고 기준", settings)
-        self.assertIn("모의매매(PAPER)에는 적용되지 않으며", settings)
+    def test_legacy_paper_and_settings_screens_no_longer_exist(self):
+        # PAPER-SIMPLIFY-02 removed them (see tests/test_paper_simplify02.py for the redirect / 404 contract)
+        for name in ("index.html", "app.js", "settings.html", "settings.js"):
+            self.assertFalse((STATIC / name).exists(), name)
 
 
 if __name__ == "__main__":
