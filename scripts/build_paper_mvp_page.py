@@ -117,6 +117,58 @@ html = cut(html, '<div class="summary-grid history-summary">', '</small></articl
 html = sub(html, '<span class="badge neutral">PAPER · 3종목</span>', '<span class="badge neutral" id="holdings-badge">PAPER</span>')
 html = sub(html, '<p class="sub">가상 기록 · 행을 펼쳐 거래 또는 보류 이유를 확인하세요.</p>', '<p class="sub">가상 기록 · 행을 펼쳐 거래·관망·판단 보류 이유를 확인하세요.</p>')
 
+# --- PAPER-UI-POLISH-01: the operating amount is the only input, so the three section cards become one compact card plus two
+# information rows. The amount field is a text input (inputmode numeric) so thousands separators can be shown while typing.
+SETTINGS_NEW = (
+    '<div class="notice settings-intro">저장하면 <strong>신규 매수부터 적용</strong>됩니다. 기존 보유분은 매수 당시 청산 기준을 유지하며, 자동매매 실행 중에는 설정을 바꿀 수 없습니다.</div>\n'
+    '    <form id="settings-form" novalidate>\n'
+    '    <section class="panel budget-card" aria-labelledby="budget-title"><div class="budget-top"><h2 id="budget-title">투자 자금</h2><p>자동투자에 사용할 최대 금액</p></div>'
+    '<label class="field-label" for="budget">자동투자 최대 사용 금액</label>'
+    '<div class="amount-input"><input id="budget" type="text" inputmode="numeric" autocomplete="off" aria-describedby="budget-help"><span>원</span></div>'
+    '<input id="budget-slider" aria-label="자동투자 비율" type="range" min="0" max="100" step="1">'
+    '<div class="range-labels"><span>0%</span><span id="budget-percent">50%</span><span id="budget-max">100%</span></div>'
+    '<div class="ratio" aria-label="빠른 투자 비율"><button type="button" data-ratio="25">25%</button><button type="button" data-ratio="50">50%</button>'
+    '<button type="button" data-ratio="75">75%</button><button type="button" data-ratio="100">100%</button></div>'
+    '<p class="context" id="budget-help">모의 총자산의 0~100% 안에서 정할 수 있습니다. 자동매매가 보유·매수할 수 있는 최대 금액이며 직접 하는 모의 주문에는 적용되지 않습니다.</p></section>\n'
+    '    <dl class="info-rows"><div><dt>투자 대상</dt><dd id="sector-help">국내 주식 · FOLIO 추천 (업종·종목은 직접 고르지 않습니다)</dd></div>'
+    '<div><dt>청산 기준</dt><dd id="exit-help">FOLIO 기본 기준 · 매수분마다 기록되며 보유 종목 상세에서 확인할 수 있습니다</dd></div></dl>\n'
+    '    ')
+html, n = re.subn(r'<div class="notice settings-intro">.*?<div id="settings-error"', lambda m: SETTINGS_NEW + '<div id="settings-error"', html, count=1, flags=re.S)
+assert n == 1
+html = sub(html, '<span class="badge">MVP · 모의 자동매매</span>', '')
+html = sub(html, '모의계좌 총자산의 기간 시작·현재 차이입니다. 아래 거래·판단 기록은 같은 기간으로 좁히며, 보유 내역과 누적 요약은 현재 기준입니다.',
+           '기간 시작과 현재 총자산의 차이입니다. 아래 기록은 이 기간만 보여주고, 보유 종목과 누적 손익은 현재 기준입니다.')
+html = sub(html, '<small>조건이 맞지 않으면 현금으로 유지</small>', '<small>현재 보유 현금</small>')
+html = sub(html, '<small>매수분별 청산 기준 유지</small>', '<small>현재 보유 중인 종목 수</small>')
+POLISH_CSS = """
+/* PAPER-UI-POLISH-01: compact settings card, paged lists, tighter PC spacing. */
+.settings-intro{margin-bottom:14px;padding:9px 14px}
+.budget-card{max-width:760px;padding:20px 24px;margin-bottom:12px}
+.budget-top{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:14px}
+.budget-top h2{font-size:16px}.budget-top p{font-size:12px;color:var(--muted)}
+.budget-card .amount-input{max-width:none}.budget-card .ratio{margin-top:12px}
+.info-rows{max-width:760px;margin:0 0 16px;border:1px solid var(--line);border-radius:9px;background:var(--panel)}
+.info-rows>div{display:grid;grid-template-columns:96px minmax(0,1fr);gap:14px;padding:12px 24px;font-size:13px}
+.info-rows>div+div{border-top:1px solid var(--line)}.info-rows dt{color:var(--muted)}.info-rows dd{margin:0;color:#c1c0cd}
+.pagedbox{display:flex;flex-direction:column}
+.pager{display:flex;align-items:center;justify-content:center;gap:4px;flex-wrap:wrap;margin-top:auto;padding-top:14px}
+.pager button{min-width:32px;padding:5px 9px;font-size:12px;background:#202129}
+.pager button.active{background:#282237;color:var(--bright)}.pager button:disabled{opacity:.4;cursor:default}
+.pager .gap{color:var(--muted);padding:0 3px}.pager small{margin-left:10px;color:var(--muted);font-size:11px}
+@media(min-width:851px){
+ .panel{padding:20px;margin-bottom:16px}.heading{margin-bottom:14px}.tabs{margin-bottom:16px}.control{margin-bottom:16px;padding:11px 18px}
+ .wealth{margin-bottom:16px}.pnl-grid,.summary-grid{margin-bottom:16px}.stat{padding:14px 18px}
+ .record summary{padding:12px 0}td{padding:11px 12px}
+}
+@media(min-width:1600px){#paper-history:not([hidden]){align-items:stretch}#paper-history>.panel{display:flex;flex-direction:column}}
+@media(max-width:850px){.info-rows>div{grid-template-columns:80px minmax(0,1fr);padding:11px 16px}.budget-card{padding:16px}}
+"""
+i = html.rindex("</style>")
+html = html[:i] + POLISH_CSS + html[i:]
+for ident in ("home-holdings", "all-holdings", "records"):
+    html = sub(html, 'id="%s"' % ident, 'id="%s" class="pagedbox"' % ident) if ident == "records" else \
+        sub(html, 'class="table-wrap" id="%s"' % ident, 'class="table-wrap pagedbox" id="%s"' % ident)
+
 # --- the synthetic/status badge is the first span of .topbar .right; the preview hides it under 1200px, which would
 # hide the "synthetic" warning on narrow screens. Never reintroduce that rule (checked-in page removed it on purpose).
 html = sub(html, ".topbar .right span:first-child{display:none}", "")
@@ -124,7 +176,7 @@ html = sub(html, ".topbar .right span:first-child{display:none}", "")
 # --- demo-only pages, footer, script
 html = cut(html, '  <section id="page-assets"', '</section>\n </main>', ' </main>')
 html = sub(html, '<footer class="footer">FOLIO UX-02 · 독립 HTML · 가상 예시 · 새로고침하면 모든 시연 설정과 거래가 초기화됩니다.</footer>',
-           '<footer class="footer">FOLIO · 모의 자동매매 MVP · 모든 거래는 가상이며 실제 주문은 없습니다 · 실제 시장 데이터 기반 운용은 아직 검증되지 않았습니다.</footer>')
+           '<footer class="footer">FOLIO · 모든 거래는 가상이며 실제 주문은 없습니다 · 실제 시장 데이터 기반 운용은 아직 검증되지 않았습니다.</footer>')
 i = html.index("<script>")
 html = html[:i] + '<script src="/static/account-menu.js"></script>\n<script src="/static/paper-mvp.js"></script>\n</body>\n</html>\n'
 out_path.write_text(html, encoding="utf-8", newline="\n")

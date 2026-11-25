@@ -15,7 +15,7 @@ class SettingsTabContract(unittest.TestCase):
         self.js = (STATIC / "paper-mvp.js").read_text(encoding="utf-8")
 
     def test_operating_amount_is_a_free_won_input(self):
-        self.assertRegex(self.html, r'<input id="budget" type="number" min="0" max="\d+" step="1"')
+        self.assertRegex(self.html, r'<input id="budget" type="text" inputmode="numeric"')
         self.assertIn("<span>원</span>", self.html)
         self.assertIn("자동투자 최대 사용 금액", self.html)
 

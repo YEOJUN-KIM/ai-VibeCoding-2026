@@ -10,6 +10,37 @@ const esc = t => String(t ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 const KST = { timeZone: 'Asia/Seoul', hour12: false };
 const fmtTime = iso => { const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleString('ko-KR', { ...KST, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }); };
 const fmtFull = iso => { const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleString('ko-KR', { ...KST, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) + ' KST'; };
+// PAPER-UI-POLISH-01: list paging. Each list keeps its own page, clamped to the last valid page on every render.
+const PAGE_SIZE = { home: 5, all: 10, records: 10 }, pageOf = { home: 1, all: 1, records: 1 };
+const PAGE_LABEL = { home: '현재 보유 종목 페이지', all: '전체 보유 종목 페이지', records: '매매 및 판단 기록 페이지' };
+const knownNames = new Map(), openRecords = new Set();   // names already present in earlier status data (no lookups); expanded records
+function slicePage(key, items) {
+  const size = PAGE_SIZE[key], pages = Math.max(1, Math.ceil(items.length / size));
+  pageOf[key] = Math.min(Math.max(1, pageOf[key]), pages);
+  return { rows: items.slice((pageOf[key] - 1) * size, pageOf[key] * size), page: pageOf[key], pages, total: items.length };
+}
+function pagerHtml(key, p) {
+  if (p.total <= PAGE_SIZE[key]) return '';
+  const btn = (to, label, extra = '') => '<button type="button" data-page-key="' + key + '" data-page-to="' + to + '"' + extra + '>' + label + '</button>';
+  let out = '', prev = 0;
+  for (let i = 1; i <= p.pages; i++) {
+    if (!(p.pages <= 7 || i === 1 || i === p.pages || Math.abs(i - p.page) <= 1)) continue;
+    if (i - prev > 1) out += '<span class="gap" aria-hidden="true">…</span>';
+    out += btn(i, i, ' aria-label="' + i + '페이지"' + (i === p.page ? ' class="active" aria-current="page"' : '')); prev = i;
+  }
+  return '<nav class="pager" aria-label="' + PAGE_LABEL[key] + '">' + btn(p.page - 1, '이전', p.page === 1 ? ' disabled' : '') + out + btn(p.page + 1, '다음', p.page === p.pages ? ' disabled' : '') +
+    '<small>' + p.page + ' / ' + p.pages + ' · 총 ' + p.total + '개</small></nav>';
+}
+function bindPagers(root, key, rerender) {
+  $$(root + ' [data-page-key]').forEach(b => b.onclick = () => {
+    pageOf[key] = Number(b.dataset.pageTo); rerender();
+    const f = $(root + ' [data-page-to="' + pageOf[key] + '"]'); if (f) f.focus();
+  });
+}
+const digitsOnly = t => String(t).replace(/\D/g, '').replace(/^0+(?=\d)/, '').slice(0, 13);
+const commas = n => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+const budgetText = v => Number.isFinite(v) ? commas(v) : '';
+const codeLabel = (name, symbol) => name && name !== symbol ? name + ' (' + symbol + ')' : symbol;
 let csrf = '', st = null, saved = null, draft = null, dirty = false, tab = 'home', period = 'day', historyPeriod = 'all', filter = '전체', toastTimer, chartPts = [];
 
 async function api(path, options = {}) {
@@ -35,6 +66,7 @@ const cls = n => n > 0 ? 'up' : n < 0 ? 'down' : '';
 async function refresh() {
   try {
     st = await api('/paper/mvp/status?period=' + (tab === 'history' ? historyPeriod : period));
+    st.holdings.forEach(h => { if (h.name) knownNames.set(h.symbol, h.name); });
     if (!saved) { saved = fromServer(st.settings); draft = copy(saved); renderSettings(); }
     else if (!dirty && tab !== 'settings') { saved = fromServer(st.settings); draft = copy(saved); }
     render();
@@ -77,12 +109,12 @@ $('#pause').onclick = () => control('/paper/mvp/stop', '일시정지했습니다
 $('#emergency').onclick = () => control('/paper/mvp/emergency-stop', '긴급정지했습니다. 보유 주식은 매도하지 않으며 청산 감시도 멈춥니다.');
 
 // ---------------------------------------------------------------- home
-function holdingTable() {
+function holdingTable(key) {
   if (!st.holdings.length) return '<div class="empty"><p>현재 보유 종목이 없습니다.</p><small>조건에 맞는 후보가 생기면 가상 매수합니다. 현금 보유도 정상 판단입니다.</small></div>';
-  return '<table><thead><tr><th>종목</th><th>수량</th><th>평가금액</th><th>평가손익 · 수익률</th></tr></thead><tbody>' + st.holdings.map(h => {
+  return '<table><thead><tr><th>종목</th><th>수량</th><th>평가금액</th><th>평가손익 · 수익률</th></tr></thead><tbody>' + slicePage(key, st.holdings).rows.map(h => {
     const p = num(h.profit), pct = h.profit_pct == null ? 0 : num(h.profit_pct);
-    return '<tr><td><div class="stockcell"><span class="stockicon">' + esc(h.name.slice(0, 1)) + '</span><div><button class="stockname" data-detail="' + esc(h.symbol) + '">' + esc(h.name) + ' ↗</button><small>' + esc(h.symbol) + '</small></div></div></td><td class="num">' + h.quantity + '주</td><td class="num">' + won(num(h.value)) + '</td><td class="num ' + cls(p) + '">' + signedWon(p) + '<span class="subnum">' + signedPct(pct) + '</span></td></tr>';
-  }).join('') + '</tbody></table>';
+    return '<tr><td><div class="stockcell"><span class="stockicon">' + esc((h.name || h.symbol).slice(0, 1)) + '</span><div><button class="stockname" data-detail="' + esc(h.symbol) + '">' + esc(h.name || h.symbol) + ' ↗</button><small>' + esc(h.symbol) + '</small></div></div></td><td class="num">' + h.quantity + '주</td><td class="num">' + won(num(h.value)) + '</td><td class="num ' + cls(p) + '">' + signedWon(p) + '<span class="subnum">' + signedPct(pct) + '</span></td></tr>';
+  }).join('') + '</tbody></table>' + pagerHtml(key, slicePage(key, st.holdings));
 }
 function periodStart(k) {
   const now = new Date(st.checked_at), kst = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Seoul' })), off = now - kst;
@@ -103,8 +135,9 @@ function renderHome() {
   $('#holdings-value').innerHTML = money(num(a.holdings_value)) + '<span>원</span>';
   $('#cash-value').innerHTML = money(num(a.cash)) + '<span>원</span>';
   $('#holdings-count').innerHTML = st.holdings.length + '<span>종목</span>';
-  $('#home-holdings').innerHTML = holdingTable();
+  $('#home-holdings').innerHTML = holdingTable('home');
   $$('#home-holdings [data-detail]').forEach(e => e.onclick = () => detail(e.dataset.detail));
+  bindPagers('#home-holdings', 'home', renderHome);
   $$('[data-period]').forEach(e => { const on = e.dataset.period === period; e.classList.toggle('active', on); e.setAttribute('aria-pressed', on); });
   drawChart();
 }
@@ -139,7 +172,7 @@ function records() {
   const out = [];
   for (const t of st.trades) {
     const filled = t.status === 'FILLED', buy = t.side === 'BUY';
-    out.push({ at: t.at, type: filled ? (buy ? '매수' : '매도') : '관망', name: (st.holdings.find(h => h.symbol === t.symbol)?.name || t.symbol) + ' · ' + t.quantity + '주',
+    out.push({ at: t.at, type: filled ? (buy ? '매수' : '매도') : '관망', name: codeLabel(t.name || knownNames.get(t.symbol), t.symbol) + ' · ' + t.quantity + '주',
       tag: filled ? (buy ? '매수 완료' : '매도 완료') : '주문 거절', label: '체결가 ' + won(num(t.price)) + (t.fee !== '0' ? ' · 수수료 ' + won(num(t.fee)) : ''),
       reason: t.reason || t.message, extra: t.realized != null ? '실현손익 ' + signedWon(num(t.realized)) + ' (비용 차감 후) · 가상 체결' : filled ? '가상 체결 · 매수 당시 청산 기준은 이 매수분에 고정됩니다.' : t.message });
   }
@@ -161,19 +194,24 @@ function renderHistory() {
   $('#history-period-value').className = 'num ' + cls(g); $('#history-period-value').textContent = signedWon(g) + ' (' + signedPct(gp) + ')';
   $('#history-period-basis').textContent = '가상 순자산 변화 · ' + st.pnl.basis;
   $$('[data-history-period]').forEach(e => { const on = e.dataset.historyPeriod === historyPeriod; e.classList.toggle('active', on); e.setAttribute('aria-pressed', on); });
-  $('#all-holdings').innerHTML = holdingTable();
+  $('#all-holdings').innerHTML = holdingTable('all');
   $$('#all-holdings [data-detail]').forEach(e => e.onclick = () => detail(e.dataset.detail));
+  bindPagers('#all-holdings', 'all', renderHistory);
   $('#holdings-badge').textContent = 'PAPER · ' + st.holdings.length + '종목';
   const r = st.risk, s = fromServer(st.settings);
   $('#account-safety').textContent = '자동매매 운용 금액 ' + won(s.budget) + ' · 현재 자동매매 투자금 ' + won(num(r.invested_amount)) + (r.new_buys_allowed ? ' · 신규 매수 가능' : ' · 신규 매수 제한: ' + r.block_reason) + '. 금액을 낮춰도 기존 보유분을 강제 매도하지 않습니다. 직접 하는 모의 주문에는 적용되지 않습니다.';
   $('#account-safety').classList.toggle('amber', !r.new_buys_allowed);
   const start = historyPeriod === 'all' ? null : periodStart(historyPeriod);
   const list = records().filter(x => (filter === '전체' || x.type === filter) && (!start || new Date(x.at) >= start));
-  $('#records').innerHTML = list.map(x => '<details class="record"><summary><span class="badge ' + (x.type === '매도' ? 'neutral' : x.type === '관망' ? 'amber' : x.type === '제어' ? 'neutral' : '') + '">' + esc(x.type) + '</span><div><strong>' + esc(x.name) + '</strong><small>' + esc(x.label ? x.label + ' · ' : '') + esc(x.tag) + '</small></div><span class="time">' + esc(fmtTime(x.at)) + '</span></summary><div class="record-content"><p>' + esc(x.reason) + '</p>' + (x.extra ? '<div class="notice">' + esc(x.extra) + '</div>' : '') + '</div></details>').join('') || '<div class="empty"><p>이 기간의 기록이 없습니다.</p></div>';
+  const pg = slicePage('records', list);
+  $('#records').innerHTML = pg.rows.map(x => { const key = x.at + '|' + x.type + '|' + x.name; return '<details class="record" data-key="' + esc(key) + '"' + (openRecords.has(key) ? ' open' : '') + '><summary><span class="badge ' + (x.type === '매도' ? 'neutral' : x.type === '관망' ? 'amber' : x.type === '제어' ? 'neutral' : '') + '">' + esc(x.type) + '</span><div><strong>' + esc(x.name) + '</strong><small>' + esc(x.label ? x.label + ' · ' : '') + esc(x.tag) + '</small></div><span class="time">' + esc(fmtTime(x.at)) + '</span></summary><div class="record-content"><p>' + esc(x.reason) + '</p>' + (x.extra ? '<div class="notice">' + esc(x.extra) + '</div>' : '') + '</div></details>'; }).join('') || '<div class="empty"><p>이 기간의 기록이 없습니다.</p></div>';
+  $('#records').insertAdjacentHTML('beforeend', pagerHtml('records', pg));
+  bindPagers('#records', 'records', renderHistory);
   $('#record-count').textContent = '선택 기간 ' + filter + ' ' + list.length + '건 · 모두 가상 기록(실제 주문 없음)';
 }
-$$('[data-history-period]').forEach(e => e.onclick = () => { historyPeriod = e.dataset.historyPeriod; refresh(); });
-$$('[data-filter]').forEach(e => e.onclick = () => { filter = e.dataset.filter; $$('[data-filter]').forEach(b => { const on = b === e; b.classList.toggle('active', on); b.setAttribute('aria-pressed', on); }); renderHistory(); });
+$$('[data-history-period]').forEach(e => e.onclick = () => { historyPeriod = e.dataset.historyPeriod; pageOf.records = 1; refresh(); });
+$('#records').addEventListener('toggle', e => { const d = e.target; if (d.dataset && d.dataset.key) { if (d.open) openRecords.add(d.dataset.key); else openRecords.delete(d.dataset.key); } }, true);
+$$('[data-filter]').forEach(e => e.onclick = () => { filter = e.dataset.filter; pageOf.records = 1; $$('[data-filter]').forEach(b => { const on = b === e; b.classList.toggle('active', on); b.setAttribute('aria-pressed', on); }); renderHistory(); });
 function modal(title, body, footer = '') {
   if ($('#modal').open) $('#modal').close();
   $('#modal-title').textContent = title; $('#modal-body').innerHTML = body; $('#modal-footer').innerHTML = footer; $('#modal-error').textContent = ''; $('#modal').showModal();
@@ -196,18 +234,25 @@ function settingSummary() {
   dirty = changed();
   $('#save-status').textContent = run ? '실행 중에는 설정을 바꿀 수 없습니다 · 일시정지 후 변경하세요.' : dirty ? '저장하지 않은 변경 · 저장·적용을 눌러 반영하세요.' : '현재 적용값 · 서버(모의계좌)에 저장됨';
   $('#save-button').disabled = run;
-  $('#budget').max = T; $('#settings-error').textContent = '';
+  $('#settings-error').textContent = '';
 }
 function renderSettings() {
-  $('#budget').value = draft.budget; settingSummary();
+  $('#budget').value = budgetText(draft.budget); settingSummary();
 }
 function validSettings(s) {
   const T = total();
   if (!Number.isInteger(s.budget) || s.budget < 1 || s.budget > T) return '자동매매 운용 금액은 1원 이상 ' + won(T) + ' 이하의 정수로 입력하세요.';
   return '';
 }
-$('#budget').oninput = () => { draft.budget = $('#budget').value === '' ? NaN : Number($('#budget').value); settingSummary(); };
-$('#budget-slider').oninput = () => { draft.budget = Math.round(total() * Number($('#budget-slider').value) / 100); $('#budget').value = draft.budget; settingSummary(); };
+$('#budget').oninput = () => {                       // thousands separators while typing/pasting; value stays a whole-won integer
+  const el = $('#budget'), raw = el.value, before = raw.slice(0, el.selectionStart ?? raw.length).replace(/\D/g, '').length, d = digitsOnly(raw);
+  draft.budget = d === '' ? NaN : Number(d);
+  const text = d === '' ? '' : commas(d); el.value = text;
+  let pos = 0, seen = 0; while (pos < text.length && seen < before) { if (/\d/.test(text[pos])) seen++; pos++; }
+  if (document.activeElement === el) el.setSelectionRange(pos, pos);
+  settingSummary();
+};
+$('#budget-slider').oninput = () => { draft.budget = Math.round(total() * Number($('#budget-slider').value) / 100); $('#budget').value = budgetText(draft.budget); settingSummary(); };
 $$('[data-ratio]').forEach(e => e.onclick = () => { draft.budget = Math.round(total() * Number(e.dataset.ratio) / 100); renderSettings(); });
 $('#settings-form').onsubmit = async e => {
   e.preventDefault(); const err = validSettings(draft); if (err) { $('#settings-error').textContent = err; return; }
