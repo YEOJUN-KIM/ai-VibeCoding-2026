@@ -7,6 +7,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from decimal import Decimal
 from http.cookiejar import CookieJar
 from urllib.parse import urlparse
 
@@ -87,6 +88,7 @@ s, _, _ = call(op, "POST", "/paper/accounts/EXPERIMENT/select", None, csrf=csrf)
 check("13 experiment account selected (real endpoint)", s == 200, s)
 
 s, st, _ = call(op, "GET", "/paper/mvp/status")
+before_settings = st
 settings_body = None
 if s == 200:
     cfg = st["settings"]
@@ -95,7 +97,16 @@ s, st, _ = call(op, "PUT", "/paper/mvp/settings", settings_body, csrf=csrf)
 check("14 settings saved", s == 200, (s, st if s != 200 else ""))
 s, st2, _ = call(op, "GET", "/paper/mvp/status")
 check("15 settings re-read equal", s == 200 and st2["settings"]["budget"] == 5000000, s)
-check("15b stopped before start, cash==total", st2["run"]["state"] in ("stopped", "ready", "idle") or True, st2["run"] if "run" in st2 else list(st2))
+check("15b stopped before start, cash==total and unchanged by settings",
+      s == 200
+      and before_settings["run"]["state"] in ("stopped", "ready", "idle")
+      and before_settings["run"]["running"] is False
+      and st2["run"]["state"] == before_settings["run"]["state"]
+      and st2["run"]["running"] is False
+      and Decimal(before_settings["account"]["cash"]) == Decimal(before_settings["account"]["total_asset"])
+      == Decimal(st2["account"]["cash"]) == Decimal(st2["account"]["total_asset"]),
+      {"before": {k: before_settings[k] for k in ("run", "account")},
+       "after": {k: st2[k] for k in ("run", "account")}})
 
 print("STATUS KEYS:", sorted(st2.keys()))
 json.dump({"cookie_note": "none", "status": st2}, open(sys.argv[4], "w"), ensure_ascii=False, indent=1) if len(sys.argv) > 4 else None
