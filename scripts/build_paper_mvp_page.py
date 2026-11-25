@@ -25,7 +25,7 @@ def sub(text, old, new, count=1):
 
 html = src
 html = re.sub(r'<meta http-equiv="Content-Security-Policy"[^>]*>',
-              '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; script-src \'self\'; style-src \'unsafe-inline\'; '
+              '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; script-src \'self\'; style-src \'self\' \'unsafe-inline\'; '
               'img-src data:; connect-src \'self\'; font-src \'none\'; base-uri \'none\'; form-action \'none\'">', html, count=1)
 html = re.sub(r'<meta name="description"[^>]*>', '<meta name="description" content="FOLIO 모의 자동매매 MVP. 모든 거래는 가상(PAPER)이며 실제 주문은 없습니다.">', html, count=1)
 html = re.sub(r"<title>.*?</title>", "<title>모의 자동매매 · FOLIO</title>", html, count=1)
@@ -151,10 +151,7 @@ POLISH_CSS = """
 .info-rows>div{display:grid;grid-template-columns:96px minmax(0,1fr);gap:14px;padding:12px 24px;font-size:13px}
 .info-rows>div+div{border-top:1px solid var(--line)}.info-rows dt{color:var(--muted)}.info-rows dd{margin:0;color:#c1c0cd}
 .pagedbox{display:flex;flex-direction:column}
-.pager{display:flex;align-items:center;justify-content:center;gap:4px;flex-wrap:wrap;margin-top:auto;padding-top:14px}
-.pager button{min-width:32px;padding:5px 9px;font-size:12px;background:#202129}
-.pager button.active{background:#282237;color:var(--bright)}.pager button:disabled{opacity:.4;cursor:default}
-.pager .gap{color:var(--muted);padding:0 3px}.pager small{margin-left:10px;color:var(--muted);font-size:11px}
+
 @media(min-width:851px){
  .panel{padding:20px;margin-bottom:16px}.heading{margin-bottom:14px}.tabs{margin-bottom:16px}.control{margin-bottom:16px;padding:11px 18px}
  .wealth{margin-bottom:16px}.pnl-grid,.summary-grid{margin-bottom:16px}.stat{padding:14px 18px}
@@ -177,7 +174,9 @@ html = sub(html, ".topbar .right span:first-child{display:none}", "")
 html = cut(html, '  <section id="page-assets"', '</section>\n </main>', ' </main>')
 html = sub(html, '<footer class="footer">FOLIO UX-02 · 독립 HTML · 가상 예시 · 새로고침하면 모든 시연 설정과 거래가 초기화됩니다.</footer>',
            '<footer class="footer">FOLIO · 모든 거래는 가상이며 실제 주문은 없습니다 · 실제 시장 데이터 기반 운용은 아직 검증되지 않았습니다.</footer>')
+html = sub(html, '</head>', '<link rel="stylesheet" href="/static/pagination.css">\n</head>')
+html = sub(html, '<button data-filter="관망" aria-pressed="false">관망</button>', '<button data-filter="관망" aria-pressed="false">관망</button><button data-filter="제어" aria-pressed="false">제어</button>')
 i = html.index("<script>")
-html = html[:i] + '<script src="/static/account-menu.js"></script>\n<script src="/static/paper-mvp.js"></script>\n</body>\n</html>\n'
+html = html[:i] + '<script src="/static/account-menu.js"></script>\n<script src="/static/pagination.js"></script>\n<script src="/static/paper-mvp.js"></script>\n</body>\n</html>\n'
 out_path.write_text(html, encoding="utf-8", newline="\n")
 print("wrote", out_path.relative_to(root), len(html), "bytes")

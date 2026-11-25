@@ -4,7 +4,7 @@ const vm = require('node:vm');
 const source = fs.readFileSync('auto_trader/static/long-term.js', 'utf8');
 const nodes = new Map();
 const $ = id => { if (!nodes.has(id)) nodes.set(id,{value:'',textContent:'',innerHTML:'',disabled:false}); return nodes.get(id); };
-const context = {$,escapeHtml:s=>String(s),metric:v=>v==null?'-':`${v}%`};
+const context = {$,FolioPagination:{directory(){}},escapeHtml:s=>String(s),metric:v=>v==null?'-':`${v}%`};
 vm.createContext(context);
 vm.runInContext(source.slice(source.indexOf('let myCandidates ='),source.indexOf('async function loadMyCandidates')),context);
 context.items=Array.from({length:100},(_,i)=>({symbol:String(i).padStart(6,'0'),name:`기업${i}`,market:'KOSPI',analysis:i%2?null:{rank:'A',overall_score:80,generated_at:'2026-10-01'}}));

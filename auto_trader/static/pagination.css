@@ -1,0 +1,25 @@
+/* Five reserved number slots keep navigation still across 1 / 7 / 108.
+   The summary has its own row and never participates in control sizing. */
+html{scrollbar-gutter:stable}
+.folio-pagination{container-type:inline-size;display:flex;flex-direction:column;align-items:center;gap:8px;margin-top:16px;min-width:0;max-width:100%;font-variant-numeric:tabular-nums}
+.folio-pagination[hidden]{display:none}
+.folio-pagination .folio-page-controls{display:grid;grid-template-columns:44px 44px 196px 44px 44px;gap:4px;align-items:center;flex:none}
+.folio-pagination .folio-page-numbers{display:grid;grid-template-columns:repeat(5,36px);gap:4px;min-width:0;padding:0}
+.folio-pagination .folio-page-controls button{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;width:100%;min-width:0;height:32px;margin:0;padding:4px 0;font-size:12px;line-height:1;white-space:nowrap;font-variant-numeric:tabular-nums}
+.folio-pagination button:disabled{opacity:.4;cursor:default}
+.folio-pagination .folio-page-number.active{background:#30283e;color:#d6c4ff;border-color:#786390}
+.folio-pagination .folio-page-summary{display:block;min-width:0;max-width:100%;margin:0;color:var(--muted);font-size:11px;text-align:center;overflow-wrap:anywhere}
+.pager.folio-pagination{margin-top:auto;padding-top:14px}
+.pager.folio-pagination button{background:#202129}
+.pager.folio-pagination button.active{background:#282237;color:var(--bright)}
+#paper-history .filter-row{flex-wrap:wrap}
+@container(max-width:400px){
+ .folio-pagination .folio-page-controls{grid-template-columns:38px 38px 148px 38px 38px;gap:2px}
+ .folio-pagination .folio-page-numbers{grid-template-columns:repeat(5,28px);gap:2px}
+ .folio-pagination .folio-page-controls button{font-size:11px}
+}
+@container(max-width:310px){
+ .folio-pagination .folio-page-controls{grid-template-columns:34px 34px 128px 34px 34px;gap:1px}
+ .folio-pagination .folio-page-numbers{grid-template-columns:repeat(5,24px);gap:2px}
+ .folio-pagination .folio-page-controls button{font-size:10px}
+}

@@ -77,6 +77,15 @@ class PaperMvpPageContract(unittest.TestCase):
         self.assertTrue(badge_hidden_at(bad, 390))
         self.assertFalse(badge_hidden_at(bad, 1440))
 
+    def test_generator_matches_checked_in_page(self):
+        self.assertEqual(self.generated, self.static)
+
+    def test_control_filter_and_shared_pagination_assets(self):
+        for html in (self.generated, self.static):
+            self.assertIn('data-filter="제어" aria-pressed="false">제어</button>', html)
+            self.assertIn('href="/static/pagination.css"', html)
+            self.assertLess(html.index('src="/static/pagination.js"'), html.index('src="/static/paper-mvp.js"'))
+
 
 if __name__ == "__main__":
     unittest.main()

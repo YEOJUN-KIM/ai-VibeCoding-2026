@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src data:; connect-src 'self'; font-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src data:; connect-src 'self'; font-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="description" content="FOLIO 모의 자동매매 MVP. 모든 거래는 가상(PAPER)이며 실제 주문은 없습니다.">
 <title>모의 자동매매 · FOLIO</title>
 <style>
@@ -62,10 +62,7 @@
 .info-rows>div{display:grid;grid-template-columns:96px minmax(0,1fr);gap:14px;padding:12px 24px;font-size:13px}
 .info-rows>div+div{border-top:1px solid var(--line)}.info-rows dt{color:var(--muted)}.info-rows dd{margin:0;color:#c1c0cd}
 .pagedbox{display:flex;flex-direction:column}
-.pager{display:flex;align-items:center;justify-content:center;gap:4px;flex-wrap:wrap;margin-top:auto;padding-top:14px}
-.pager button{min-width:32px;padding:5px 9px;font-size:12px;background:#202129}
-.pager button.active{background:#282237;color:var(--bright)}.pager button:disabled{opacity:.4;cursor:default}
-.pager .gap{color:var(--muted);padding:0 3px}.pager small{margin-left:10px;color:var(--muted);font-size:11px}
+
 @media(min-width:851px){
  .panel{padding:20px;margin-bottom:16px}.heading{margin-bottom:14px}.tabs{margin-bottom:16px}.control{margin-bottom:16px;padding:11px 18px}
  .wealth{margin-bottom:16px}.pnl-grid,.summary-grid{margin-bottom:16px}.stat{padding:14px 18px}
@@ -74,6 +71,7 @@
 @media(min-width:1600px){#paper-history:not([hidden]){align-items:stretch}#paper-history>.panel{display:flex;flex-direction:column}}
 @media(max-width:850px){.info-rows>div{grid-template-columns:80px minmax(0,1fr);padding:11px 16px}.budget-card{padding:16px}}
 </style>
+<link rel="stylesheet" href="/static/pagination.css">
 </head>
 <body>
 <a class="skip" href="#main">본문으로 이동</a>
@@ -115,7 +113,7 @@
     <article class="panel history-period"><div class="row wrap section-head"><h2>전체·기간별 손익</h2><div class="segmented" role="group" aria-label="내역 기간"><button data-history-period="all" aria-pressed="true" class="active">전체</button><button data-history-period="day" aria-pressed="false">1일</button><button data-history-period="week" aria-pressed="false">1주</button><button data-history-period="month" aria-pressed="false">1개월</button><button data-history-period="year" aria-pressed="false">1년</button></div></div><strong class="num" id="history-period-value" style="font-size:24px"></strong><p class="context" id="history-period-basis"></p><p class="context">기간 시작과 현재 총자산의 차이입니다. 아래 기록은 이 기간만 보여주고, 보유 종목과 누적 손익은 현재 기준입니다.</p></article>
     <div class="summary-grid history-summary"><article class="stat"><span class="field-label">미실현 평가손익</span><strong class="value num" id="h-unrealized">—</strong><small>매수 비용 포함 · 매도 예상 비용 제외</small></article><article class="stat"><span class="field-label">실현 손익</span><strong class="value num" id="h-realized">—</strong><small id="h-realized-note"></small></article><article class="stat"><span class="field-label">누적 손익</span><strong class="value num" id="h-total">—</strong><small>실현 + 미실현 · 입출금 없음</small></article></div>
     <article class="panel"><div class="row section-head"><div><h2>전체 보유 종목</h2><p class="sub">종목을 선택하면 매수분별 투자 기준을 확인할 수 있어요.</p></div><span class="badge neutral" id="holdings-badge">PAPER</span></div><div class="table-wrap pagedbox" id="all-holdings"></div><div class="notice" style="margin-top:18px" id="account-safety"></div></article>
-    <article class="panel"><div class="row wrap section-head"><div><h2>매매 및 판단 기록</h2><p class="sub">가상 기록 · 행을 펼쳐 거래·관망·판단 보류 이유를 확인하세요.</p></div><div class="filter-row" role="group" aria-label="기록 필터"><button data-filter="전체" class="active" aria-pressed="true">전체</button><button data-filter="매수" aria-pressed="false">매수</button><button data-filter="매도" aria-pressed="false">매도</button><button data-filter="관망" aria-pressed="false">관망</button></div></div><div id="records" class="pagedbox"></div><p class="context" id="record-count"></p></article>
+    <article class="panel"><div class="row wrap section-head"><div><h2>매매 및 판단 기록</h2><p class="sub">가상 기록 · 행을 펼쳐 거래·관망·판단 보류 이유를 확인하세요.</p></div><div class="filter-row" role="group" aria-label="기록 필터"><button data-filter="전체" class="active" aria-pressed="true">전체</button><button data-filter="매수" aria-pressed="false">매수</button><button data-filter="매도" aria-pressed="false">매도</button><button data-filter="관망" aria-pressed="false">관망</button><button data-filter="제어" aria-pressed="false">제어</button></div></div><div id="records" class="pagedbox"></div><p class="context" id="record-count"></p></article>
    </section>
   </section>
  </main><footer class="footer">FOLIO · 모든 거래는 가상이며 실제 주문은 없습니다 · 실제 시장 데이터 기반 운용은 아직 검증되지 않았습니다.</footer>
@@ -123,6 +121,7 @@
 <dialog id="modal" aria-labelledby="modal-title"><div class="row"><h2 id="modal-title"></h2><button class="close" id="modal-close" aria-label="닫기">×</button></div><div class="modal-body" id="modal-body"></div><div id="modal-error" role="alert"></div><div class="modal-footer" id="modal-footer"></div></dialog>
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 <script src="/static/account-menu.js"></script>
+<script src="/static/pagination.js"></script>
 <script src="/static/paper-mvp.js"></script>
 </body>
 </html>

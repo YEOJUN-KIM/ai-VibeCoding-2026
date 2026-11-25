@@ -238,6 +238,7 @@ function invalidateStockList() {
   marketItems.clear();
   $('#stock-list-body').innerHTML='<tr><td class="empty" colspan="8">종목을 찾고 있습니다.</td></tr>';
   for(const id of ['first','prev','next','last']) $('#stock-'+id).disabled=true;
+  FolioPagination.busy('stock');
 }
 async function loadStocks(page = 1) {
   clearTimeout(searchTimer);
@@ -263,6 +264,7 @@ async function loadStocks(page = 1) {
     $("#stock-prev").disabled = activePage <= 1;
     $("#stock-next").disabled = activePage >= totalPages;
     $("#stock-last").disabled = activePage >= totalPages;
+    FolioPagination.directory('stock', activePage, totalPages, changeStockPage);
     $("#stock-list-message").textContent = data.total
       ? `${integer.format(data.total)}개 종목 중 ${integer.format((activePage - 1) * data.page_size + 1)}–${integer.format(Math.min(activePage * data.page_size, data.total))} 표시`
       : "조건에 맞는 국내 종목이 없습니다.";

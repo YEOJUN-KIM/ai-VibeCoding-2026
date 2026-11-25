@@ -2,7 +2,7 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('nod
 function harness(){
   const nodes=new Map(), pending=[], calls=[], timers=new Map();let timerId=0;
   const node=id=>{if(!nodes.has(id))nodes.set(id,{value:'',innerHTML:'',textContent:'',disabled:false,classList:{add(){},remove(){}},addEventListener(type,fn){this[type]=fn;}});return nodes.get(id);};
-  const context={$:node,AbortController,URLSearchParams,clearTimeout:id=>timers.delete(id),setTimeout:fn=>{timers.set(++timerId,fn);return timerId;},escapeHtml:String,won:{format:String},integer:{format:String},
+  const context={$:node,FolioPagination:{directory(){},busy(){}},changeStockPage(){},AbortController,URLSearchParams,clearTimeout:id=>timers.delete(id),setTimeout:fn=>{timers.set(++timerId,fn);return timerId;},escapeHtml:String,won:{format:String},integer:{format:String},
     api:(url,options)=>{calls.push({url,signal:options?.signal});return new Promise((resolve,reject)=>pending.push({resolve,reject}));}};
   vm.createContext(context);
   return {node,context,pending,calls,timers,run:code=>vm.runInContext(code,context)};

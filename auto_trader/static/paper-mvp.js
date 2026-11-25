@@ -20,21 +20,12 @@ function slicePage(key, items) {
   return { rows: items.slice((pageOf[key] - 1) * size, pageOf[key] * size), page: pageOf[key], pages, total: items.length };
 }
 function pagerHtml(key, p) {
-  if (p.total <= PAGE_SIZE[key]) return '';
-  const btn = (to, label, extra = '') => '<button type="button" data-page-key="' + key + '" data-page-to="' + to + '"' + extra + '>' + label + '</button>';
-  let out = '', prev = 0;
-  for (let i = 1; i <= p.pages; i++) {
-    if (!(p.pages <= 7 || i === 1 || i === p.pages || Math.abs(i - p.page) <= 1)) continue;
-    if (i - prev > 1) out += '<span class="gap" aria-hidden="true">…</span>';
-    out += btn(i, i, ' aria-label="' + i + '페이지"' + (i === p.page ? ' class="active" aria-current="page"' : '')); prev = i;
-  }
-  return '<nav class="pager" aria-label="' + PAGE_LABEL[key] + '">' + btn(p.page - 1, '이전', p.page === 1 ? ' disabled' : '') + out + btn(p.page + 1, '다음', p.page === p.pages ? ' disabled' : '') +
-    '<small>' + p.page + ' / ' + p.pages + ' · 총 ' + p.total + '개</small></nav>';
+  return FolioPagination.paper(key, p, PAGE_LABEL[key]);
 }
 function bindPagers(root, key, rerender) {
   $$(root + ' [data-page-key]').forEach(b => b.onclick = () => {
     pageOf[key] = Number(b.dataset.pageTo); rerender();
-    const f = $(root + ' [data-page-to="' + pageOf[key] + '"]'); if (f) f.focus();
+    const f = $(root + ' [aria-current="page"]'); if (f) f.focus({ preventScroll: true });
   });
 }
 const digitsOnly = t => String(t).replace(/\D/g, '').replace(/^0+(?=\d)/, '').slice(0, 13);
@@ -110,11 +101,12 @@ $('#emergency').onclick = () => control('/paper/mvp/emergency-stop', '긴급정�
 
 // ---------------------------------------------------------------- home
 function holdingTable(key) {
+  const pg = slicePage(key, st.holdings);
   if (!st.holdings.length) return '<div class="empty"><p>현재 보유 종목이 없습니다.</p><small>조건에 맞는 후보가 생기면 가상 매수합니다. 현금 보유도 정상 판단입니다.</small></div>';
-  return '<table><thead><tr><th>종목</th><th>수량</th><th>평가금액</th><th>평가손익 · 수익률</th></tr></thead><tbody>' + slicePage(key, st.holdings).rows.map(h => {
+  return '<table><thead><tr><th>종목</th><th>수량</th><th>평가금액</th><th>평가손익 · 수익률</th></tr></thead><tbody>' + pg.rows.map(h => {
     const p = num(h.profit), pct = h.profit_pct == null ? 0 : num(h.profit_pct);
     return '<tr><td><div class="stockcell"><span class="stockicon">' + esc((h.name || h.symbol).slice(0, 1)) + '</span><div><button class="stockname" data-detail="' + esc(h.symbol) + '">' + esc(h.name || h.symbol) + ' ↗</button><small>' + esc(h.symbol) + '</small></div></div></td><td class="num">' + h.quantity + '주</td><td class="num">' + won(num(h.value)) + '</td><td class="num ' + cls(p) + '">' + signedWon(p) + '<span class="subnum">' + signedPct(pct) + '</span></td></tr>';
-  }).join('') + '</tbody></table>' + pagerHtml(key, slicePage(key, st.holdings));
+  }).join('') + '</tbody></table>' + pagerHtml(key, pg);
 }
 function periodStart(k) {
   const now = new Date(st.checked_at), kst = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Seoul' })), off = now - kst;
