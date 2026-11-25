@@ -39,3 +39,16 @@
 - FOLIO 자체 판단 고도화, 전체 종목 확대, 업종별 학습(관심 업종은 후보 선정에 한 번도 연결된 적이 없어 입력만 제거했다).
 - 사용하지 않게 된 구형 PAPER 전용 CSS(`styles.css`의 `paper-*` 규칙)와 `live_strategies` 모듈·테이블 정리, 실제 자산 복사 기능의 새 화면 편입 여부.
 - LIVE 주문의 수수료·세금: 토스 `commissions` 응답을 연결하면 사전 표시가 가능하다(현재는 계약 근거가 없어 "확정 불가"로 표시).
+
+## API 계약 승인 delta 검증 (tests/test_architecture_regression.py)
+
+각 커밋을 추출해 라우트와 OpenAPI 해시를 `tests/fixtures/api_before_refactor.json`(기준선)과 비교했다.
+
+| 커밋 | 라우트 | OpenAPI 해시 | 내용 |
+|---|---|---|---|
+| 8c3d66b | 기준선과 일치 | 일치 | — |
+| 9a4eb0a | 일치 | 불일치 | `MvpSettings`에서 구 위험 한도 필드 제거(승인된 SIMPLIFY-01 변경) |
+| 39759a8 | 11개 제거 | 불일치 | 아래 11개 API 제거, `LiveOrderImpactItem`·`LiveOrderPreview.impact` 추가, `MvpSettings`는 운용금액 전용 |
+
+제거된 11개: `POST /paper/strategies/{id}/select`, `GET /risk`, `PUT /risk/settings`, `GET·POST /settings/strategies`, `PUT·DELETE /settings/strategies/{id}`, `GET /settings/strategy-preset-status`, `GET /settings/strategy-presets/{kind}`, `PUT /strategy/settings`, `POST /strategy/start`.
+테스트는 기준선 픽스처를 그대로 두고 이 승인된 delta만 명시적으로 빼며, 그 외 라우트·스키마 변화는 계속 실패한다.

@@ -67,6 +67,75 @@ class ManualLimitTests(unittest.TestCase):
         self.assertEqual(pnl.after,(D(100)-D(80))*4)
         self.assertIn("수수료·세금 제외",pnl.label)
 
+    def _holding(self, qty=10, value=1000):
+        h=NS(symbol="005930",quantity=D(qty),market_value=D(value),average_purchase_price=D(80))
+        self.client.portfolio.return_value=NS(holdings=[h],market_value=D(value))
+
+    def _by(self):
+        return {i.label:i for i in self.preview().impact}
+
+    def test_full_sell_below_mark_leaves_zero_quantity_zero_value_and_zero_weight(self):
+        # 1000 won / 10 shares marked at 100, sold at a 80 limit: nothing remains, so no residual value or weight.
+        self._holding(); self.client.buying_power.return_value=NS(krw_cash_buying_power=D(1000),account_label="test")
+        self.payload.side=OrderSide.SELL; self.payload.quantity=D(10); self.payload.order_price=D(80)
+        by=self._by()
+        self.assertEqual(by["보유 수량"].after,D(0))
+        share=by["종목 비중(주문가 기준 추정)"]
+        self.assertEqual(share.before,D(50)); self.assertEqual(share.after,D(0))
+        self.assertEqual(by["원화 주문 가능 금액"].after,D(1800))
+        # total assets 2000 -> 1800 (cash +800, stock -1000): cash weight 100%.
+        self.assertEqual(by["현금 비중(주문가 기준 추정)"].after,D(100))
+
+    def test_partial_sell_values_remaining_shares_at_the_mark_and_total_reflects_fill_gap(self):
+        self._holding(); self.client.buying_power.return_value=NS(krw_cash_buying_power=D(1000),account_label="test")
+        self.payload.side=OrderSide.SELL; self.payload.quantity=D(4); self.payload.order_price=D(80)
+        by=self._by()
+        # remaining 6 * 100 = 600 ; cash 1000+320 = 1320 ; total 2000 + 320 - 400 = 1920
+        self.assertEqual(by["보유 수량"].after,D(6))
+        self.assertEqual(by["종목 비중(주문가 기준 추정)"].after,D(600)/D(1920)*100)
+        self.assertEqual(by["현금 비중(주문가 기준 추정)"].after,D(1320)/D(1920)*100)
+
+    def test_sell_at_mark_keeps_total_asset_and_buy_limit_below_mark_raises_total(self):
+        self._holding(); self.client.buying_power.return_value=NS(krw_cash_buying_power=D(1000),account_label="test")
+        self.payload.side=OrderSide.SELL; self.payload.quantity=D(5); self.payload.order_price=D(100)
+        by=self._by()
+        self.assertEqual(by["종목 비중(주문가 기준 추정)"].after,D(500)/D(2000)*100)
+        self.payload.side=OrderSide.BUY; self.payload.quantity=D(5); self.payload.order_price=D(90)
+        by=self._by()                     # cash 1000-450=550 ; stock 10+5 shares *100 = 1500 ; total 2050
+        self.assertEqual(by["종목 비중(주문가 기준 추정)"].after,D(1500)/D(2050)*100)
+        self.assertEqual(by["현금 비중(주문가 기준 추정)"].after,D(550)/D(2050)*100)
+
+    def test_market_order_and_unheld_buy_use_current_price_for_both_fill_and_mark(self):
+        self.client.buying_power.return_value=NS(krw_cash_buying_power=D(1000),account_label="test")
+        self.payload.order_type="MARKET"; self.payload.order_price=None; self.payload.quantity=D(5)
+        by=self._by()
+        self.assertEqual(by["종목 비중(주문가 기준 추정)"].after,D(50))
+        self.assertEqual(by["원화 주문 가능 금액"].after,D(500))
+
+    def test_zero_denominators_and_oversell_never_crash_or_go_negative(self):
+        self.client.buying_power.return_value=NS(krw_cash_buying_power=D(0),account_label="test")
+        self.payload.side=OrderSide.SELL; self.payload.quantity=D(1)
+        result=self.preview()                    # no holding, zero assets: rejected, no ratio items, no exception
+        self.assertFalse(result.approved)
+        self.assertNotIn("종목 비중(주문가 기준 추정)",{i.label for i in result.impact})
+        self._holding(qty=10,value=1000); self.payload.quantity=D(11); self.payload.order_price=D(100)
+        by=self._by()                            # oversell is rejected by the check; value never negative
+        self.assertGreaterEqual(by["종목 비중(주문가 기준 추정)"].after,D(0))
+        self.assertFalse(self.preview().approved)
+
+    def test_zero_quantity_holding_and_zero_total_after_do_not_divide_by_zero(self):
+        from auto_trader.services.live_order_service import estimate_trade_impact
+        cash,qty,before,after,total=estimate_trade_impact(
+            is_buy=False,quantity=D(10),fill_price=D(0),mark_price=D(100),held_quantity=D(10),
+            holding_market_value=D(1000),cash_before=D(0),total_asset=D(1000))
+        self.assertEqual((qty,after,total),(D(0),D(0),D(0)))
+        from auto_trader.risk_policy import RiskPolicy
+        self.assertEqual(RiskPolicy.cash_ratio(after,total),D(0))
+
+    def test_estimates_are_labelled_and_costs_stay_unconfirmed(self):
+        by=self._by()
+        self.assertIn("추정",''.join(by)); self.assertIsNone(by["수수료·세금"].after)
+
     def test_sell_quantity_and_pin_cannot_be_overridden(self):
         self.payload.side=OrderSide.SELL
         result=self.preview()

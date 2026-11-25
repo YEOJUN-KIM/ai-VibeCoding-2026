@@ -75,6 +75,31 @@ def reconcile_saved_real_orders(*, active_only: bool = False) -> int:
     return reconciled
 
 
+def estimate_trade_impact(
+    *, is_buy: bool, quantity: Decimal, fill_price: Decimal, mark_price: Decimal, held_quantity: Decimal,
+    holding_market_value: Decimal, cash_before: Decimal, total_asset: Decimal,
+) -> tuple[Decimal, Decimal, Decimal, Decimal, Decimal]:
+    """Estimate (cash_after, quantity_after, symbol_value_before, symbol_value_after, total_after).
+
+    This is an estimate, not a confirmed fill. Fees and taxes are not in the data contract before an order is
+    placed, so none are assumed here (the preview says so explicitly). Shares that remain are valued at
+    ``mark_price``; cash moves at ``fill_price``; so total assets move only by the fill-vs-mark gap.
+    Remaining quantity never goes below zero, so a full sell leaves zero value and zero weight.
+    """
+    if is_buy:
+        remaining = held_quantity + quantity
+        cash_after = cash_before - fill_price * quantity
+        total_after = total_asset + (mark_price - fill_price) * quantity
+    else:
+        remaining = max(held_quantity - quantity, Decimal(0))
+        sold = min(quantity, held_quantity)
+        cash_after = cash_before + fill_price * quantity
+        total_after = total_asset + fill_price * quantity - mark_price * sold
+    quantity_after = remaining if is_buy else held_quantity - quantity
+    symbol_value_after = mark_price * remaining
+    return cash_after, quantity_after, holding_market_value, symbol_value_after, total_after
+
+
 def _preview_live_order(
     payload: LiveOrderPreviewRequest,
     request: Request,
@@ -117,23 +142,22 @@ def _preview_live_order(
     cash_before = buying_power.krw_cash_buying_power
     total_asset = portfolio.market_value + cash_before
     impact: list[LiveOrderImpactItem] = []
-    if payload.side.value == "BUY":
+    # Mark price: one consistent current valuation for the shares that stay (or are added) on the books.
+    # An existing holding is marked at its own reported market value per share so "before" and the remaining
+    # shares agree; with no holding the fetched current price is used. The fill price is the order reference price.
+    mark_price = (holding.market_value / holding.quantity) if holding is not None and holding.quantity else detail.price
+    is_buy = payload.side.value == "BUY"
+    if is_buy:
         add_check("주문 가능 금액", estimated_amount <= cash_before,
                   "원화 주문 가능 금액 이내입니다.", "원화 주문 가능 금액이 부족합니다.")
-        cash_after = cash_before - estimated_amount
-        quantity_after = held_quantity + payload.quantity
-        symbol_value_before = holding.market_value if holding else Decimal(0)
-        symbol_value_after = symbol_value_before + estimated_amount
-        # A buy converts cash to stock at the reference price, so total assets are unchanged by the estimate.
-        total_after = total_asset
     else:
         add_check("보유 수량", payload.quantity <= held_quantity,
                   "현재 보유 수량 이내입니다.", "매도할 보유 수량이 부족합니다.")
-        cash_after = cash_before + estimated_amount
-        quantity_after = held_quantity - payload.quantity
-        symbol_value_before = holding.market_value if holding else Decimal(0)
-        symbol_value_after = max(symbol_value_before - estimated_amount, Decimal(0))
-        total_after = total_asset
+    cash_after, quantity_after, symbol_value_before, symbol_value_after, total_after = estimate_trade_impact(
+        is_buy=is_buy, quantity=payload.quantity, fill_price=reference_price, mark_price=mark_price,
+        held_quantity=held_quantity,
+        holding_market_value=holding.market_value if holding else Decimal(0),
+        cash_before=cash_before, total_asset=total_asset)
     impact.append(LiveOrderImpactItem(label="원화 주문 가능 금액", before=cash_before, after=cash_after, unit="원"))
     impact.append(LiveOrderImpactItem(label="보유 수량", before=held_quantity, after=quantity_after, unit="주"))
     if total_asset:

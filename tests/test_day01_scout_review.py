@@ -3,6 +3,7 @@ import ast
 import dataclasses as dc
 import importlib.util
 import json
+import subprocess
 import sys
 import unittest
 from unittest.mock import patch
@@ -399,7 +400,13 @@ class CompatibilityReview(unittest.TestCase):
         tree=ast.parse((ROOT/'auto_trader/day01_scout.py').read_text(encoding='utf-8'))
         local=[n.module for n in ast.walk(tree) if isinstance(n,ast.ImportFrom) and n.level]
         self.assertEqual(local,['risk_policy'])
-        self.assertFalse(set(sys.modules)&{'auto_trader.database','auto_trader.settings','auto_trader.brokers'})
+        # sys.modules of this process depends on test order (another test may have imported the app first), so the
+        # real import boundary is checked in a fresh interpreter that imports only day01_scout.
+        code=("import sys; sys.path.insert(0, sys.argv[1]); import auto_trader.day01_scout; "
+              "bad=sorted(set(sys.modules)&{'auto_trader.database','auto_trader.settings','auto_trader.brokers'}); "
+              "print(bad); sys.exit(1 if bad else 0)")
+        done=subprocess.run([sys.executable,'-c',code,str(ROOT)],capture_output=True,text=True,cwd=ROOT,timeout=60)
+        self.assertEqual(done.returncode,0,done.stdout+done.stderr)
 
     @unittest.skipUnless((OLD/'auto_trader/ml/day01.py').is_file(),'preserved DAY01 worktree unavailable')
     def test_synthetic_watch_symbols_are_accepted_by_preserved_universe_contract(self):

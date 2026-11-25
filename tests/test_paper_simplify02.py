@@ -15,7 +15,8 @@ from auto_trader.paper_mvp import DEFAULT_EXIT, MvpSettings
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "auto_trader" / "static"
-RETIRED_FILES = ("index.html", "app.js", "settings.html", "settings.js", "settings-presets.js", "settings-summary.js")
+RETIRED_FILES = ("index.html", "app.js", "settings.html", "settings.js", "settings-presets.js", "settings-summary.js",
+                 "settings-account.js")
 SHELL_PAGES = ("live", "stocks", "stock-detail", "long-term", "news")
 
 
