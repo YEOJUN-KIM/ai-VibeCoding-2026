@@ -7,7 +7,6 @@ from ..auth import AuthenticatedUser
 from ..models import PaperWorkspaceStatus, PaperManagementUpdate, Stock
 from ..toss import TossApiError
 from ..database import connect
-from ..live_strategies import list_strategies
 from .. import runtime
 
 
@@ -111,29 +110,3 @@ async def snapshot_live_account(_: AuthenticatedUser) -> PaperWorkspaceStatus:
     runtime.paper_state().snapshot_at = snapshot_at
     runtime.paper_state().source_label = portfolio.account_label
     return paper_workspace(_)
-
-
-@runtime._serialize_paper_change
-async def select_paper_strategy(
-    strategy_id: int, user: AuthenticatedUser,
-) -> PaperWorkspaceStatus:
-    await runtime.engine.stop()
-    strategy = next((item for item in list_strategies(user.id) if item.id == strategy_id), None)
-    if strategy is None:
-        raise HTTPException(status_code=404, detail="저장된 전략을 찾지 못했습니다.")
-    if strategy.execution_mode != "DRY_RUN":
-        raise HTTPException(status_code=409, detail="PAPER에서는 DRY RUN 전략만 선택할 수 있습니다.")
-    target_symbols = [target.symbol for target in strategy.targets]
-    try:
-        prices = await asyncio.to_thread(runtime.toss_client.current_prices, target_symbols)
-        for target in strategy.targets:
-            price = prices.get(target.symbol.upper())
-            if price is None:
-                raise HTTPException(status_code=409, detail=f"{target.stock_name}의 현재가를 확인할 수 없습니다.")
-            runtime.market.upsert_stock(Stock(symbol=target.symbol, name=target.stock_name, market="KRX"), price)
-    except TossApiError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    await asyncio.to_thread(runtime.broker.remember_strategy, user.id, strategy.id, target_symbols)
-    runtime._configure_paper_strategy(runtime.engine, strategy)
-    runtime.paper_state().selected_strategy = strategy
-    return paper_workspace(user)

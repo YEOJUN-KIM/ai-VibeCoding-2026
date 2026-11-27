@@ -3,7 +3,7 @@ const nodes=new Map();
 const node=id=>{if(!nodes.has(id))nodes.set(id,{value:'',innerHTML:'',textContent:'',disabled:false,addEventListener(e,f){this[e]=f;},setAttribute(){},removeAttribute(){}});return nodes.get(id);};
 node('#etf-sort').value='POPULAR';
 const pending=[],calls=[];
-const context={$:node,window:{},location:{hash:''},AbortController,URLSearchParams,escapeHtml:s=>String(s),metric:s=>s??'-',won:{format:String},
+const context={$:node,window:{},FolioPagination:{directory(){},busy(){}},location:{hash:''},AbortController,URLSearchParams,escapeHtml:s=>String(s),metric:s=>s??'-',won:{format:String},
   document:{querySelectorAll:()=>[],body:{append(){}},createElement:()=>({setAttribute(){},addEventListener(){},querySelector:node})},
   api:url=>{calls.push(url);return new Promise(resolve=>pending.push(resolve));}};
 vm.createContext(context);vm.runInContext(fs.readFileSync('auto_trader/static/etf.js','utf8'),context);

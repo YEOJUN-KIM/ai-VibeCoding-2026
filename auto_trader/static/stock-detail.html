@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="ko">
-<head><script src="/static/company-icons.js" defer></script><script src="/static/site-header.js" defer></script>
+<head><script src="/static/account-menu.js" defer></script><script src="/static/company-icons.js" defer></script><script src="/static/site-header.js" defer></script>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>종목 인사이트 · FOLIO</title>
@@ -22,12 +22,12 @@
       <div class="workspace-nav-links">
         <a class="workspace-nav-link live-link" href="/live"><span class="nav-index">01</span><span><strong>자산 현황</strong><small>자산·보유종목</small></span></a>
         <a class="workspace-nav-link active stocks-link" href="/stocks"><span class="nav-index">02</span><span><strong>국내 주식</strong><small>국내주식 탐색</small></span></a>
-        <a class="workspace-nav-link paper-link" href="/paper"><span class="nav-index">03</span><span><strong>모의매매</strong><small>전략 운용</small></span></a>
+        <a class="workspace-nav-link paper-link" href="/paper-mvp"><span class="nav-index">03</span><span><strong>모의매매</strong><small>전략 운용</small></span></a>
         <a class="workspace-nav-link long-term-link" href="/long-term"><span class="nav-index">04</span><span><strong>장기 리서치</strong><small>기업 분석·메모</small></span></a>
         <a class="workspace-nav-link news-link" href="/news"><span class="nav-index">05</span><span><strong>주요 뉴스</strong><small>뉴스·주요 이슈</small></span></a>
 
       </div>
-    <div class="workspace-nav-bottom"><a class="workspace-nav-link" href="/settings"><span class="nav-index">06</span><span><strong>설정</strong><small>전략·계정·한도</small></span></a><div class="user-box sidebar-account"><span class="account-avatar" aria-hidden="true">F</span><span class="mode-label">계정</span><strong id="current-user">-</strong><button class="text-button" id="logout-button">로그아웃</button></div></div></nav>
+    <div class="workspace-nav-bottom"></div></nav>
     <main class="workspace-page-layout">
 <aside class="workspace-section-sidebar"><div class="workspace-sidebar-brand"><span>FOLIO</span><strong>종목 상세</strong><small>페이지 메뉴</small></div><nav class="workspace-side-tabs detail-section-tabs" id="detail-section-tabs" role="tablist" aria-label="종목 상세 구역">
         <button type="button" role="tab" aria-selected="true" data-detail-tab="chart" class="active"><span>01</span>차트</button>
@@ -133,7 +133,7 @@
               <label class="conditional-order-field" hidden>만료일<input id="order-expire-date" type="date"><small>조건이 충족되지 않으면 이 날짜에 자동 만료됩니다.</small></label>
             </div>
             <div class="order-estimate"><span>예상 주문 금액</span><strong id="order-estimated-amount">-</strong><small id="order-estimate-note">수수료·세금 제외</small></div>
-            <div class="order-policy-guide"><strong>주문 안전 기준</strong><p id="order-cash-policy">투자 한도를 확인하고 있습니다.</p><small id="order-cash-policy-detail">현금 보유 비율은 주문 후에도 남겨둘 원화 현금의 최소 비중입니다. 기준보다 낮아지는 신규 매수는 검토 단계에서 보류됩니다.</small></div>
+            <div class="order-policy-guide"><strong>주문 전 확인</strong><p id="order-cash-policy">주문 전 확인</p><small id="order-cash-policy-detail">주문 후 예상 변화를 확인한 뒤 직접 결정합니다.</small></div>
             <div class="order-dry-run-preview" id="order-dry-run-preview">실제 지정가 매수 주문을 준비합니다.</div>
             <button class="button live-order-submit" id="live-order-preview-button" type="button">실제 주문 검토</button>
             <div class="order-preview-result" id="order-preview-result" hidden></div>

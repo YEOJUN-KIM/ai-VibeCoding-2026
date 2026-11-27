@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 from psycopg import sql
 from auto_trader import database, paper, risk
 from auto_trader.models import OrderRequest, RiskPreset, RiskSettingsUpdate, Stock
+from auto_trader.risk import AutoLimits
 from auto_trader.simulator import MarketSimulator
 from auto_trader.strategy import MovingAverageEngine
 
@@ -44,11 +45,8 @@ class PaperMemoryTests(unittest.TestCase):
         return self.broker.submit(OrderRequest(symbol="005930", side="BUY", quantity=1, request_id=key))
 
     def relax_risk(self):
-        self.risk.update(RiskSettingsUpdate(
-            preset=RiskPreset.CUSTOM, max_order_amount=Decimal("1000000"),
-            max_symbol_amount=Decimal("1000000"), max_total_investment=Decimal("1000000"),
-            min_cash_ratio=Decimal("0"), daily_loss_limit=Decimal("1000000"),
-            daily_order_limit=100, profit_target=Decimal("1000000")))
+        # PAPER-SIMPLIFY-01: an automatic order is bound by the run's operating amount only (not by the saved limits).
+        self.risk.auto_limits = AutoLimits(max_total_investment=Decimal("1000000"))
 
     def test_new_broker_restores_assets_and_request_ids(self):
         self.buy()
@@ -167,35 +165,29 @@ class PaperMemoryTests(unittest.TestCase):
             preset=RiskPreset.CUSTOM, max_order_amount=Decimal("1"), max_symbol_amount=Decimal("1"),
             max_total_investment=Decimal("1"), min_cash_ratio=Decimal("0"),
             daily_loss_limit=Decimal("100000"), daily_order_limit=10, profit_target=Decimal("100000")))
-        order = self.buy()
+        order = self.broker.submit(OrderRequest(symbol="005930", side="BUY", quantity=1), source="STRATEGY")
         self.assertEqual(order.status.value, "REJECTED")
         self.assertIn("위험 한도", order.message)
+        # PAPER-SETTINGS-01: the saved limits belong to strategy orders; a manual order is not limited by them.
+        self.assertEqual(self.broker.submit(OrderRequest(symbol="005930", side="BUY", quantity=1)).status.value, "FILLED")
 
-    def test_temporary_paper_exceptions_do_not_disable_other_limits(self):
-        broker = paper.PaperBroker(
-            self.market, Decimal("300000"), "paper-exception-test",
-            ignore_min_cash_ratio=True, ignore_daily_order_limit=True,
-        )
+    def test_saved_limits_never_apply_to_paper_orders_only_the_operating_amount_does(self):
+        broker = paper.PaperBroker(self.market, Decimal("300000"), "paper-operating-amount-test")
         broker.initialize()
         manager = risk.RiskManager(self.market)
         broker.set_risk_manager(manager)
-        manager.update(RiskSettingsUpdate(
-            preset=RiskPreset.CUSTOM, max_order_amount=Decimal("1000000"),
-            max_symbol_amount=Decimal("1000000"), max_total_investment=Decimal("1000000"),
-            min_cash_ratio=Decimal("50"), daily_loss_limit=Decimal("1000000"),
-            daily_order_limit=1, profit_target=Decimal("1000000")))
-        first = broker.submit(OrderRequest(symbol="005930", side="BUY", quantity=1))
-        second = broker.submit(OrderRequest(symbol="005930", side="BUY", quantity=1))
+        manager.update(RiskSettingsUpdate(                     # saved limits (LIVE preview) that would reject everything
+            preset=RiskPreset.CUSTOM, max_order_amount=Decimal("1"), max_symbol_amount=Decimal("1"),
+            max_total_investment=Decimal("1"), min_cash_ratio=Decimal("99"), daily_loss_limit=Decimal("1"),
+            daily_order_limit=1, profit_target=Decimal("1")))
+        manager.auto_limits = AutoLimits(max_total_investment=Decimal("150000"))
+        first = broker.submit(OrderRequest(symbol="005930", side="BUY", quantity=1), source="STRATEGY")
+        second = broker.submit(OrderRequest(symbol="005930", side="BUY", quantity=1), source="STRATEGY")
+        third = broker.submit(OrderRequest(symbol="005930", side="BUY", quantity=1), source="STRATEGY")
         self.assertEqual(first.status.value, "FILLED")
         self.assertEqual(second.status.value, "FILLED")
-        manager.update(RiskSettingsUpdate(
-            preset=RiskPreset.CUSTOM, max_order_amount=Decimal("1"),
-            max_symbol_amount=Decimal("1000000"), max_total_investment=Decimal("1000000"),
-            min_cash_ratio=Decimal("50"), daily_loss_limit=Decimal("1000000"),
-            daily_order_limit=100, profit_target=Decimal("1000000")))
-        rejected = broker.submit(OrderRequest(symbol="005930", side="BUY", quantity=1))
-        self.assertEqual(rejected.status.value, "REJECTED")
-        self.assertIn("1회 최대 주문 금액", rejected.message)
+        self.assertEqual(third.status.value, "REJECTED")            # operating amount (150,000) used up
+        self.assertIn("운용 금액", third.message)
 
     def test_risk_blocks_buy_but_allows_sell(self):
         self.buy()
@@ -203,7 +195,7 @@ class PaperMemoryTests(unittest.TestCase):
             preset=RiskPreset.CUSTOM, max_order_amount=Decimal("1"), max_symbol_amount=Decimal("1"),
             max_total_investment=Decimal("1"), min_cash_ratio=Decimal("100"),
             daily_loss_limit=Decimal("1"), daily_order_limit=1, profit_target=Decimal("1")))
-        rejected = self.broker.submit(OrderRequest(symbol="005930", side="BUY", quantity=1))
+        rejected = self.broker.submit(OrderRequest(symbol="005930", side="BUY", quantity=1), source="STRATEGY")
         sold = self.broker.submit(OrderRequest(symbol="005930", side="SELL", quantity=1))
         self.assertEqual(rejected.status.value, "REJECTED")
         self.assertEqual(sold.status.value, "FILLED")

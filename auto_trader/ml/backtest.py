@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 from ..database import connect
 from ..models import LiveStockCandle, Order, OrderRequest, OrderSide, OrderStatus, RiskPreset, RiskSettings, Stock
 from ..risk import PRESETS, RiskManager
+from ..risk_policy import RiskPolicy
 from ..paper import PaperBroker
 from ..settings import settings
 from ..simulator import MarketSimulator
@@ -58,6 +59,25 @@ class ReplayRisk(RiskManager):
     def settings(self):
         return RiskSettings(account_id=0, preset=RiskPreset.DEFAULT, **PRESETS[RiskPreset.DEFAULT])
 
+    def check_buy(self, *, symbol, amount, fee, ignore_min_cash_ratio=False, ignore_daily_order_limit=False):
+        """Replays keep checking every order against the default saved limits, exactly as before PAPER-SIMPLIFY-01
+        (live PAPER no longer reads them; this research replay is the only remaining user of that rule set)."""
+        config = self.settings()
+        cash, invested, total_asset, daily_profit, orders = self._metrics()
+        reason = self.global_block_reason(config, daily_profit, orders, ignore_daily_order_limit=ignore_daily_order_limit)
+        if reason:
+            return reason
+        if not RiskPolicy.order_amount_allowed(config, amount, fee):
+            return "1회 최대 주문 금액을 초과했습니다."
+        if not RiskPolicy.symbol_amount_allowed(config, self.broker.position_value(symbol), amount):
+            return "종목별 최대 투자 금액을 초과했습니다."
+        if not RiskPolicy.total_investment_allowed(config, invested, amount):
+            return "전체 최대 투자 금액을 초과했습니다."
+        if (not ignore_min_cash_ratio and total_asset
+                and RiskPolicy.cash_ratio(cash - amount - fee, total_asset) < config.min_cash_ratio):
+            return "최소 현금 보유 비율 아래로 내려갑니다."
+        return None
+
     def _metrics(self):
         today = self.clock().astimezone(KST).date()
         if self._baseline_date != today:
@@ -71,6 +91,8 @@ class ReplayRisk(RiskManager):
 
 class ReplayBroker(PaperBroker):
     """Never initialize persisted accounts or write audit history."""
+    manual_orders_unlimited = False  # replays keep checking every order, exactly as before
+
     def initialize(self):
         raise RuntimeError('Backtest accounts must remain in memory')
 

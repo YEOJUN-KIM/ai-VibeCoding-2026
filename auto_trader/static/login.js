@@ -67,7 +67,7 @@ form.addEventListener("submit", async (event) => {
     let destination = "/live";
     try {
       const connection = await fetch("/live/orders/real/readiness", {cache: "no-store"});
-      if (connection.ok && !(await connection.json()).configured) destination = "/settings#account";
+      if (connection.ok && !(await connection.json()).configured) destination = "/live#account";
     } catch { /* A successful login remains usable if the status check fails. */ }
     window.location.replace(destination);
   } catch (error) {

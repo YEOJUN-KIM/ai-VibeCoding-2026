@@ -21,7 +21,7 @@ from ..models import (
     StrategySnapshot,
     StrategyStatus,
 )
-from ..paper import PaperBroker
+from ..paper import EmergencyLatchError, PaperBroker
 from ..simulator import MarketSimulator
 from ..paper_feed import PaperPriceFeed
 from ..toss import TossApiError
@@ -49,7 +49,17 @@ class TradingEngine:
         candidate_recorder: Callable[[dict], None] | None = None,
         market_hours_provider: Callable[[datetime], dict] | None = None,
         strategy: TradingStrategy | None = None,
+        candidate_provider: Callable[[datetime], list[str]] | None = None,
     ) -> None:
+        # PAPER-MVP-01: when set, entries are limited to the symbols it returns for each poll. An empty
+        # list means "no new entries" (never "all market symbols"); holdings keep their exit monitoring.
+        self.candidate_provider = candidate_provider
+        self.candidate_message = ''
+        # PAPER-SAFETY-01: legacy strategies count buys AND sells against the daily order limit; the MVP counts buys only
+        # (a sell is a required exit and must never use up, or be blocked by, the buy allowance).
+        self.count_sells_in_daily_limit = True
+        self.start_block = None  # a reason why no new run may start (e.g. shared parameters could not be restored)
+        self.run_release = None  # optional callable run once when the run loop ends (restores shared settings)
         self.strategy = strategy if strategy is not None else MovingAverageStrategy()
         self.market = market
         self.broker = broker
@@ -164,8 +174,37 @@ class TradingEngine:
                 "Could not enqueue ML strategy decision for %s", snapshot.symbol
             )
 
-    async def start(self) -> bool:
+    PARAMETER_FIELDS = ("interval_seconds", "short_period", "long_period", "order_quantity", "target_symbols",
+                        "take_profit_rate", "stop_loss_rate", "max_holding_days", "trading_start", "trading_end",
+                        "cooldown_minutes", "daily_order_limit", "sizing_mode", "order_amount", "strategy_id", "strategy_name")
+
+    def capture_parameters(self) -> dict:
+        """Everything configure() sets that a later run depends on, plus the context new lots are stamped with."""
+        snapshot = {name: (list(value) if isinstance(value, list) else value)
+                    for name in self.PARAMETER_FIELDS for value in [getattr(self, name)]}
+        snapshot["_context"] = self.broker.strategy_context()
+        return snapshot
+
+    def restore_parameters(self, snapshot: dict) -> None:
+        """Put captured parameters back WITHOUT touching storage (no baseline reset, cooldowns and counters stay): it cannot
+        fail half-way on a database error, and it validates before assigning anything."""
         if self.running:
+            raise ValueError("자동매매가 실행 중에는 설정을 복원할 수 없습니다.")
+        missing = [name for name in (*self.PARAMETER_FIELDS, "_context") if name not in snapshot]
+        if missing:
+            raise ValueError(f"복원할 설정이 불완전합니다: {missing}")
+        for name in self.PARAMETER_FIELDS:
+            setattr(self, name, list(snapshot[name]) if isinstance(snapshot[name], list) else snapshot[name])
+        self.broker.set_strategy_context(snapshot["_context"])
+        self._history = {stock.symbol: deque(maxlen=self.long_period) for stock in self.market.stocks()}
+        self._previous_trend.clear()
+        self._snapshots.clear()
+
+    async def start(self) -> bool:
+        if self.running or self.start_block:
+            return False
+        if self.broker.emergency_active():       # PAPER-SAFETY-EMERGENCY-01: only an explicit reset clears the latch, never a start
+            self.emergency_stopped = True
             return False
         self.emergency_stopped = False
         self.running = True
@@ -185,14 +224,27 @@ class TradingEngine:
     async def stop(self, *, emergency: bool = False) -> bool:
         was_running = self.running
         self.running = False
-        self.emergency_stopped = emergency
-        if self._task and self._task is not asyncio.current_task():
-            self._task.cancel()
+        latch_error = None
+        if emergency:
+            # Latch BEFORE cancelling: from here on the broker refuses every automatic order (same lock as submit).
+            self.emergency_stopped = True
             try:
-                await self._task
+                self.broker.latch_emergency(self._clock())
+            except EmergencyLatchError as exc:
+                latch_error = exc                # still stop below, then report the failure
+        # An ordinary stop never downgrades an emergency stop; only an explicit reset does.
+        self.emergency_stopped = self.emergency_stopped or self.broker.emergency_active()
+        task = self._task
+        if task and task is not asyncio.current_task():
+            task.cancel()
+            try:
+                await task
             except asyncio.CancelledError:
                 pass
-        self._task = None
+        if self._task is task:
+            self._task = None
+        if not self.running:
+            self._release_run()       # a task cancelled before its first iteration never reaches its own `finally`
         if was_running:
             try:
                 self.broker._journal({"event": "STRATEGY_STOP", "run_id": self.broker.run_id,
@@ -200,7 +252,19 @@ class TradingEngine:
                                       "emergency": emergency, "ticks": self.tick_count})
             except OSError:
                 logging.getLogger("auto_trader.strategy").exception("Could not write paper strategy stop event")
+        if latch_error is not None:
+            raise latch_error
         return was_running
+
+    def _release_run(self) -> None:
+        release, self.run_release = self.run_release, None
+        if release is not None:
+            try:
+                release()
+            except Exception:
+                logging.getLogger("auto_trader.strategy").exception("Could not restore shared settings after the run")
+                self.start_block = "실행 종료 후 공유 설정을 복원하지 못해 새 자동매매를 시작할 수 없습니다."
+
 
     async def _run(self) -> None:
         try:
@@ -216,7 +280,13 @@ class TradingEngine:
             self.data_message = "실행 오류로 중지됨: 서버 로그와 주문 기록을 확인하세요."
             logging.getLogger("auto_trader.strategy").exception("Paper strategy stopped")
         finally:
-            self.running = False
+            # A newer start() may already own the engine while this (cancelled) task unwinds: leave its state alone.
+            superseded = self._task is not None and self._task is not asyncio.current_task()
+            if not superseded:
+                self.running = False
+                self.candidate_provider = None  # PAPER-MVP binding lasts one run; legacy strategy runs are unaffected
+            if not superseded:
+                self._release_run()
 
     async def poll_market(self) -> None:
         if self.market_hours_provider:
@@ -234,7 +304,19 @@ class TradingEngine:
             }.get(self._operating_state(), '운영 시간 외 대기 · 실제 시세 기반 모의매매')
             return
         now = self._clock()
-        symbols = list(dict.fromkeys((self.target_symbols or [stock.symbol for stock in self.market.stocks()]) + [lot["symbol"] for lot in self.broker.managed_lots()]))
+        if self.candidate_provider is not None:
+            try:
+                self.target_symbols = list(dict.fromkeys(self.candidate_provider(now)))
+            except Exception:
+                logging.getLogger("auto_trader.strategy").exception("Candidate provider failed; no new entries")
+                self.target_symbols = []
+        fallback = [] if self.candidate_provider is not None else [stock.symbol for stock in self.market.stocks()]
+        symbols = list(dict.fromkeys((self.target_symbols or fallback) + [lot["symbol"] for lot in self.broker.managed_lots()]))
+        if not symbols:
+            self.data_message = self.candidate_message or "신규 후보 없음 · 현금 유지"
+            self.last_decision_at = self._clock()
+            await self._refresh_valuation_only(now)
+            return
         valuation_symbols = [p.symbol for p in self.broker.account().positions]
         try:
             prices, candles = await asyncio.to_thread(
@@ -280,6 +362,29 @@ class TradingEngine:
             return
         self.step(candles=candles)
 
+    async def _refresh_valuation_only(self, now) -> None:
+        """No candidate and no managed lot: nothing may be judged or ordered, but held (unmanaged) positions must still be
+        valued from a fresh, valid quote. Reads only the held symbols (never all stocks); on any failure the old price stays."""
+        held = [p.symbol for p in self.broker.account().positions]
+        if not held or self.price_feed is None:
+            return
+        try:
+            prices, _ = await asyncio.to_thread(self.price_feed.read, [], held, self.long_period, now)
+        except Exception:
+            logging.getLogger("auto_trader.strategy").warning("Paper valuation prices unavailable", exc_info=True)
+            return
+        requested_at = getattr(self.price_feed, "prices_requested_at", None)
+        if not isinstance(requested_at, datetime):
+            requested_at = now
+        if not self._within_hours() or self._clock() - requested_at > timedelta(seconds=30):
+            return
+        for symbol, price in prices.items():
+            if symbol in held and self.market.has_symbol(symbol) and price.is_finite() and price > 0:
+                stock = next(s for s in self.market.stocks() if s.symbol == symbol)
+                self.market.upsert_stock(stock, price)
+        if prices:
+            self.last_data_at = self._clock()
+
     def step(self, *, candles=None) -> None:
         if self.price_feed is not None and candles is None:
             raise ValueError("실제 시세 모드에는 최신 봉 데이터가 필요합니다.")
@@ -289,11 +394,12 @@ class TradingEngine:
         self._candidate_invocation_sequence += 1
         exited = self._manage_exits(candles)
         quotes = ([self.market.quote(symbol, move=candles is None) for symbol in self.target_symbols]
-                  if self.target_symbols else self.market.quotes(move=candles is None))
+                  if self.target_symbols or self.candidate_provider is not None
+                  else self.market.quotes(move=candles is None))
         for quote in quotes:
             if candles is not None and quote.symbol not in candles:
                 continue
-            history = self._history[quote.symbol]
+            history = self._history.setdefault(quote.symbol, deque(maxlen=self.long_period))
             new_bar = True
             previous_bar = self._last_bar_at.get(quote.symbol)
             state_reset = False
@@ -427,6 +533,9 @@ class TradingEngine:
     def _buy(self, symbol: str, price: Decimal, *,
              reason: str = "상향 교차 후 2봉 확인 · 가격 추세 확인") -> bool:
         self._last_buy_block_reason.pop(symbol, None)
+        if self.broker.emergency_active():
+            self._last_buy_block_reason[symbol] = "긴급정지 상태입니다."
+            return False
         if not self._can_order(symbol):
             self._last_buy_block_reason[symbol] = self._entry_block_reason(symbol) or "주문 가능 시간을 확인하세요."
             return False
@@ -459,7 +568,7 @@ class TradingEngine:
         return False
 
     def _sell(self, symbol: str, reason: str, *, lot_id=None) -> bool:
-        if not self._within_hours():
+        if self.broker.emergency_active() or not self._within_hours():
             return False
         quantity = next((lot["quantity"] for lot in self.broker.managed_lots() if lot["id"] == lot_id), 0) if lot_id else self.broker.strategy_quantity(symbol)
         if not quantity:
@@ -479,7 +588,8 @@ class TradingEngine:
             self._realized_profit += order.realized_profit or Decimal(0)
             trade_profit += order.realized_profit or Decimal(0)
             today = self._clock().astimezone(KST).date()
-            self._daily_orders[today] = self._daily_orders.get(today, 0) + 1
+            if self.count_sells_in_daily_limit:
+                self._daily_orders[today] = self._daily_orders.get(today, 0) + 1
             self._last_order_at[symbol] = self._clock()
             quantity = next((lot["quantity"] for lot in self.broker.managed_lots() if lot["id"] == lot_id), 0) if lot_id else self.broker.strategy_quantity(symbol)
             if not quantity:
@@ -650,7 +760,7 @@ class TradingEngine:
         strategy_basis = self._strategy_baseline_value + self._strategy_buy_amount + self.broker._management_external_flow
         return StrategyStatus(
             running=self.running,
-            emergency_stopped=self.emergency_stopped,
+            emergency_stopped=self.emergency_stopped or self.broker.emergency_active(),
             tick_count=self.tick_count,
             interval_seconds=self.interval_seconds,
             short_period=self.short_period,

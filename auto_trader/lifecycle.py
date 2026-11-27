@@ -22,6 +22,9 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     stock_directory_warm_task: asyncio.Task | None = None
+    virtual_time_task: asyncio.Task | None = None
+    from . import paper_mvp_isolated
+    paper_mvp_isolated.assert_safe()        # a requested isolated run that is not provably isolated never starts
     long_term_candidate_task: asyncio.Task | None = None
     initialize()
     owner = initialize_ownership()
@@ -83,9 +86,14 @@ async def lifespan(application: FastAPI):
         await runtime.ml_collection_worker.start()
         await runtime.ml_quality_worker.start()
         await runtime.ml_macro_worker.start()
+    if paper_mvp_isolated.active():
+        virtual_time_task = paper_mvp_isolated.start_virtual_time(
+            lambda: _all_engines(runtime))
     try:
         yield
     finally:
+        if virtual_time_task is not None:
+            virtual_time_task.cancel()
         if stock_directory_warm_task is not None and not stock_directory_warm_task.done():
             stock_directory_warm_task.cancel()
         if long_term_candidate_task is not None and not long_term_candidate_task.done():
@@ -100,3 +108,14 @@ async def lifespan(application: FastAPI):
         await runtime.ml_candidate_recorder.stop()
         await runtime.ml_decision_recorder.stop()
         await asyncio.gather(*(state.quote_stream.close() for state in list(runtime.workspaces.items.values()) or [runtime.legacy_workspace]))
+
+
+def _all_engines(runtime) -> list:
+    """Every engine of every user workspace and paper session (isolated verification clock): one virtual clock is shared,
+    so it must advance while ANY of them runs, not only the engine of the user who happens to be current."""
+    states = [runtime.legacy_workspace, *list(runtime.workspaces.items.values())]
+    engines = []
+    for state in states:
+        engines.append(state.engine)
+        engines.extend(session[1] for session in state.sessions.values())
+    return engines

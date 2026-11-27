@@ -7,6 +7,9 @@
     $('#etf-page').textContent = `${page} / ${pages}`;
     $('#etf-prev').disabled = page <= 1;
     $('#etf-next').disabled = page >= pages;
+    $('#etf-first').disabled = page <= 1;
+    $('#etf-last').disabled = page >= pages;
+    FolioPagination.directory('etf', page, pages, to => { page = to; load(true); });
   }
   async function load(force = false) {
     if ((loaded || loading) && !force) return;
@@ -18,6 +21,7 @@
     $('#etf-body').innerHTML='<tr><td colspan="6" class="empty">ETF를 찾고 있습니다.</td></tr>';
     $('#etf-state').textContent = 'ETF를 불러오는 중입니다.';
     $('#etf-prev').disabled = $('#etf-next').disabled = true;
+    FolioPagination.busy('etf');
     $('#etf-body').setAttribute('aria-busy','true');
     try {
       const query = new URLSearchParams({security_type:'ETF',page:String(page),page_size:'10',q:$('#etf-query').value.trim(),sort:$('#etf-sort').value});
@@ -38,6 +42,7 @@
     $('#etf-body').removeAttribute('aria-busy');
     $('#etf-state').textContent='검색어 변경됨 · 검색 대기';
     $('#etf-prev').disabled=$('#etf-next').disabled=true;
+    FolioPagination.busy('etf');
   });
   window.loadEtfs = load;
   $('#etf-search-form').addEventListener('submit',event=>{event.preventDefault();page=1;load(true);});
@@ -47,6 +52,8 @@
   }));
   $('#etf-prev').addEventListener('click',()=>{page=Math.max(1,page-1);load(true);});
   $('#etf-next').addEventListener('click',()=>{page=Math.min(pages,page+1);load(true);});
+  $('#etf-first').addEventListener('click',()=>{page=1;load(true);});
+  $('#etf-last').addEventListener('click',()=>{page=pages;load(true);});
   const dialog=document.createElement('dialog');
   dialog.className='research-dialog';dialog.setAttribute('aria-labelledby','etf-detail-title');
   dialog.innerHTML='<div class="research-popup-header"><div><p class="section-kicker">FOLIO · ETF</p><h2 id="etf-detail-title">ETF 가격 흐름</h2></div><button class="button secondary" data-etf-close>닫기 ×</button></div><div data-etf-content></div><div class="research-popup-actions"><p>총보수·분배금·편입자산은 운용사 자료에서 확인하세요.</p><a class="button primary" data-etf-chart>차트·주문 보기</a></div>';

@@ -82,6 +82,7 @@ function renderMyCandidates(items) {
   $("#my-watch-page").textContent = `${myPage} / ${pages}`;
   for (const id of ["first", "prev"]) $("#my-watch-" + id).disabled = myPage === 1;
   for (const id of ["next", "last"]) $("#my-watch-" + id).disabled = myPage === pages;
+  FolioPagination.directory('my-watch', myPage, pages, page => { myPage = page; renderMyCandidates(myCandidates); });
 }
 
 async function loadMyCandidates() {

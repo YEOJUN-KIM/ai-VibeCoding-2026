@@ -6,10 +6,11 @@ from datetime import date
 from fastapi import Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from ..auth import AuthenticatedUser, require_csrf, require_user
-from ..models import Account, Order, OrderRequest, PaperWorkspaceStatus, PaperManagementUpdate, Quote, RiskSettings, RiskSettingsUpdate, RiskStatus, Stock, StrategySettingsUpdate, StrategyStatus
+from ..models import Account, Order, OrderRequest, PaperWorkspaceStatus, PaperManagementUpdate, Quote, Stock, StrategyStatus
 from ..decision_history import read_decision_history
 from fastapi import APIRouter
 from .. import runtime
+from ..paper import EmergencyLatchError
 router = APIRouter()
 
 
@@ -56,13 +57,6 @@ async def snapshot_live_account(_: AuthenticatedUser = Depends(require_csrf)) ->
     return await paper_workspace_service.snapshot_live_account(_)
 
 
-@router.post("/paper/strategies/{strategy_id}/select", response_model=PaperWorkspaceStatus)
-async def select_paper_strategy(
-    strategy_id: int, user: AuthenticatedUser = Depends(require_csrf),
-) -> PaperWorkspaceStatus:
-    return await paper_workspace_service.select_paper_strategy(strategy_id, user)
-
-
 @router.get("/quotes", response_model=list[Quote])
 def quotes(move: bool = False, _: AuthenticatedUser = Depends(require_user)) -> list[Quote]:
     if move:
@@ -85,23 +79,6 @@ def account(_: AuthenticatedUser = Depends(require_user)) -> Account:
 @router.get("/orders", response_model=list[Order])
 def orders(_: AuthenticatedUser = Depends(require_user)) -> list[Order]:
     return runtime.broker.orders()
-
-
-@router.get("/risk", response_model=RiskStatus)
-def risk_status(_: AuthenticatedUser = Depends(require_user)) -> RiskStatus:
-    return runtime.broker.risk_manager.status()
-
-
-@router.put("/risk/settings", response_model=RiskSettings)
-def update_risk_settings(
-    payload: RiskSettingsUpdate, _: AuthenticatedUser = Depends(require_csrf)
-) -> RiskSettings:
-    if runtime.engine.running:
-        raise HTTPException(status_code=409, detail="자동매매를 중지한 뒤 한도를 변경하세요.")
-    try:
-        return runtime.broker.risk_manager.update(payload)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.delete("/paper/reset", response_model=Account)
@@ -130,31 +107,6 @@ def strategy_status(_: AuthenticatedUser = Depends(require_user)) -> StrategySta
     return runtime.engine.status()
 
 
-@router.put("/strategy/settings", response_model=StrategyStatus)
-def strategy_settings(
-    payload: StrategySettingsUpdate, _: AuthenticatedUser = Depends(require_csrf)
-) -> StrategyStatus:
-    try:
-        runtime.engine.configure(interval_seconds=payload.interval_seconds,
-                         short_period=payload.short_period,
-                         long_period=payload.long_period,
-                         order_quantity=payload.order_quantity)
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return runtime.engine.status()
-
-
-@router.post("/strategy/start", response_model=StrategyStatus)
-@runtime._serialize_paper_change
-async def strategy_start(_: AuthenticatedUser = Depends(require_csrf)) -> StrategyStatus:
-    if runtime.paper_state().snapshot_at is None:
-        raise HTTPException(status_code=409, detail="먼저 현재 실제 자산을 모의계좌에 복사하세요.")
-    if runtime.paper_state().selected_strategy is None:
-        raise HTTPException(status_code=409, detail="검증할 저장 전략을 먼저 선택하세요.")
-    await runtime.engine.start()
-    return runtime.engine.status()
-
-
 @router.post("/strategy/stop", response_model=StrategyStatus)
 @runtime._serialize_paper_change
 async def strategy_stop(_: AuthenticatedUser = Depends(require_csrf)) -> StrategyStatus:
@@ -165,5 +117,8 @@ async def strategy_stop(_: AuthenticatedUser = Depends(require_csrf)) -> Strateg
 @router.post("/strategy/emergency-stop", response_model=StrategyStatus)
 @runtime._serialize_paper_change
 async def strategy_emergency_stop(_: AuthenticatedUser = Depends(require_csrf)) -> StrategyStatus:
-    await runtime.engine.stop(emergency=True)
+    try:
+        await runtime.engine.stop(emergency=True)
+    except EmergencyLatchError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     return runtime.engine.status()

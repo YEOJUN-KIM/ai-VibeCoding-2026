@@ -1,0 +1,98 @@
+{
+ "elapsed_s": 3,
+ "account": {
+  "total_asset": "10154014.9000",
+  "cash": "10154014.9000",
+  "initial_cash": "10000000",
+  "holdings_value": "0",
+  "total_profit": "154014.9000",
+  "return_percent": "1.54014900",
+  "realized_profit": "154014.9000",
+  "unrealized_profit": "0",
+  "total_fees": "1509"
+ },
+ "trades": [
+  {
+   "id": 4,
+   "symbol": "100001",
+   "side": "SELL",
+   "status": "FILLED",
+   "quantity": 48,
+   "price": "56771.6000",
+   "fee": "408",
+   "tax": "5450",
+   "realized": "259982.000000000000000000000",
+   "reason": "PAPER-MVP Scout · 익절률 도달",
+   "message": "가상 체결 완료",
+   "at": "2026-11-20T09:39:40.673044+09:00",
+   "source": "STRATEGY"
+  },
+  {
+   "id": 3,
+   "symbol": "100002",
+   "side": "SELL",
+   "status": "FILLED",
+   "quantity": 49,
+   "price": "48875.5500",
+   "fee": "359",
+   "tax": "4789",
+   "realized": "-105967.100000000000000000000",
+   "reason": "PAPER-MVP Scout · 이동평균 하향 교차",
+   "message": "가상 체결 완료",
+   "at": "2026-11-20T09:39:36.576804+09:00",
+   "source": "STRATEGY"
+  },
+  {
+   "id": 2,
+   "symbol": "100002",
+   "side": "BUY",
+   "status": "FILLED",
+   "quantity": 49,
+   "price": "50925.4500",
+   "fee": "374",
+   "tax": "0",
+   "realized": null,
+   "reason": "상향 교차 후 2봉 확인 · 가격 추세 확인",
+   "message": "가상 체결 완료",
+   "at": "2026-11-20T09:39:26.388481+09:00",
+   "source": "STRATEGY"
+  },
+  {
+   "id": 1,
+   "symbol": "100001",
+   "side": "BUY",
+   "status": "FILLED",
+   "quantity": 48,
+   "price": "51225.6000",
+   "fee": "368",
+   "tax": "0",
+   "realized": null,
+   "reason": "상향 교차 후 2봉 확인 · 가격 추세 확인",
+   "message": "가상 체결 완료",
+   "at": "2026-11-20T09:39:26.371727+09:00",
+   "source": "STRATEGY"
+  }
+ ],
+ "run": {
+  "state": "stopped",
+  "label": "일시정지",
+  "running": false,
+  "message": "실제 현재가 · 완료된 1분봉 · 모의 체결",
+  "operating_state": "OPEN",
+  "tick_count": 1,
+  "exit_monitoring": false,
+  "blocked_reason": null,
+  "held_symbols": [],
+  "stop_note": "정지하면 신규 매수·매도 판단과 보유분의 손절·익절 감시가 모두 멈춥니다. 보유 주식은 자동 매도되지 않고 그대로 남습니다. 현재 청산 감시는 꺼져 있습니다."
+ },
+ "risk": {
+  "new_buys_allowed": true,
+  "block_reason": null,
+  "daily_profit": "154014.900000000000000000000",
+  "invested_amount": "0",
+  "max_total_investment": "5000000",
+  "max_symbol_amount": "2538503",
+  "daily_loss_limit": "203080",
+  "scope": "자동매매 보유분·손익 기준(수동 주문에는 적용되지 않음)"
+ }
+}

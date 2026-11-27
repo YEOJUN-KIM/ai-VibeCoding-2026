@@ -20,6 +20,8 @@ def persisted(method):
     @wraps(method)
     def wrapped(self, *args, **kwargs):
         with self._lock:
+            if self._pending_journal is not None:      # already inside a persisted mutation: the outer call commits or rolls back
+                return method(self, *args, **kwargs)
             before = {key: deepcopy(value) for key, value in self.__dict__.items()
                       if key.startswith('_') and key not in {'_lock', '_pending_journal'}}
             initial_cash, metadata, run_id = self.initial_cash, deepcopy(self.snapshot_metadata), self.run_id
@@ -46,7 +48,14 @@ def persisted(method):
     return wrapped
 
 
+class EmergencyLatchError(RuntimeError):
+    """The emergency-stop latch could not be saved. Automatic trading is already stopped and blocked in memory, but the
+    block may not survive a server restart; the caller must report failure, never success."""
+
+
 class PaperBroker:
+    manual_orders_unlimited = True  # PAPER-SETTINGS-01: investment limits apply to automatic orders only
+
     def __init__(self, market: MarketSimulator, initial_cash=Decimal("10000000"),
                  account_name="paper-default", fee_rate=Decimal("0"),
                  sell_tax_rate=Decimal("0"), ignore_min_cash_ratio=False,
@@ -78,6 +87,12 @@ class PaperBroker:
         self._management_symbols = []
         self._management_external_flow = Decimal(0)
         self._pending_journal = None
+        self.clock = None  # optional () -> aware datetime; order timestamps follow it (production: real time)
+        self._mvp = {}  # PAPER-MVP-01 settings and decision log; survives restart, never touches cash/positions
+        # PAPER-SAFETY-EMERGENCY-01: durable emergency-stop latch of THIS paper account (None = normal). Kept outside `_mvp`
+        # and outside `_reset_memory`, so practice reset / snapshot copy / settings saves can never clear it.
+        self._emergency = None
+        self.emergency_unsaved = False  # public on purpose: survives the rollback of a failed save (fail closed in memory)
         self._lock = RLock()
         self._seed_cash = self.initial_cash
         self._seed_positions: dict[str, dict[str, Decimal | int]] = {}
@@ -130,7 +145,7 @@ class PaperBroker:
                     orders=[order.model_dump(mode='json') for order in self._orders],
                     requests={key: order.id for key, order in self._requests.items()},
                     next_order_id=self._next_order_id, fees=str(self._total_fees), taxes=str(self._total_taxes),
-                    metadata=self.snapshot_metadata, management_scope=self._management_scope,
+                    mvp=self._mvp, emergency=self._emergency, metadata=self.snapshot_metadata, management_scope=self._management_scope,
                     auto_lots=self._auto_lots, last_strategy_selection=self._last_strategy_selection,
                     stocks={symbol: {'stock': stocks[symbol].model_dump(mode='json'),
                                      'price': str(self.market.quote(symbol).price)} for symbol in symbols})
@@ -165,6 +180,8 @@ class PaperBroker:
         self._next_order_id = state['next_order_id']
         self._total_fees, self._total_taxes = Decimal(state['fees']), Decimal(state['taxes'])
         self.snapshot_metadata = state.get('metadata', {})
+        self._mvp = state.get('mvp', {})
+        self._emergency = state.get('emergency')
         self._last_strategy_selection = state.get("last_strategy_selection", {})
         # Execution remains stopped; ownership and exit rules survive restart.
         self._management_scope = state.get("management_scope", "AUTO")
@@ -271,6 +288,60 @@ class PaperBroker:
         with self._lock:
             return self._strategy_positions.get(symbol, {}).get("average_price")
 
+    def now(self) -> datetime:
+        return self.clock() if self.clock else datetime.now().astimezone()
+
+    def strategy_context(self) -> dict:
+        with self._lock:
+            return deepcopy(self._strategy_context)
+
+    def set_strategy_context(self, context: dict) -> None:
+        """In-memory only (like begin_strategy's context, which is not persisted by itself): the context new lots are stamped with."""
+        with self._lock:
+            self._strategy_context = deepcopy(context or {})
+
+    def strategy_symbol_value(self, symbol: str) -> Decimal:
+        with self._lock:
+            return self.market.quote(symbol).price * int(self._strategy_positions.get(symbol, {}).get("quantity", 0))
+
+    def strategy_unrealized(self) -> Decimal:
+        """Market value minus cost of the automatic (strategy-owned) holdings only."""
+        with self._lock:
+            # Net of the estimated exit costs (sell fee, tax, slippage) so the loss limit is not optimistic.
+            return sum((self.exit_proceeds(s, p["quantity"], self.market.quote(s).price) - p["average_price"] * p["quantity"]
+                        for s, p in self._strategy_positions.items()), Decimal(0))
+
+    # ---- automatic-run risk book (PAPER-SAFETY-FIX). Built from the persisted AUTO lots (plus lots adopted into the current
+    # management), NOT from the run-scoped `_strategy_positions`, which is empty after a restart until a run starts. Carried
+    # automatic holdings therefore count for the operating amount at every moment.
+    def _risk_lots(self) -> list[dict]:
+        seen, lots = set(), []
+        for lot in list(self._auto_lots) + list(self._managed_lots):
+            if lot['id'] not in seen and lot['quantity']:
+                seen.add(lot['id'])
+                lots.append(lot)
+        return lots
+
+    def risk_holdings(self) -> dict[str, int]:
+        with self._lock:
+            book: dict[str, int] = {}
+            for lot in self._risk_lots():
+                book[lot['symbol']] = book.get(lot['symbol'], 0) + int(lot['quantity'])
+            return book
+
+    def risk_symbols(self) -> list[str]:
+        return list(self.risk_holdings())
+
+    def risk_symbol_value(self, symbol: str) -> Decimal:
+        return self.market.quote(symbol).price * self.risk_holdings().get(symbol, 0)
+
+    def risk_value(self) -> Decimal:
+        return sum((self.risk_symbol_value(s) for s in self.risk_holdings()), Decimal(0))
+
+    def strategy_symbols(self) -> list[str]:
+        with self._lock:
+            return [s for s, p in self._strategy_positions.items() if p["quantity"]]
+
     def strategy_value(self) -> Decimal:
         with self._lock:
             return sum((self.market.quote(s).price * p["quantity"]
@@ -285,6 +356,8 @@ class PaperBroker:
     def submit(self, request: OrderRequest, *, signal_id=None, source="MANUAL", reason="", lot_id=None, acquired_at=None) -> Order:
         request_id = request.request_id or str(uuid4())
         with self._lock:
+            if source != "MANUAL" and self.emergency_active():   # automatic orders only; manual orders keep their own checks
+                raise ValueError("긴급정지 상태에서는 자동 주문을 낼 수 없습니다.")
             prior = self._requests.get(request_id)
             if prior:
                 if (prior.symbol, prior.side, prior.quantity, prior.source) != (request.symbol, request.side, request.quantity, source):
@@ -301,10 +374,13 @@ class PaperBroker:
             tax = ((amount * self.sell_tax_rate).quantize(Decimal("1"), rounding=ROUND_DOWN)
                    if request.side == OrderSide.SELL else Decimal(0))
             status, message = OrderStatus.FILLED, "가상 체결 완료"
+            # Investment limits belong to automatic trading. A manual PAPER order only meets the basic checks below
+            # (cash, holdings, validity); replay accounts keep checking every order.
+            limited = source != "MANUAL" or not self.manual_orders_unlimited
             risk_message = (self.risk_manager.check_buy(symbol=request.symbol, amount=amount, fee=fee,
                             ignore_min_cash_ratio=self.ignore_min_cash_ratio,
                             ignore_daily_order_limit=self.ignore_daily_order_limit)
-                            if request.side == OrderSide.BUY and self.risk_manager else None)
+                            if request.side == OrderSide.BUY and self.risk_manager and limited else None)
             if risk_message:
                 status, message = OrderStatus.REJECTED, "위험 한도: " + risk_message
             elif request.side == OrderSide.BUY and amount + fee > self._cash:
@@ -319,11 +395,14 @@ class PaperBroker:
             if lot_id and (selected_lot is None or request.quantity > selected_lot['quantity']):
                 status, message = OrderStatus.REJECTED, '관리 보유분 수량을 확인하세요.'
             strategy_average = Decimal(selected_lot['average_price']) if selected_lot else self.strategy_average(request.symbol) or Decimal(0)
-            realized = (amount - fee - tax - (strategy_average if source == "STRATEGY" else average) * request.quantity
+            sell_cost = Decimal(0)
+            if request.side == OrderSide.SELL and status == OrderStatus.FILLED:
+                sell_cost = self._sale_cost_per_share(request.symbol, request.quantity, source, selected_lot, quantity, average)
+            realized = (amount - fee - tax - sell_cost * request.quantity
                         if request.side == OrderSide.SELL and status == OrderStatus.FILLED else None)
             order = Order(id=self._next_order_id, symbol=request.symbol, side=request.side,
                           quantity=request.quantity, price=execution_price, status=status,
-                          message=message, created_at=datetime.now().astimezone(),
+                          message=message, created_at=self.now(),
                           source=source, run_id=self.run_id, reason=reason,
                           fee=fee if status == OrderStatus.FILLED else Decimal(0),
                           tax=tax if status == OrderStatus.FILLED else Decimal(0),
@@ -336,7 +415,13 @@ class PaperBroker:
             if status == OrderStatus.FILLED:
                 buying = request.side == OrderSide.BUY
                 remaining = quantity + request.quantity if buying else quantity - request.quantity
-                new_average = (average * quantity + amount + fee) / remaining if buying else average
+                if buying:
+                    new_average = (average * quantity + amount + fee) / remaining
+                elif remaining:
+                    # The cost that left through realized profit leaves the position too (exactly what the order booked).
+                    new_average = (average * quantity - sell_cost * request.quantity) / remaining
+                else:
+                    new_average = average
                 self._cash += -amount - fee if buying else amount - fee - tax
                 if remaining:
                     self._positions[request.symbol] = {"quantity": remaining, "average_price": new_average}
@@ -380,6 +465,41 @@ class PaperBroker:
                 self._sync_allocations()
             return order
 
+    def _sale_cost_per_share(self, symbol, sold, source, selected_lot, quantity, average) -> Decimal:
+        """Accounting cost per share of the shares being sold (call under the lock).
+        Only automatic (AUTO-origin) lots have an exact cost of their own. Every other share of the symbol (manual buys, snapshot
+        holdings, shares adopted into management at a reference price) shares the rest of the position's cost. This keeps the
+        cost that leaves through realized profit equal to the cost that leaves the position."""
+        auto = [lot for lot in self._auto_lots if lot['symbol'] == symbol and lot.get('origin') == 'AUTO']
+        auto_quantity = sum(lot['quantity'] for lot in auto)
+        pool_quantity = quantity - auto_quantity
+        total_cost = average * quantity
+        auto_cost = sum((Decimal(lot['average_price']) * lot['quantity'] for lot in auto), Decimal(0))
+        tolerance = max(Decimal(1), total_cost * Decimal("1e-9"))
+        # Recovery policy for ledgers saved by the earlier implementation (whose manual sales could leave the automatic lots'
+        # cost above the position's remaining cost): if the lot costs do not fit inside the position, they cannot be trusted
+        # to split it, so the sale is booked at the position's mixed average exactly as before. Never a negative cost.
+        if pool_quantity < 0 or auto_cost > total_cost + tolerance or (pool_quantity == 0 and abs(total_cost - auto_cost) > tolerance):
+            return average
+        pool = (total_cost - auto_cost) / pool_quantity if pool_quantity > 0 else average
+        auto_ids = {lot['id'] for lot in auto}
+        cost, remaining = Decimal(0), sold
+        if source == "STRATEGY":
+            candidates = [selected_lot] if selected_lot else [lot for lot in self._managed_lots if lot['symbol'] == symbol]
+        else:
+            take = min(remaining, max(0, pool_quantity))
+            cost, remaining = pool * take, remaining - take
+            managed_ids = {lot['id'] for lot in self._managed_lots}
+            candidates = [lot for lot in auto if lot['id'] not in managed_ids]
+        for lot in candidates:
+            take = min(remaining, lot['quantity'])
+            cost += take * (Decimal(lot['average_price']) if lot['id'] in auto_ids else pool)
+            remaining -= take
+            if not remaining:
+                break
+        cost += remaining * pool
+        return cost / sold
+
     def orders(self):
         with self._lock:
             return list(reversed(self._orders))
@@ -422,9 +542,63 @@ class PaperBroker:
                            total_fees=self._total_fees, total_taxes=self._total_taxes,
                            fee_rate=self.fee_rate, sell_tax_rate=self.sell_tax_rate)
 
+    def mvp_state(self):
+        with self._lock:
+            return deepcopy(self._mvp)
+
+    @persisted
+    def update_mvp(self, **fields):
+        self._mvp = {**self._mvp, **deepcopy(fields)}
+
+    def emergency_active(self) -> bool:
+        """True while automatic trading is latched stopped. Any non-empty stored value counts (fail closed)."""
+        with self._lock:
+            return bool(self.emergency_unsaved or self._emergency)
+
+    def emergency_info(self) -> dict | None:
+        with self._lock:
+            if not self.emergency_active():
+                return None
+            info = self._emergency if isinstance(self._emergency, dict) else {}
+            return dict(at=info.get("at"), unsaved=self.emergency_unsaved)
+
+    @persisted
+    def _store_emergency(self, value):
+        self._emergency = value
+
+    def latch_emergency(self, at: datetime) -> None:
+        """Set the durable latch (idempotent). The in-memory block is set first and under the broker lock, so no automatic
+        order can start after this returns; if saving fails the block stays in memory and EmergencyLatchError is raised."""
+        with self._lock:
+            already_saved = bool(self._emergency) and not self.emergency_unsaved
+            self.emergency_unsaved = True
+            if already_saved:
+                self.emergency_unsaved = False
+                return
+            try:
+                self._store_emergency(self._emergency if isinstance(self._emergency, dict) and self._emergency
+                                      else dict(at=at.isoformat(), source="PAPER-AUTO"))
+            except Exception as exc:
+                raise EmergencyLatchError("긴급정지를 저장하지 못했습니다. 자동매매는 정지되었고 이 서버에서는 다시 시작되지 않지만, 서버 재시작 후에는 유지되지 않을 수 있습니다. 다시 긴급정지를 실행하세요.") from exc
+            self.emergency_unsaved = False
+
+    def release_emergency(self) -> None:
+        """Explicit reset only. Raises (and stays latched) when the cleared state cannot be saved."""
+        with self._lock:
+            if self.emergency_unsaved:      # the stop was never saved: it must be saved (retry) before it can be released
+                raise EmergencyLatchError("긴급정지가 아직 저장되지 않았습니다. 긴급정지 상태가 유지됩니다.")
+            previous = self._emergency
+            try:
+                self._store_emergency(None)
+            except Exception as exc:
+                self._emergency = previous
+                raise EmergencyLatchError("긴급정지 해제를 저장하지 못했습니다. 긴급정지 상태가 유지됩니다.") from exc
+            self.emergency_unsaved = False
+
     @persisted
     def reset_practice(self):
         self._reset_memory()
+        self._mvp = {key: value for key, value in self._mvp.items() if key == 'settings'}
         if self.risk_manager:
             self.risk_manager.reset_daily_baseline()
         return self.account()

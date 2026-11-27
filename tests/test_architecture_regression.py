@@ -20,6 +20,25 @@ from refactor_scenarios import SCENARIOS, replay
 
 FIXTURES = Path(__file__).with_name("fixtures")
 
+# Approved, intentional API delta since the pre-refactor baseline in api_before_refactor.json.
+# Verified by extracting each commit and comparing routes + OpenAPI (see docs/technical/PAPER_SIMPLIFY_02.md):
+#   8c3d66b: routes and OpenAPI hash identical to the fixture.
+#   9a4eb0a (PAPER-SIMPLIFY-01): routes identical; only schema MvpSettings changed (legacy risk fields removed).
+#   39759a8 (PAPER-SIMPLIFY-02): exactly the 11 operations below removed (no route added); schemas
+#     LiveStrategy*, RiskPreset, RiskSettings*, RiskStatus, StrategySettingsUpdate removed, LiveOrderImpactItem and
+#     LiveOrderPreview.impact added, MvpSettings reduced to the operating amount.
+#   PAPER-SAFETY-EMERGENCY-01: one operation added, POST /paper/mvp/emergency-reset (+ EmergencyReset schema, 503/409
+#     responses are not declared); the status payload gained an `emergency` field (untyped dict, no schema change).
+# Any other route or schema change still fails this test.
+APPROVED_REMOVED_ROUTES = (
+    ["/paper/strategies/{strategy_id}/select", ["POST"]], ["/risk", ["GET"]], ["/risk/settings", ["PUT"]],
+    ["/settings/strategies", ["GET"]], ["/settings/strategies", ["POST"]],
+    ["/settings/strategies/{strategy_id}", ["DELETE"]], ["/settings/strategies/{strategy_id}", ["PUT"]],
+    ["/settings/strategy-preset-status", ["GET"]], ["/settings/strategy-presets/{kind}", ["GET"]],
+    ["/strategy/settings", ["PUT"]], ["/strategy/start", ["POST"]],
+)
+APPROVED_OPENAPI_SHA256 = "2d92ad95f6dd098a0c02b4bd11183dcb16f686bac669ed999035ea30335e1b71"
+
 
 class ArchitectureRegressionTests(unittest.TestCase):
     def test_all_endpoints_and_openapi_match_original_contract(self):
@@ -27,9 +46,12 @@ class ArchitectureRegressionTests(unittest.TestCase):
         routes = [[r.path, sorted(r.methods)]
                   for module in (auth, live, market, ml, pages, paper, research, settings)
                   for r in module.router.routes]
-        self.assertEqual(sorted(routes), before["routes"])
+        for removed in APPROVED_REMOVED_ROUTES:
+            self.assertIn(removed, before["routes"], removed)          # the approved delta is a subset of the baseline
+        expected = [r for r in before["routes"] if r not in APPROVED_REMOVED_ROUTES]
+        self.assertEqual(sorted(routes), expected)
         digest = hashlib.sha256(json.dumps(main.app.openapi(), sort_keys=True, ensure_ascii=False).encode()).hexdigest()
-        self.assertEqual(digest, before["openapi_sha256"])
+        self.assertEqual(digest, APPROVED_OPENAPI_SHA256)
 
     def test_paper_fills_snapshots_and_ml_records_match_original_engine(self):
         before = json.loads((FIXTURES / "paper_engine_before_refactor.json").read_text(encoding="utf-8"))

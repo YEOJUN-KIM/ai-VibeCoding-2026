@@ -25,12 +25,116 @@ class ManualLimitTests(unittest.TestCase):
     def preview(self):
         return _services_live_order_service._preview_live_order(self.payload,None,None,relax_financial_limits=False)
 
-    def test_policy_limits_warn_but_cash_still_blocks(self):
+    def test_no_investment_policy_warning_remains_and_cash_still_blocks(self):
+        # PAPER-SIMPLIFY-02: the stored policy (order / symbol / total amount, minimum cash ratio) no longer produces warnings;
+        # a 100-won buy against a tiny stored policy is a plain approved preview. Cash shortfall still rejects.
         result=self.preview()
         self.assertTrue(result.approved)
-        self.assertEqual(sum(c.warning for c in result.checks),4)
+        self.assertEqual(sum(c.warning for c in result.checks),0)
+        names={c.name for c in result.checks}
+        for gone in ("주문 금액","종목별 한도","전체 투자 한도","최소 현금"):
+            self.assertNotIn(gone,names)
+        self.risk.settings.assert_not_called()          # the stored policy is not even read
         self.client.buying_power.return_value=NS(krw_cash_buying_power=D(0))
+        short=self.preview()
+        self.assertFalse(short.approved)
+        self.assertTrue(any(c.name=="주문 가능 금액" and not c.passed for c in short.checks))
+
+    def test_large_buy_over_thirty_percent_is_a_neutral_preview(self):
+        self.client.buying_power.return_value=NS(krw_cash_buying_power=D(1000),account_label="test")
+        self.client.portfolio.return_value=NS(holdings=[],market_value=D(0))
+        self.payload.quantity=D(5); self.payload.order_price=D(100)       # 500 of 1000 = 50% of the account
+        result=self.preview()
+        self.assertTrue(result.approved)
+        by={i.label:i for i in result.impact}
+        cash=by["원화 주문 가능 금액"]; self.assertEqual((cash.before,cash.after),(D(1000),D(500)))
+        qty=by["보유 수량"]; self.assertEqual((qty.before,qty.after),(D(0),D(5)))
+        share=by["종목 비중(주문가 기준 추정)"]; self.assertEqual((share.before,share.after),(D(0),D(50)))
+        self.assertIn("확정할 수 없습니다",by["수수료·세금"].note)
+        self.assertIsNone(by["수수료·세금"].after)                        # unknown value is never estimated
+        self.assertNotIn("예상 매도 손익",''.join(by))                     # buys show no sell P&L
+        self.assertNotIn("경고",result.message); self.assertNotIn("한도",result.message)
+
+    def test_sell_impact_uses_the_real_average_price_only(self):
+        holding=NS(symbol="005930",quantity=D(10),market_value=D(1000),average_purchase_price=D(80))
+        self.client.portfolio.return_value=NS(holdings=[holding],market_value=D(1000))
+        self.payload.side=OrderSide.SELL; self.payload.quantity=D(4)
+        result=self.preview()
+        self.assertTrue(result.approved)
+        by={i.label:i for i in result.impact}
+        self.assertEqual((by["보유 수량"].before,by["보유 수량"].after),(D(10),D(6)))
+        pnl=next(i for i in result.impact if i.label.startswith("예상 매도 손익"))
+        self.assertEqual(pnl.after,(D(100)-D(80))*4)
+        self.assertIn("수수료·세금 제외",pnl.label)
+
+    def _holding(self, qty=10, value=1000):
+        h=NS(symbol="005930",quantity=D(qty),market_value=D(value),average_purchase_price=D(80))
+        self.client.portfolio.return_value=NS(holdings=[h],market_value=D(value))
+
+    def _by(self):
+        return {i.label:i for i in self.preview().impact}
+
+    def test_full_sell_below_mark_leaves_zero_quantity_zero_value_and_zero_weight(self):
+        # 1000 won / 10 shares marked at 100, sold at a 80 limit: nothing remains, so no residual value or weight.
+        self._holding(); self.client.buying_power.return_value=NS(krw_cash_buying_power=D(1000),account_label="test")
+        self.payload.side=OrderSide.SELL; self.payload.quantity=D(10); self.payload.order_price=D(80)
+        by=self._by()
+        self.assertEqual(by["보유 수량"].after,D(0))
+        share=by["종목 비중(주문가 기준 추정)"]
+        self.assertEqual(share.before,D(50)); self.assertEqual(share.after,D(0))
+        self.assertEqual(by["원화 주문 가능 금액"].after,D(1800))
+        # total assets 2000 -> 1800 (cash +800, stock -1000): cash weight 100%.
+        self.assertEqual(by["현금 비중(주문가 기준 추정)"].after,D(100))
+
+    def test_partial_sell_values_remaining_shares_at_the_mark_and_total_reflects_fill_gap(self):
+        self._holding(); self.client.buying_power.return_value=NS(krw_cash_buying_power=D(1000),account_label="test")
+        self.payload.side=OrderSide.SELL; self.payload.quantity=D(4); self.payload.order_price=D(80)
+        by=self._by()
+        # remaining 6 * 100 = 600 ; cash 1000+320 = 1320 ; total 2000 + 320 - 400 = 1920
+        self.assertEqual(by["보유 수량"].after,D(6))
+        self.assertEqual(by["종목 비중(주문가 기준 추정)"].after,D(600)/D(1920)*100)
+        self.assertEqual(by["현금 비중(주문가 기준 추정)"].after,D(1320)/D(1920)*100)
+
+    def test_sell_at_mark_keeps_total_asset_and_buy_limit_below_mark_raises_total(self):
+        self._holding(); self.client.buying_power.return_value=NS(krw_cash_buying_power=D(1000),account_label="test")
+        self.payload.side=OrderSide.SELL; self.payload.quantity=D(5); self.payload.order_price=D(100)
+        by=self._by()
+        self.assertEqual(by["종목 비중(주문가 기준 추정)"].after,D(500)/D(2000)*100)
+        self.payload.side=OrderSide.BUY; self.payload.quantity=D(5); self.payload.order_price=D(90)
+        by=self._by()                     # cash 1000-450=550 ; stock 10+5 shares *100 = 1500 ; total 2050
+        self.assertEqual(by["종목 비중(주문가 기준 추정)"].after,D(1500)/D(2050)*100)
+        self.assertEqual(by["현금 비중(주문가 기준 추정)"].after,D(550)/D(2050)*100)
+
+    def test_market_order_and_unheld_buy_use_current_price_for_both_fill_and_mark(self):
+        self.client.buying_power.return_value=NS(krw_cash_buying_power=D(1000),account_label="test")
+        self.payload.order_type="MARKET"; self.payload.order_price=None; self.payload.quantity=D(5)
+        by=self._by()
+        self.assertEqual(by["종목 비중(주문가 기준 추정)"].after,D(50))
+        self.assertEqual(by["원화 주문 가능 금액"].after,D(500))
+
+    def test_zero_denominators_and_oversell_never_crash_or_go_negative(self):
+        self.client.buying_power.return_value=NS(krw_cash_buying_power=D(0),account_label="test")
+        self.payload.side=OrderSide.SELL; self.payload.quantity=D(1)
+        result=self.preview()                    # no holding, zero assets: rejected, no ratio items, no exception
+        self.assertFalse(result.approved)
+        self.assertNotIn("종목 비중(주문가 기준 추정)",{i.label for i in result.impact})
+        self._holding(qty=10,value=1000); self.payload.quantity=D(11); self.payload.order_price=D(100)
+        by=self._by()                            # oversell is rejected by the check; value never negative
+        self.assertGreaterEqual(by["종목 비중(주문가 기준 추정)"].after,D(0))
         self.assertFalse(self.preview().approved)
+
+    def test_zero_quantity_holding_and_zero_total_after_do_not_divide_by_zero(self):
+        from auto_trader.services.live_order_service import estimate_trade_impact
+        cash,qty,before,after,total=estimate_trade_impact(
+            is_buy=False,quantity=D(10),fill_price=D(0),mark_price=D(100),held_quantity=D(10),
+            holding_market_value=D(1000),cash_before=D(0),total_asset=D(1000))
+        self.assertEqual((qty,after,total),(D(0),D(0),D(0)))
+        from auto_trader.risk_policy import RiskPolicy
+        self.assertEqual(RiskPolicy.cash_ratio(after,total),D(0))
+
+    def test_estimates_are_labelled_and_costs_stay_unconfirmed(self):
+        by=self._by()
+        self.assertIn("추정",''.join(by)); self.assertIsNone(by["수수료·세금"].after)
 
     def test_sell_quantity_and_pin_cannot_be_overridden(self):
         self.payload.side=OrderSide.SELL
@@ -41,22 +145,20 @@ class ManualLimitTests(unittest.TestCase):
             with self.assertRaises(HTTPException) as error:self.preview()
             self.assertEqual(error.exception.status_code,403)
 
-    def test_real_confirm_requires_explicit_warning_acceptance(self):
+    def test_real_confirm_needs_no_policy_acceptance_but_keeps_every_safety_gate(self):
         payload=LiveRealOrderConfirmRequest(**self.payload.model_dump(),client_order_id="manual-test-001",confirmation="실제 주문")
-        with patch.object(_services_live_order_service,"settings",NS(live_trading_enabled=True)):
-            with self.assertRaises(HTTPException) as error:_services_live_order_service.submit_live_real_order(payload,None,NS(id=1))
-            self.assertEqual(error.exception.status_code,409)
-            self.client.create_limit_order.assert_not_called()
-        payload.accept_financial_warnings=True
+        # approved without any warning acceptance (the field is deprecated and ignored)
         with patch.object(_services_live_order_service,"settings",NS(live_trading_enabled=True)), patch.object(_services_live_order_service,"prepare_real_order",return_value=("existing-order",False)) as prepare:
             self.assertEqual(_services_live_order_service.submit_live_real_order(payload,None,NS(id=1)),"existing-order")
             self.assertTrue(prepare.call_args.args[-1].approved)
-            self.client.create_limit_order.assert_not_called()
+            self.client.create_limit_order.assert_not_called()      # duplicate (not created) never reaches the broker
+        # real cash shortfall is still rejected
         self.client.buying_power.return_value=NS(krw_cash_buying_power=D(0))
         with patch.object(_services_live_order_service,"settings",NS(live_trading_enabled=True)):
             with self.assertRaises(HTTPException) as error:_services_live_order_service.submit_live_real_order(payload,None,NS(id=1))
             self.assertEqual(error.exception.status_code,409)
-        payload.accept_financial_warnings=True
+        # the real-order safety lock still blocks everything
         with patch.object(_services_live_order_service,"settings",NS(live_trading_enabled=False)):
             with self.assertRaises(HTTPException) as error:_services_live_order_service.submit_live_real_order(payload,None,NS(id=1))
             self.assertEqual(error.exception.status_code,423)
+            self.client.create_limit_order.assert_not_called()

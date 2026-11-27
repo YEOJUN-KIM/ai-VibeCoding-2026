@@ -1,5 +1,6 @@
 """영구 설정과 메모리 PAPER 계좌를 결합한 위험 한도 관리."""
 
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
@@ -24,9 +25,19 @@ PRESETS = {
 }
 
 
+@dataclass(frozen=True)
+class AutoLimits:
+    """The ONE user-set limit of an automatic PAPER run (PAPER-SIMPLIFY-01): the operating amount in KRW. In memory only,
+    never applied to manual orders, measured against automatic holdings only (cash is shared with manual trading).
+    The earlier per-order / per-symbol / holdings / daily-buy / daily-loss limits and the day-baseline machinery behind
+    the loss limit are preserved on branch archive/folio-legacy-risk-settings (see docs/technical/PAPER_SIMPLIFY_01.md)."""
+    max_total_investment: Decimal
+
+
 class RiskManager:
     def __init__(self, market) -> None:
         self.market = market
+        self.auto_limits: AutoLimits | None = None
         self.account_id = None
         self.broker = None
         self._baseline_date = date.today()
@@ -119,25 +130,24 @@ class RiskManager:
             return "일일 주문 횟수 한도에 도달했습니다."
         return None
 
-    def check_buy(self, *, symbol: str, amount: Decimal, fee: Decimal,
-                  ignore_min_cash_ratio: bool = False,
-                  ignore_daily_order_limit: bool = False) -> str | None:
-        config = self.settings()
-        cash, invested, total_asset, daily_profit, orders = self._metrics()
-        reason = self.global_block_reason(
-            config, daily_profit, orders,
-            ignore_daily_order_limit=ignore_daily_order_limit,
-        )
-        if reason:
-            return reason
-        symbol_value = self.broker.position_value(symbol)
-        if not RiskPolicy.order_amount_allowed(config, amount, fee):
-            return "1회 최대 주문 금액을 초과했습니다."
-        if not RiskPolicy.symbol_amount_allowed(config, symbol_value, amount):
-            return "종목별 최대 투자 금액을 초과했습니다."
-        if not RiskPolicy.total_investment_allowed(config, invested, amount):
-            return "전체 최대 투자 금액을 초과했습니다."
-        remaining_cash = cash - amount - fee
-        if not ignore_min_cash_ratio and total_asset and RiskPolicy.cash_ratio(remaining_cash, total_asset) < config.min_cash_ratio:
-            return "최소 현금 보유 비율 아래로 내려갑니다."
+    # ---- automatic-run operating amount (PAPER-SIMPLIFY-01)
+    def auto_status(self, limits: "AutoLimits") -> dict:
+        invested = self.broker.risk_value()
+        room = limits.max_total_investment - invested
+        reason = None if room > 0 else "자동매매 운용 금액을 모두 사용했습니다."
+        return dict(new_buys_allowed=reason is None, block_reason=reason, invested_amount=invested,
+                    max_total_investment=limits.max_total_investment)
+
+    def _check_auto_buy(self, amount: Decimal, limits: "AutoLimits") -> str | None:
+        """An automatic buy must fit the operating amount (automatic holdings at market value + this buy)."""
+        if self.broker.risk_value() + amount > limits.max_total_investment:
+            return "자동매매 운용 금액을 초과합니다."
         return None
+
+    def check_buy(self, *, symbol: str, amount: Decimal, fee: Decimal, **_ignored) -> str | None:
+        """PAPER buys that reach the risk manager are automatic ones. They are bound by the run's operating amount only;
+        a buy without one (no run owns the limit) is refused. The persistent settings above serve LIVE order previews and
+        are never consulted for PAPER. Balance, quantity and duplicate checks stay in PaperBroker.submit."""
+        if self.auto_limits is None:
+            return "자동매매 운용 금액이 설정되지 않아 매수할 수 없습니다."
+        return self._check_auto_buy(amount + fee, self.auto_limits)

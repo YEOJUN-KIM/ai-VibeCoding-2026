@@ -1,5 +1,5 @@
 {
-  "openapi_sha256": "e841fb4844fd4e4bc187d97cb04a35992948a575832c4b8897f5cc2de99c60c5",
+  "openapi_sha256": "cd8df7855365299ace05332d2fce857dbdec77d30d0fd626d7b9a8ed1f58df90",
   "routes": [
     [
       "/",
@@ -279,6 +279,12 @@
     ],
     [
       "/paper",
+      [
+        "GET"
+      ]
+    ],
+    [
+      "/paper-mvp",
       [
         "GET"
       ]

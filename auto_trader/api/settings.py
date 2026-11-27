@@ -3,15 +3,10 @@
 from ..services import connection_service
 
 import asyncio
-from decimal import Decimal
-from fastapi import Depends, HTTPException, Query, Request, Response
+from fastapi import Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from ..auth import SESSION_COOKIE, AuthenticatedUser, account_profile, change_credential, require_csrf, require_user
-from ..models import LiveStrategy, LiveStrategyWrite
-from ..settings import settings
 from ..toss import TossApiError
-from ..live_strategies import delete_strategy, list_strategies, save_strategy
-from ..strategy_presets import weekly_preset, preset_snapshot_status
 from fastapi import APIRouter
 from .. import runtime
 router = APIRouter()
@@ -60,92 +55,3 @@ def settings_connection(_: AuthenticatedUser = Depends(require_user)) -> dict:
 @router.put('/settings/connection')
 async def save_settings_connection(payload: dict, user: AuthenticatedUser = Depends(require_csrf)):
     return await connection_service.save_settings_connection(payload, user)
-
-
-@router.get("/settings/strategies", response_model=list[LiveStrategy])
-def list_strategy_settings(user: AuthenticatedUser = Depends(require_user)) -> list[LiveStrategy]:
-    return list_strategies(user.id)
-
-
-@router.get("/settings/strategy-preset-status")
-def strategy_preset_status(_: AuthenticatedUser = Depends(require_user)) -> dict:
-    return preset_snapshot_status()
-
-
-@router.get("/settings/strategy-presets/{kind}")
-def strategy_preset_preview(
-    kind: str, order_amount: Decimal = Query(default=Decimal("300000"), ge=10000, le=1000000),
-    _: AuthenticatedUser = Depends(require_user),
-) -> dict:
-    if kind not in {"popular", "affordable"}:
-        raise HTTPException(status_code=404, detail="지원하지 않는 기본 프리셋입니다.")
-    try:
-        return weekly_preset(kind, order_amount, runtime.toss_client.strategy_preset_candidates,
-                             fee_rate=settings.paper_fee_rate, slippage_rate=settings.paper_slippage_rate,
-                             max_count=10)
-    except TossApiError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-
-def _strategy_stock_name(symbol: str) -> str:
-    try:
-        stock = runtime.toss_client.domestic_stock(symbol.upper())
-    except TossApiError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    if not stock:
-        raise HTTPException(status_code=404, detail="국내 상장 종목을 찾지 못했습니다.")
-    return str(stock.get("name") or symbol.upper())
-
-
-def _strategy_targets(payload: LiveStrategyWrite) -> list[tuple[str, str]]:
-    symbols = list(dict.fromkeys(symbol.upper() for symbol in (payload.symbols or [payload.symbol])))
-    if not symbols or len(symbols) > 30:
-        raise HTTPException(status_code=422, detail="전략 대상 종목은 1개 이상 30개 이하로 선택하세요.")
-    targets = []
-    for symbol in symbols:
-        if not symbol.isdigit() or len(symbol) != 6:
-            raise HTTPException(status_code=422, detail=f"올바르지 않은 국내 종목코드입니다: {symbol}")
-        targets.append((symbol, _strategy_stock_name(symbol)))
-    return targets
-
-
-@router.post("/settings/strategies", response_model=LiveStrategy, status_code=201)
-def create_strategy_settings(
-    payload: LiveStrategyWrite, user: AuthenticatedUser = Depends(require_csrf),
-) -> LiveStrategy:
-    if payload.execution_mode == "LIVE" and payload.enabled:
-        raise HTTPException(status_code=409, detail="LIVE 자동매매 엔진이 준비될 때까지 실제 실행 전략은 활성화할 수 없습니다.")
-    try:
-        targets = _strategy_targets(payload)
-        return save_strategy(user.id, payload, targets[0][1], targets=targets)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-
-@router.put("/settings/strategies/{strategy_id}", response_model=LiveStrategy)
-def update_strategy_settings(
-    strategy_id: int, payload: LiveStrategyWrite,
-    user: AuthenticatedUser = Depends(require_csrf),
-) -> LiveStrategy:
-    if payload.execution_mode == "LIVE" and payload.enabled:
-        raise HTTPException(status_code=409, detail="LIVE 자동매매 엔진이 준비될 때까지 실제 실행 전략은 활성화할 수 없습니다.")
-    try:
-        targets = _strategy_targets(payload)
-        return save_strategy(user.id, payload, targets[0][1], strategy_id=strategy_id, targets=targets)
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-
-@router.delete("/settings/strategies/{strategy_id}", status_code=204)
-def delete_strategy_settings(
-    strategy_id: int, user: AuthenticatedUser = Depends(require_csrf),
-) -> Response:
-    try:
-        delete_strategy(user.id, strategy_id)
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return Response(status_code=204)

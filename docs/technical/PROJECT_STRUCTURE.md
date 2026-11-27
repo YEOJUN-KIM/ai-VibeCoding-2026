@@ -83,7 +83,7 @@ ai-VibeCoding-2026/
 - `trading/engine.py`: 시세 수집·실행 제어·주문·성과·ML 기록 조립
 - `trading/strategies/`: 교체 가능한 신호 인터페이스와 기존 이동평균 진입·청산 판단
 - `trading/sizing.py`·`trading/exits.py`: 기존 수량 산정과 보유분 청산 관리
-- `strategy_presets.py`: 기본 인기·가성비 후보 선별, 주간 데이터 저장·재사용과 새 전략 초안
+- (제거) `strategy_presets.py`: 주간 프리셋 — PAPER-SIMPLIFY-02에서 삭제, `archive/folio-legacy-risk-settings`에서 복원 가능
 - `simulator.py`: 시뮬레이션 보조
 - `risk.py`: PAPER 위험 설정 저장과 손실·횟수·투자 한도 검사
 - `risk_policy.py`: PAPER 검사와 LIVE 미리보기에서 공통으로 사용하는 한도 계산
@@ -102,7 +102,7 @@ ai-VibeCoding-2026/
 `auto_trader/static/`에 페이지별 HTML과 JavaScript, 공통 `styles.css`·`theme.css`, 헤더 상태를 관리하는 `header-status.js`가 있습니다. `preview/`는 예시 데이터 디자인 시안이며 실제 계좌 연동 화면과 구분합니다.
 
 - `login`: 로그인과 준비 상태
-- `index.html`·`app.js`: PAPER 화면, 계좌별 전략 선택 즉시 적용·상세 동시 펼침·기록 필터
+- `paper-mvp.html`·`paper-mvp.js`: PAPER 화면(생성: `scripts/build_paper_mvp_page.py`). 구형 `index.html`·`app.js`는 PAPER-SIMPLIFY-02에서 제거
 - `live`: LIVE 계좌와 주문 기록
 - `live-privacy.js`: 전체·카드별 자산 가림과 브라우저 가림 선택 저장
 - `live-assets.js`: 실제 자산 이력 차트·자산 구성과 빈 상태
@@ -113,10 +113,7 @@ ai-VibeCoding-2026/
 - `long-term`: 추천 기업과 저장한 기업
 - `watch-notes.js`: 사용자별 기업 메모 입력·저장과 목록 검색
 - `news`: 뉴스
-- `settings`: 계정·연결, 자동매매 전략과 투자 한도
-- `settings-account.js`: 계정 정보, 비밀번호·PIN·증권 연결 변경 팝업
-- `settings-summary.js`: 전략 입력 요약과 관계 검증 안내
-- `settings-presets.js`: 주간 기본 프리셋 미리보기, 예산 변경과 별도 저장 안내
+- `account-menu.js`: 모든 화면 우측 상단 공통 계정 메뉴(계정 정보, 비밀번호·PIN 변경, 증권사 연결, 로그아웃). 구형 `settings*.js`는 제거
 
 ## 테스트
 
