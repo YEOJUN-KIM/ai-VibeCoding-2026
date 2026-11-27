@@ -10,6 +10,7 @@ from ..models import Account, Order, OrderRequest, PaperWorkspaceStatus, PaperMa
 from ..decision_history import read_decision_history
 from fastapi import APIRouter
 from .. import runtime
+from ..paper import EmergencyLatchError
 router = APIRouter()
 
 
@@ -116,5 +117,8 @@ async def strategy_stop(_: AuthenticatedUser = Depends(require_csrf)) -> Strateg
 @router.post("/strategy/emergency-stop", response_model=StrategyStatus)
 @runtime._serialize_paper_change
 async def strategy_emergency_stop(_: AuthenticatedUser = Depends(require_csrf)) -> StrategyStatus:
-    await runtime.engine.stop(emergency=True)
+    try:
+        await runtime.engine.stop(emergency=True)
+    except EmergencyLatchError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     return runtime.engine.status()

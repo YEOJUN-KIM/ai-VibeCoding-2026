@@ -48,6 +48,11 @@ def persisted(method):
     return wrapped
 
 
+class EmergencyLatchError(RuntimeError):
+    """The emergency-stop latch could not be saved. Automatic trading is already stopped and blocked in memory, but the
+    block may not survive a server restart; the caller must report failure, never success."""
+
+
 class PaperBroker:
     manual_orders_unlimited = True  # PAPER-SETTINGS-01: investment limits apply to automatic orders only
 
@@ -84,6 +89,10 @@ class PaperBroker:
         self._pending_journal = None
         self.clock = None  # optional () -> aware datetime; order timestamps follow it (production: real time)
         self._mvp = {}  # PAPER-MVP-01 settings and decision log; survives restart, never touches cash/positions
+        # PAPER-SAFETY-EMERGENCY-01: durable emergency-stop latch of THIS paper account (None = normal). Kept outside `_mvp`
+        # and outside `_reset_memory`, so practice reset / snapshot copy / settings saves can never clear it.
+        self._emergency = None
+        self.emergency_unsaved = False  # public on purpose: survives the rollback of a failed save (fail closed in memory)
         self._lock = RLock()
         self._seed_cash = self.initial_cash
         self._seed_positions: dict[str, dict[str, Decimal | int]] = {}
@@ -136,7 +145,7 @@ class PaperBroker:
                     orders=[order.model_dump(mode='json') for order in self._orders],
                     requests={key: order.id for key, order in self._requests.items()},
                     next_order_id=self._next_order_id, fees=str(self._total_fees), taxes=str(self._total_taxes),
-                    mvp=self._mvp, metadata=self.snapshot_metadata, management_scope=self._management_scope,
+                    mvp=self._mvp, emergency=self._emergency, metadata=self.snapshot_metadata, management_scope=self._management_scope,
                     auto_lots=self._auto_lots, last_strategy_selection=self._last_strategy_selection,
                     stocks={symbol: {'stock': stocks[symbol].model_dump(mode='json'),
                                      'price': str(self.market.quote(symbol).price)} for symbol in symbols})
@@ -172,6 +181,7 @@ class PaperBroker:
         self._total_fees, self._total_taxes = Decimal(state['fees']), Decimal(state['taxes'])
         self.snapshot_metadata = state.get('metadata', {})
         self._mvp = state.get('mvp', {})
+        self._emergency = state.get('emergency')
         self._last_strategy_selection = state.get("last_strategy_selection", {})
         # Execution remains stopped; ownership and exit rules survive restart.
         self._management_scope = state.get("management_scope", "AUTO")
@@ -346,6 +356,8 @@ class PaperBroker:
     def submit(self, request: OrderRequest, *, signal_id=None, source="MANUAL", reason="", lot_id=None, acquired_at=None) -> Order:
         request_id = request.request_id or str(uuid4())
         with self._lock:
+            if source != "MANUAL" and self.emergency_active():   # automatic orders only; manual orders keep their own checks
+                raise ValueError("긴급정지 상태에서는 자동 주문을 낼 수 없습니다.")
             prior = self._requests.get(request_id)
             if prior:
                 if (prior.symbol, prior.side, prior.quantity, prior.source) != (request.symbol, request.side, request.quantity, source):
@@ -537,6 +549,51 @@ class PaperBroker:
     @persisted
     def update_mvp(self, **fields):
         self._mvp = {**self._mvp, **deepcopy(fields)}
+
+    def emergency_active(self) -> bool:
+        """True while automatic trading is latched stopped. Any non-empty stored value counts (fail closed)."""
+        with self._lock:
+            return bool(self.emergency_unsaved or self._emergency)
+
+    def emergency_info(self) -> dict | None:
+        with self._lock:
+            if not self.emergency_active():
+                return None
+            info = self._emergency if isinstance(self._emergency, dict) else {}
+            return dict(at=info.get("at"), unsaved=self.emergency_unsaved)
+
+    @persisted
+    def _store_emergency(self, value):
+        self._emergency = value
+
+    def latch_emergency(self, at: datetime) -> None:
+        """Set the durable latch (idempotent). The in-memory block is set first and under the broker lock, so no automatic
+        order can start after this returns; if saving fails the block stays in memory and EmergencyLatchError is raised."""
+        with self._lock:
+            already_saved = bool(self._emergency) and not self.emergency_unsaved
+            self.emergency_unsaved = True
+            if already_saved:
+                self.emergency_unsaved = False
+                return
+            try:
+                self._store_emergency(self._emergency if isinstance(self._emergency, dict) and self._emergency
+                                      else dict(at=at.isoformat(), source="PAPER-AUTO"))
+            except Exception as exc:
+                raise EmergencyLatchError("긴급정지를 저장하지 못했습니다. 자동매매는 정지되었고 이 서버에서는 다시 시작되지 않지만, 서버 재시작 후에는 유지되지 않을 수 있습니다. 다시 긴급정지를 실행하세요.") from exc
+            self.emergency_unsaved = False
+
+    def release_emergency(self) -> None:
+        """Explicit reset only. Raises (and stays latched) when the cleared state cannot be saved."""
+        with self._lock:
+            if self.emergency_unsaved:      # the stop was never saved: it must be saved (retry) before it can be released
+                raise EmergencyLatchError("긴급정지가 아직 저장되지 않았습니다. 긴급정지 상태가 유지됩니다.")
+            previous = self._emergency
+            try:
+                self._store_emergency(None)
+            except Exception as exc:
+                self._emergency = previous
+                raise EmergencyLatchError("긴급정지 해제를 저장하지 못했습니다. 긴급정지 상태가 유지됩니다.") from exc
+            self.emergency_unsaved = False
 
     @persisted
     def reset_practice(self):

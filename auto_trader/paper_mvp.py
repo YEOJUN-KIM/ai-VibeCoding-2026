@@ -31,7 +31,7 @@ from .day01_scout_link import portfolio_limits_for
 from .day01_scout_pipeline import PROCEED, run_scout_pipeline
 from .ml.day01 import Config as Day01Config
 from .models import Stock
-from .paper import PaperBroker
+from .paper import EmergencyLatchError, PaperBroker
 from .risk import AutoLimits
 from .trading import KST
 
@@ -261,6 +261,8 @@ class PaperMvp:
 
     # ------------------------------------------------------------------ control
     async def start(self):
+        if self.broker.emergency_active():          # checked first, also for a duplicate click on a latched account
+            raise MvpConflict("긴급정지 상태입니다. 긴급정지를 먼저 해제한 뒤, 별도로 시작하세요.")
         if self.engine.running:
             if self._mine():
                 return False                   # duplicate click: already running
@@ -286,12 +288,41 @@ class PaperMvp:
     async def stop(self, *, emergency=False):
         if self.engine.running and not self._mine() and not emergency:
             raise MvpConflict("MVP가 시작한 실행이 아닙니다. 해당 PAPER 전략 화면에서 정지하세요.")
-        stopped = await self.engine.stop(emergency=emergency)
-        self._release()
-        self._record_equity(force=True)
-        self._log("CONTROL", "긴급정지" if emergency else "일시정지",
-                  "신규 판단·주문과 보유분 청산 감시가 모두 멈췄습니다. 보유 주식은 매도하지 않습니다.")
+        failure = None
+        try:
+            stopped = await self.engine.stop(emergency=emergency)
+        except EmergencyLatchError as exc:        # engine is already stopped and blocked in memory; never report success
+            failure, stopped = exc, True
+        latched = self.broker.emergency_active()
+        try:
+            self._release()
+            self._record_equity(force=True)
+            self._log("CONTROL", "긴급정지" if emergency else ("일시정지(긴급정지 유지)" if latched else "일시정지"),
+                      "신규 판단·주문과 보유분 청산 감시가 모두 멈췄습니다. 보유 주식은 매도하지 않습니다."
+                      + (" 긴급정지는 해제하기 전까지 유지됩니다." if latched else ""))
+        except Exception:
+            if failure is None:
+                raise
+            logging.getLogger("auto_trader.paper_mvp").exception("Could not record the emergency stop after a failed latch save")
+        if failure is not None:
+            raise failure
         return stopped
+
+    def reset_emergency(self):
+        """Explicit, confirmed reset of the emergency latch. Result: normal STOPPED; never starts anything. Call under the lock."""
+        if self.engine.running:
+            raise MvpConflict("자동매매가 실행 중입니다.")
+        if not self.broker.emergency_active():
+            raise MvpConflict("긴급정지 상태가 아닙니다.")
+        if self.broker.emergency_unsaved:
+            raise MvpConflict("긴급정지가 아직 저장되지 않았습니다. 긴급정지를 다시 실행해 저장한 뒤 해제하세요.")
+        self.broker.release_emergency()           # raises EmergencyLatchError and stays latched if it cannot be saved
+        self.engine.emergency_stopped = False
+        try:
+            self._record_equity(force=True)
+            self._log("CONTROL", "긴급정지 해제", "일시정지 상태로 돌아왔습니다. 자동매매는 시작하지 않았으며, 다시 시작하려면 직접 시작하세요.")
+        except Exception:
+            logging.getLogger("auto_trader.paper_mvp").exception("Emergency was reset but the record could not be saved")
 
     # ------------------------------------------------------------------ Scout -> engine
     def _held(self):
@@ -390,10 +421,10 @@ class PaperMvp:
             state, label = "other", "다른 PAPER 전략 실행 중"
         elif strategy.running:
             state, label = "running", "자동매매 감시 중"
+        elif strategy.emergency_stopped or broker.emergency_active():
+            state, label = "emergency", "긴급정지"
         elif eng.start_block:
             state, label = "blocked", "설정 복구 필요"
-        elif strategy.emergency_stopped:
-            state, label = "emergency", "긴급정지"
         elif broker.mvp_state().get("equity"):
             state, label = "stopped", "일시정지"
         else:
@@ -417,6 +448,7 @@ class PaperMvp:
         return dict(
             mode="PAPER", live_blocked=True, ready_reason=(self.start_guard() if self.start_guard else None), real_data_verified=False,
             data_source="SYNTHETIC" if self.source is not None else "NONE",
+            emergency=broker.emergency_info(),
             run=dict(state=state, label=label, running=strategy.running, message=_honest_message(eng.data_message, self.source is not None),
                      operating_state=strategy.operating_state, tick_count=strategy.tick_count,
                      exit_monitoring=strategy.running, blocked_reason=eng.start_block, held_symbols=sorted(self._held()),

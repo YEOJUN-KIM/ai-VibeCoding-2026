@@ -27,6 +27,8 @@ FIXTURES = Path(__file__).with_name("fixtures")
 #   39759a8 (PAPER-SIMPLIFY-02): exactly the 11 operations below removed (no route added); schemas
 #     LiveStrategy*, RiskPreset, RiskSettings*, RiskStatus, StrategySettingsUpdate removed, LiveOrderImpactItem and
 #     LiveOrderPreview.impact added, MvpSettings reduced to the operating amount.
+#   PAPER-SAFETY-EMERGENCY-01: one operation added, POST /paper/mvp/emergency-reset (+ EmergencyReset schema, 503/409
+#     responses are not declared); the status payload gained an `emergency` field (untyped dict, no schema change).
 # Any other route or schema change still fails this test.
 APPROVED_REMOVED_ROUTES = (
     ["/paper/strategies/{strategy_id}/select", ["POST"]], ["/risk", ["GET"]], ["/risk/settings", ["PUT"]],
@@ -35,7 +37,7 @@ APPROVED_REMOVED_ROUTES = (
     ["/settings/strategy-preset-status", ["GET"]], ["/settings/strategy-presets/{kind}", ["GET"]],
     ["/strategy/settings", ["PUT"]], ["/strategy/start", ["POST"]],
 )
-APPROVED_OPENAPI_SHA256 = "4481041c11cf52ede789ebfc97f56bf320dd43b309e83c0240b84756ac3370a8"
+APPROVED_OPENAPI_SHA256 = "2d92ad95f6dd098a0c02b4bd11183dcb16f686bac669ed999035ea30335e1b71"
 
 
 class ArchitectureRegressionTests(unittest.TestCase):

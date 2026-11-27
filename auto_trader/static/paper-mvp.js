@@ -84,8 +84,20 @@ function renderRun() {
   const src = st.data_source === 'SYNTHETIC' ? '합성(가상) 시장 데이터로 검증 중 · 실제 시장 데이터는 아직 검증되지 않았습니다.' : '검증된 시장 데이터 소스가 연결되지 않았습니다 · 신규 진입은 보류되고 보유분 감시만 합니다.';
   $('#run-next').textContent = r.running ? '실행 중 · 보유분 손절·익절 감시가 켜져 있습니다. ' + src : r.stop_note + (r.state === 'emergency' ? ' 긴급정지의 실제 보장 범위는 일시정지와 같으며 별도 검증되지 않았습니다.' : '');
   $('#prepare').hidden = !st.ready_reason;
-  $('#start').disabled = r.running || !!st.ready_reason; $('#start').textContent = r.state === 'stopped' || r.state === 'emergency' ? '다시 시작' : '시작';
-  $('#pause').disabled = r.state !== 'running'; $('#emergency').disabled = r.state === 'emergency';
+  const latched = r.state === 'emergency';
+  $('#start').disabled = r.running || latched || !!st.ready_reason; $('#start').textContent = r.state === 'stopped' ? '다시 시작' : '시작';
+  // Only a server-confirmed save is shown as persisted; an unsaved latch keeps the warning and allows an explicit retry.
+  const unsaved = latched && !!(st.emergency && st.emergency.unsaved);
+  $('#pause').disabled = r.state !== 'running'; $('#emergency').disabled = latched && !unsaved;
+  $('#emergency').textContent = unsaved ? '긴급정지 다시 시도' : '긴급정지';
+  const rs = $('#emergency-reset'); rs.hidden = !latched || unsaved;
+  if (unsaved) {
+    $('#run-reason').textContent = '긴급정지는 이 서버에서만 적용되었고 아직 저장되지 않았습니다. 자동매매는 시작되지 않지만 서버 재시작 후에는 유지되지 않을 수 있습니다. 긴급정지를 다시 시도하세요.';
+    $('#run-next').textContent = '저장이 확인될 때까지 이 경고가 유지됩니다. 보유 주식은 매도하지 않았습니다.';
+  } else if (latched) {
+    $('#run-reason').textContent = '긴급정지 상태입니다. 해제하기 전에는 자동매매를 시작할 수 없습니다. 새로고침·로그아웃·서버 재시작 후에도 유지됩니다.';
+    $('#run-next').textContent = '긴급정지로 신규 판단·주문과 청산 감시가 멈췄고 보유 주식은 매도하지 않았습니다. 해제하면 일시정지 상태가 되며, 자동매매는 직접 다시 시작해야 합니다.';
+  }
   $('#source-badge').textContent = st.data_source === 'SYNTHETIC' ? 'PAPER · 합성 데이터' : 'PAPER · 데이터 소스 미연결';
   $('#source-badge').className = 'badge ' + (st.data_source === 'SYNTHETIC' ? 'amber' : 'neutral');
 }
@@ -96,8 +108,16 @@ $('#start').onclick = () => { if (dirty) { toast('저장하지 않은 설정이 
 $('#prepare').onclick = async () => {
   try { await api('/paper/accounts/EXPERIMENT/select', { method: 'POST' }); saved = null; await refresh(); toast('가상 1,000만원 모의계좌를 준비했습니다. 실제 계좌와 연결되지 않습니다.'); } catch (e) { toast(e.message); }
 };
+{ const b = document.createElement('button'); b.id = 'emergency-reset'; b.hidden = true; b.textContent = '긴급정지 해제'; $('#emergency').after(b); }
+$('#emergency-reset').onclick = async () => {
+  if (!confirm('긴급정지를 해제할까요?\n해제해도 자동매매는 시작되지 않고 일시정지 상태가 됩니다. 시작은 직접 해야 합니다.')) return;
+  try { st = await api('/paper/mvp/emergency-reset', { method: 'POST', body: JSON.stringify({ confirm: true }) }); render(); toast('긴급정지를 해제했습니다. 자동매매는 시작되지 않았습니다.'); } catch (e) { toast(e.message); }
+};
 $('#pause').onclick = () => control('/paper/mvp/stop', '일시정지했습니다. 보유 주식은 그대로 남고 청산 감시도 멈춥니다.');
-$('#emergency').onclick = () => control('/paper/mvp/emergency-stop', '긴급정지했습니다. 보유 주식은 매도하지 않으며 청산 감시도 멈춥니다.');
+$('#emergency').onclick = async () => {
+  try { st = await api('/paper/mvp/emergency-stop', { method: 'POST' }); render(); toast('긴급정지했습니다. 보유 주식은 매도하지 않으며 청산 감시도 멈춥니다.'); }
+  catch (e) { toast(e.message); await refresh(); }   // a failed save still latches in memory: re-read so the unsaved warning and retry show
+};
 
 // ---------------------------------------------------------------- home
 function holdingTable(key) {

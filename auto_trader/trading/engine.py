@@ -21,7 +21,7 @@ from ..models import (
     StrategySnapshot,
     StrategyStatus,
 )
-from ..paper import PaperBroker
+from ..paper import EmergencyLatchError, PaperBroker
 from ..simulator import MarketSimulator
 from ..paper_feed import PaperPriceFeed
 from ..toss import TossApiError
@@ -203,6 +203,9 @@ class TradingEngine:
     async def start(self) -> bool:
         if self.running or self.start_block:
             return False
+        if self.broker.emergency_active():       # PAPER-SAFETY-EMERGENCY-01: only an explicit reset clears the latch, never a start
+            self.emergency_stopped = True
+            return False
         self.emergency_stopped = False
         self.running = True
         self.tick_count = 0
@@ -221,7 +224,16 @@ class TradingEngine:
     async def stop(self, *, emergency: bool = False) -> bool:
         was_running = self.running
         self.running = False
-        self.emergency_stopped = emergency
+        latch_error = None
+        if emergency:
+            # Latch BEFORE cancelling: from here on the broker refuses every automatic order (same lock as submit).
+            self.emergency_stopped = True
+            try:
+                self.broker.latch_emergency(self._clock())
+            except EmergencyLatchError as exc:
+                latch_error = exc                # still stop below, then report the failure
+        # An ordinary stop never downgrades an emergency stop; only an explicit reset does.
+        self.emergency_stopped = self.emergency_stopped or self.broker.emergency_active()
         task = self._task
         if task and task is not asyncio.current_task():
             task.cancel()
@@ -240,6 +252,8 @@ class TradingEngine:
                                       "emergency": emergency, "ticks": self.tick_count})
             except OSError:
                 logging.getLogger("auto_trader.strategy").exception("Could not write paper strategy stop event")
+        if latch_error is not None:
+            raise latch_error
         return was_running
 
     def _release_run(self) -> None:
@@ -495,6 +509,9 @@ class TradingEngine:
     def _buy(self, symbol: str, price: Decimal, *,
              reason: str = "상향 교차 후 2봉 확인 · 가격 추세 확인") -> bool:
         self._last_buy_block_reason.pop(symbol, None)
+        if self.broker.emergency_active():
+            self._last_buy_block_reason[symbol] = "긴급정지 상태입니다."
+            return False
         if not self._can_order(symbol):
             self._last_buy_block_reason[symbol] = self._entry_block_reason(symbol) or "주문 가능 시간을 확인하세요."
             return False
@@ -527,7 +544,7 @@ class TradingEngine:
         return False
 
     def _sell(self, symbol: str, reason: str, *, lot_id=None) -> bool:
-        if not self._within_hours():
+        if self.broker.emergency_active() or not self._within_hours():
             return False
         quantity = next((lot["quantity"] for lot in self.broker.managed_lots() if lot["id"] == lot_id), 0) if lot_id else self.broker.strategy_quantity(symbol)
         if not quantity:
@@ -719,7 +736,7 @@ class TradingEngine:
         strategy_basis = self._strategy_baseline_value + self._strategy_buy_amount + self.broker._management_external_flow
         return StrategyStatus(
             running=self.running,
-            emergency_stopped=self.emergency_stopped,
+            emergency_stopped=self.emergency_stopped or self.broker.emergency_active(),
             tick_count=self.tick_count,
             interval_seconds=self.interval_seconds,
             short_period=self.short_period,

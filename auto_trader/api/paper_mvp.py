@@ -3,9 +3,12 @@
 from contextlib import asynccontextmanager
 from typing import Literal
 
+from pydantic import BaseModel, ConfigDict
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..auth import AuthenticatedUser, require_csrf, require_user
+from ..paper import EmergencyLatchError
 from ..paper_mvp import MvpConflict, MvpError, MvpSettings, PaperMvp, controller_for
 
 router = APIRouter(prefix="/paper/mvp")
@@ -80,12 +83,36 @@ async def mvp_start(mvp: PaperMvp = Depends(write_controller)):
 @router.post("/stop")
 async def mvp_stop(mvp: PaperMvp = Depends(write_controller)):
     async with locked(mvp):
-        await mvp.stop()
+        try:
+            await mvp.stop()
+        except MvpError as exc:
+            raise _http(exc) from exc
         return mvp.status()
 
 
 @router.post("/emergency-stop")
 async def mvp_emergency_stop(mvp: PaperMvp = Depends(write_controller)):
     async with locked(mvp):
-        await mvp.stop(emergency=True)
+        try:
+            await mvp.stop(emergency=True)
+        except EmergencyLatchError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return mvp.status()
+
+
+class EmergencyReset(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    confirm: Literal[True]       # explicit confirmation is part of the request
+
+
+@router.post("/emergency-reset")
+async def mvp_emergency_reset(payload: EmergencyReset, mvp: PaperMvp = Depends(write_controller)):
+    """Authenticated + CSRF (write_controller). Clears the latch to normal STOPPED only; it never starts trading."""
+    async with locked(mvp):
+        try:
+            mvp.reset_emergency()
+        except MvpError as exc:
+            raise _http(exc) from exc
+        except EmergencyLatchError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         return mvp.status()
