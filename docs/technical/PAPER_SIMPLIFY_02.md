@@ -32,7 +32,7 @@
 
 **유지한 호환 소비자**: `GET/PUT /settings/account…`, `/settings/connection`(계정 메뉴 사용), `POST /orders`·`GET /orders`·`/account`(UI 없는 PAPER 수동 API, 외부 호환), `POST /paper/snapshot/live`(실제 자산 복사 API, UI 없음 — 후속 결정 필요), `/strategy/stop`·`/strategy/emergency-stop`.
 
-**복원 방법**: 제거 전 소스는 보존 브랜치에 있다. `archive/folio-legacy-risk-settings`(= `8c3d66b`, 한도 로직·구형 화면 전체)와 `preserve/paper-simplify-01-9a4eb0a`(= SIMPLIFY-01 완료 상태, 구형 화면 포함). 예: `git show preserve/paper-simplify-01-9a4eb0a:auto_trader/static/settings.html`. 전체 되돌리기는 새 브랜치에서 이 작업의 커밋을 `git revert`.
+**복원 방법**: 제거 전 소스는 이 브랜치 이력과 보존 브랜치에 있다. `archive/folio-legacy-risk-settings`(= `8c3d66bbd0d08539aa4f4e39cc00524bb371f87c`, 한도 로직·구형 화면 전체)와 커밋 `9a4eb0ac53ce94a6423e66c79bacda4c102071fe`(SIMPLIFY-01 완료 상태, 구형 화면 포함; `feat/folio-paper-simplify-01` 이력에서 직접 복구 가능). 과거에 쓰던 로컬 ref `preserve/paper-simplify-01-9a4eb0a`는 삭제되어 더 이상 존재하지 않으며 사용하지 않는다(커밋 이력은 유지). 예: `git show 9a4eb0ac53ce94a6423e66c79bacda4c102071fe:auto_trader/static/settings.html`. 전체 되돌리기는 새 브랜치에서 이 작업의 커밋을 `git revert`.
 
 ## 후속 작업(기록만, 이번에 구현하지 않음)
 

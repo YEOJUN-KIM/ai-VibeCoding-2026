@@ -84,7 +84,14 @@ class SharedAccountMenu(unittest.TestCase):
     def test_every_shell_page_loads_the_menu_first_and_has_no_settings_link_or_sidebar_account(self):
         for name in SHELL_PAGES:
             html = (STATIC / f"{name}.html").read_text(encoding="utf-8")
-            self.assertIn('<head><script src="/static/account-menu.js" defer></script>', html, name)
+            head = html[html.index("<head>"):html.index("</head>")]
+            self.assertEqual(html.count("/static/account-menu.js"), 1, name)              # loaded exactly once, inside <head>, deferred
+            self.assertEqual(head.count('<script src="/static/account-menu.js" defer></script>'), 1, name)
+            tags = re.findall(r'<script[^>]*src="([^"]+)"[^>]*>', html)
+            self.assertTrue(all(" defer" in m for m in re.findall(r'<script[^>]*src="/static/(?:account-menu|pagination)\.js"[^>]*>', html)), name)
+            others = [s for s in tags if s != "/static/pagination.js"]                 # unrelated pagination helper may precede the menu
+            self.assertEqual(others[0], "/static/account-menu.js", name)                 # menu precedes every other (dependent page) script
+            self.assertLessEqual(tags.index("/static/account-menu.js"), 1, name)
             for gone in ('href="/settings"', "sidebar-account", 'id="logout-button"', 'id="current-user"', 'href="/paper"'):
                 self.assertNotIn(gone, html, (name, gone))
             self.assertIn('class="header-actions"', html, name)              # the menu mounts in the shared header
@@ -134,7 +141,11 @@ class SettingsReducedToOperatingAmount(unittest.TestCase):
         for gone in ("stop-pct", "take-pct", "max-days", "'sectors'"):
             self.assertNotIn(gone, js, gone)
         html = (STATIC / "paper-mvp.html").read_text(encoding="utf-8")
-        self.assertRegex(html, r'<input id="budget" type="number" min="0" max="\d+" step="1"')
+        self.assertRegex(html, r'<input id="budget" type="text" inputmode="numeric" autocomplete="off"')      # comma-formatted text input
+        self.assertNotRegex(html, r'<input id="budget"[^>]*type="number"')
+        self.assertIn(r"String(t).replace(/\D/g, '').replace(/^0+(?=\d)/, '').slice(0, 13)", js)           # digits only, no leading zeros, bounded length
+        self.assertIn("draft.budget = d === '' ? NaN : Number(d);", js)                                   # whole-won integer (or invalid when empty)
+        self.assertIn("!Number.isInteger(s.budget) || s.budget < 1 || s.budget > T", js)                   # range check kept
         self.assertIn('id="prepare"', html)          # the retired /paper screen was the only other way to prepare the account
 
 

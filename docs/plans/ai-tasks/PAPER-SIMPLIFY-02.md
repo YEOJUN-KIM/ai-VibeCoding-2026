@@ -9,7 +9,7 @@
 | 담당 AI | Claude Code (Orca 코디네이터 지시, 사용자 승인) |
 | GitHub 저장소 | https://github.com/YEOJUN-KIM/ai-VibeCoding-2026 (이번 작업은 push·PR·merge 없음, 로컬 커밋만) |
 | 브랜치 | `feat/folio-paper-simplify-01` (기준 `9a4eb0ac53ce94a6423e66c79bacda4c102071fe`) |
-| 보존 ref | `archive/folio-legacy-risk-settings` = `8c3d66bbd0d08539aa4f4e39cc00524bb371f87c`(변경 없음), `preserve/paper-simplify-01-9a4eb0a` = `9a4eb0a`(신규 로컬) |
+| 보존 ref | `archive/folio-legacy-risk-settings` = `8c3d66bbd0d08539aa4f4e39cc00524bb371f87c`(변경 없음), 커밋 `9a4eb0ac53ce94a6423e66c79bacda4c102071fe`(SIMPLIFY-01 완료 상태; 당시 로컬 ref `preserve/paper-simplify-01-9a4eb0a`는 이후 삭제되어 현재 없음, 커밋은 브랜치 이력에서 직접 복구 가능) |
 | Worktree 절대 경로 | `C:\Users\User\orca\workspaces\ai-VibeCoding-2026\folio-paper-simplify-01` (새 worktree 없음) |
 | 수정 허용 파일 | `auto_trader/{api,services,static}`·`paper_mvp.py`·`models.py` 등 위 범위, `scripts/build_paper_mvp_page.py`·e2e 스크립트, 관련 `tests/`, `docs/` |
 | 선행 작업 | PAPER-SIMPLIFY-01 (PR12/main/기존 보존 ref 변경 금지) |

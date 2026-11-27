@@ -1,7 +1,18 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
 const nodes=new Map();const $=selector=>{if(!nodes.has(selector))nodes.set(selector,{value:'',textContent:'',innerHTML:''});return nodes.get(selector);};
 const source=fs.readFileSync('auto_trader/static/long-term.js','utf8');
-const scope={document:{querySelector:$},Intl,Date};vm.createContext(scope);
+const html=fs.readFileSync('auto_trader/static/long-term.html','utf8');
+const order=['/static/pagination.js','/static/long-term.js'].map(src=>html.indexOf('<script src="'+src+'"'));
+assert.ok(order[0]>=0&&order[1]>order[0],'long-term.html must load pagination.js before long-term.js');
+const root={hidden:false};
+const document={querySelector:$,getElementById:id=>{const node=$('#'+id);
+  if(id.endsWith('-page'))node.closest=()=>root;
+  if(id.endsWith('-numbers'))node.querySelectorAll=()=>{const list=[...String(node.innerHTML).matchAll(/data-page-to="(\d+)"/g)].map(m=>({dataset:{pageTo:m[1]},onclick:null,click(){return this.onclick&&this.onclick();}}));node.buttons=list;return list;};
+  return node;}};
+const scope={document,Intl,Date,window:{}};vm.createContext(scope);
+// Load the real shared pagination module first, exactly as the page does, then expose its global.
+vm.runInContext(fs.readFileSync('auto_trader/static/pagination.js','utf8'),scope);
+scope.FolioPagination=scope.window.FolioPagination;assert.ok(scope.FolioPagination&&typeof scope.FolioPagination.directory==='function');
 vm.runInContext(source.slice(0,source.indexOf('async function api('))+source.slice(source.indexOf('function metric('),source.indexOf('async function loadCandidates('))+source.slice(source.indexOf('let myCandidates'),source.indexOf('async function loadMyCandidates(')),scope);
 scope.items=[{symbol:'005930',name:'삼성전자',market:'KOSPI',note:'<관찰> 분기 실적',created_at:'2026-10-01',analysis:{rank:'A',overall_score:85,generated_at:'2026-10-01'}},{symbol:'000660',name:'SK하이닉스',market:'KOSPI',note:'',created_at:'2026-10-02',analysis:null}];
 const render=()=>vm.runInContext('renderMyCandidates(items)',scope);
@@ -10,4 +21,16 @@ $('#my-watch-query').value='분기';render();assert.match($('#my-watch-summary')
 $('#my-watch-query').value='';$('#my-watch-sort').value='recent';render();assert.ok($('#my-long-term-candidates').innerHTML.indexOf('SK하이닉스')<$('#my-long-term-candidates').innerHTML.indexOf('삼성전자'));
 $('#my-watch-sort').value='score';render();assert.ok($('#my-long-term-candidates').innerHTML.indexOf('삼성전자')<$('#my-long-term-candidates').innerHTML.indexOf('SK하이닉스'));
 $('#my-watch-rank').value='pending';render();assert.doesNotMatch($('#my-long-term-candidates').innerHTML,/삼성전자/);
+// Real pagination module: 25 matching rows -> 3 pages, numbered controls, click navigates.
+scope.many=Array.from({length:25},(_,i)=>({symbol:String(i).padStart(6,'0'),name:'기업'+String(i).padStart(2,'0'),market:'KOSPI',note:'',created_at:'2026-10-01',analysis:null}));
+$('#my-watch-rank').value='';$('#my-watch-sort').value='name';vm.runInContext('myPage=1;renderMyCandidates(many)',scope);
+assert.equal($('#my-watch-page').textContent,'1 / 3');assert.equal(root.hidden,false);
+assert.equal(($('#my-long-term-candidates').innerHTML.match(/<tr>/g)||[]).length,10);
+assert.match($('#my-watch-summary').textContent,/1–10 \/ 25개/);
+assert.match($('#my-watch-numbers').innerHTML,/data-page-to="3"/);
+$('#my-watch-numbers').buttons.find(b=>b.dataset.pageTo==='3').click();
+assert.equal($('#my-watch-page').textContent,'3 / 3');assert.equal(($('#my-long-term-candidates').innerHTML.match(/<tr>/g)||[]).length,5);
+assert.match($('#my-long-term-candidates').innerHTML,/기업24/);assert.equal($('#my-watch-next').disabled,true);assert.equal($('#my-watch-first').disabled,false);
+vm.runInContext('myPage=1;renderMyCandidates(items)',scope);$('#my-watch-query').value='';
+assert.equal(root.hidden,true);
 console.log('Watch list: note escaping and search, sorting, unanalysed filter and news links passed.');
