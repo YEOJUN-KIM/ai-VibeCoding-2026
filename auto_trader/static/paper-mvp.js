@@ -71,6 +71,7 @@ async function refresh() {
 function render() { renderRun(); renderHome(); renderHistory(); if (tab === 'settings') settingSummary(); }
 
 // ---------------------------------------------------------------- control strip
+const SCOPE_LABEL = { CURRENT: '선택 종목 보유분 포함', ALL: '전체 보유분 포함', AUTO: '자동매매 보유분' };
 function renderRun() {
   const r = st.run, held = r.held_symbols.length;
   const tone = { idle: 'muted', running: 'green', stopped: 'amber', emergency: 'up', other: 'amber', blocked: 'up' }[r.state];
@@ -85,7 +86,7 @@ function renderRun() {
   $('#run-next').textContent = r.running ? '실행 중 · 보유분 손절·익절 감시가 켜져 있습니다. ' + src : r.stop_note + (r.state === 'emergency' ? ' 긴급정지의 실제 보장 범위는 일시정지와 같으며 별도 검증되지 않았습니다.' : '');
   $('#prepare').hidden = !st.ready_reason;
   const latched = r.state === 'emergency';
-  $('#start').disabled = r.running || latched || !!st.ready_reason; $('#start').textContent = r.state === 'stopped' ? '다시 시작' : '시작';
+  $('#start').disabled = r.running || latched || !!st.ready_reason || (st.management_scope || 'AUTO') !== 'AUTO'; $('#start').textContent = r.state === 'stopped' ? '다시 시작' : '시작';
   // Only a server-confirmed save is shown as persisted; an unsaved latch keeps the warning and allows an explicit retry.
   const unsaved = latched && !!(st.emergency && st.emergency.unsaved);
   $('#pause').disabled = r.state !== 'running'; $('#emergency').disabled = latched && !unsaved;
@@ -98,6 +99,12 @@ function renderRun() {
     $('#run-reason').textContent = '긴급정지 상태입니다. 해제하기 전에는 자동매매를 시작할 수 없습니다. 새로고침·로그아웃·서버 재시작 후에도 유지됩니다.';
     $('#run-next').textContent = '긴급정지로 신규 판단·주문과 청산 감시가 멈췄고 보유 주식은 매도하지 않았습니다. 해제하면 일시정지 상태가 되며, 자동매매는 직접 다시 시작해야 합니다.';
   }
+  // PR-FIX-01: start refuses a non-AUTO management scope (e.g. a pre-existing LIVE-copy account). Show it and offer an explicit, confirmed recovery.
+  const scope = st.management_scope || 'AUTO', scopeBtn = $('#scope-recover');
+  scopeBtn.hidden = scope === 'AUTO' || r.running;
+  if (scope !== 'AUTO' && !latched && !unsaved && !st.ready_reason) {
+    $('#run-reason').textContent = "이 계좌의 관리 범위가 '" + (SCOPE_LABEL[scope] || scope) + "'라서 시작할 수 없습니다. '관리 범위를 자동매매 보유분으로 변경'으로 바꿀 수 있습니다.";
+  }
   $('#source-badge').textContent = st.data_source === 'SYNTHETIC' ? 'PAPER · 합성 데이터' : 'PAPER · 데이터 소스 미연결';
   $('#source-badge').className = 'badge ' + (st.data_source === 'SYNTHETIC' ? 'amber' : 'neutral');
 }
@@ -105,6 +112,11 @@ async function control(path, ok) {
   try { st = await api(path, { method: 'POST' }); render(); toast(ok); } catch (e) { toast(e.message); }
 }
 $('#start').onclick = () => { if (dirty) { toast('저장하지 않은 설정이 있습니다. 설정 저장·적용 후 시작하세요.'); return; } control('/paper/mvp/start', '자동매매를 시작했습니다. 모든 거래는 가상이며 실제 주문은 없습니다.'); };
+{ const b = document.createElement('button'); b.id = 'scope-recover'; b.hidden = true; b.textContent = '관리 범위를 자동매매 보유분으로 변경'; $('#prepare').after(b); }
+$('#scope-recover').onclick = async () => {
+  if (!confirm("관리 범위를 '자동매매 보유분'으로 변경할까요?\n계좌의 현금·보유 종목·주문 기록은 그대로 두고, 수동 보유분은 자동매매 관리에서 제외됩니다. 이 계좌의 전략 성과 기준값이 새로 시작됩니다.\n변경해도 자동매매는 시작되지 않습니다.")) return;
+  try { await api('/paper/management', { method: 'PUT', body: JSON.stringify({ scope: 'AUTO' }) }); await refresh(); toast("관리 범위를 '자동매매 보유분'으로 변경했습니다. 자동매매는 시작되지 않았습니다."); } catch (e) { toast(e.message); }
+};
 $('#prepare').onclick = async () => {
   try { await api('/paper/accounts/EXPERIMENT/select', { method: 'POST' }); saved = null; await refresh(); toast('가상 1,000만원 모의계좌를 준비했습니다. 실제 계좌와 연결되지 않습니다.'); } catch (e) { toast(e.message); }
 };

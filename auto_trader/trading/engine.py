@@ -315,6 +315,7 @@ class TradingEngine:
         if not symbols:
             self.data_message = self.candidate_message or "신규 후보 없음 · 현금 유지"
             self.last_decision_at = self._clock()
+            await self._refresh_valuation_only(now)
             return
         valuation_symbols = [p.symbol for p in self.broker.account().positions]
         try:
@@ -360,6 +361,29 @@ class TradingEngine:
                 self.data_message = "완료된 1분봉 대기 · 신규 판단과 체결을 기다립니다."
             return
         self.step(candles=candles)
+
+    async def _refresh_valuation_only(self, now) -> None:
+        """No candidate and no managed lot: nothing may be judged or ordered, but held (unmanaged) positions must still be
+        valued from a fresh, valid quote. Reads only the held symbols (never all stocks); on any failure the old price stays."""
+        held = [p.symbol for p in self.broker.account().positions]
+        if not held or self.price_feed is None:
+            return
+        try:
+            prices, _ = await asyncio.to_thread(self.price_feed.read, [], held, self.long_period, now)
+        except Exception:
+            logging.getLogger("auto_trader.strategy").warning("Paper valuation prices unavailable", exc_info=True)
+            return
+        requested_at = getattr(self.price_feed, "prices_requested_at", None)
+        if not isinstance(requested_at, datetime):
+            requested_at = now
+        if not self._within_hours() or self._clock() - requested_at > timedelta(seconds=30):
+            return
+        for symbol, price in prices.items():
+            if symbol in held and self.market.has_symbol(symbol) and price.is_finite() and price > 0:
+                stock = next(s for s in self.market.stocks() if s.symbol == symbol)
+                self.market.upsert_stock(stock, price)
+        if prices:
+            self.last_data_at = self._clock()
 
     def step(self, *, candles=None) -> None:
         if self.price_feed is not None and candles is None:

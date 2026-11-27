@@ -447,6 +447,7 @@ class PaperMvp:
                   for o in broker.orders()]
         return dict(
             mode="PAPER", live_blocked=True, ready_reason=(self.start_guard() if self.start_guard else None), real_data_verified=False,
+            management_scope=broker.management_scope,      # read-only: lets the page offer an explicit recovery when start refuses a non-AUTO scope
             data_source="SYNTHETIC" if self.source is not None else "NONE",
             emergency=broker.emergency_info(),
             run=dict(state=state, label=label, running=strategy.running, message=_honest_message(eng.data_message, self.source is not None),
